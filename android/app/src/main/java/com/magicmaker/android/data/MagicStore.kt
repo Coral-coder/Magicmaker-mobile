@@ -409,8 +409,8 @@ class MagicStore(context: Context) {
             return RecordEvent(preview, false, "Heard ${preview.colors} (unrecognized wand format)")
         }
         val stored = libraryPacketFrom(classified, rawHex)
-        val key = stored.simKey
-        if (learnedColors.any { it.typeInfo == "starlight" && it.simKey == key }) {
+        val key = HexUtils.canonicalHex(stored.hex)
+        if (learnedColors.any { it.typeInfo == "starlight" && HexUtils.canonicalHex(it.hex) == key }) {
             updateLearnedColor(stored, verified = true)
             return RecordEvent(stored, false, "Verified ${stored.colors}")
         }
@@ -425,8 +425,8 @@ class MagicStore(context: Context) {
         if (isDuplicateOfPreset(classified)) {
             return RecordEvent(classified.toPacket(), false, "Recorded (built-in color)")
         }
-        val key = MagicClassifier.libraryDedupeKey(classified)
-        learnedColors.firstOrNull { MagicClassifier.libraryDedupeKey(it.toClassified()) == key }?.let {
+        val key = HexUtils.canonicalHex(classified.hex)
+        learnedColors.firstOrNull { HexUtils.canonicalHex(it.hex) == key }?.let {
             return RecordEvent(it, false, "Verified ${classified.colors}")
         }
         val packet = classified.toPacket(userRecorded = true).copy(id = nextPacketId++)
@@ -436,8 +436,10 @@ class MagicStore(context: Context) {
     }
 
     private fun addShowAnimToLibrary(classified: ClassifiedPacket, rssi: Int): RecordEvent {
-        val key = MagicClassifier.libraryDedupeKey(classified)
-        learnedLibrary.firstOrNull { MagicClassifier.libraryDedupeKey(it.toClassified()) == key }?.let { existing ->
+        // Per-distinct: keep every identified packet whose exact hex we haven't seen,
+        // rather than collapsing by function code.
+        val key = HexUtils.canonicalHex(classified.hex)
+        learnedLibrary.firstOrNull { HexUtils.canonicalHex(it.hex) == key }?.let { existing ->
             val updated = existing.copy(hex = classified.hex, label = classified.label)
             if (updated != existing) {
                 learnedLibrary = learnedLibrary.map { if (it.id == existing.id) updated else it }
