@@ -30,3 +30,10 @@ Thumbs.db
 
 # Env overrides (machine-specific)
 tools/deploy.local.sh
+
+# OTA / signing secrets — NEVER commit these
+google-services.json
+app/google-services.json
+*.jks
+*.keystore
+keystore.properties

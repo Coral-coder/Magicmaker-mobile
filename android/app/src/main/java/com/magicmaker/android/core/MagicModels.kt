@@ -34,6 +34,8 @@ data class Recording(
     val typeInfo: String,
     val colors: String,
     val libraryNote: String,
+    val sourceAddress: String = "",
+    val isBand: Boolean = false,
 )
 
 data class AutoResponseRule(

@@ -22,6 +22,16 @@ object ServiceState {
         val typeInfo: String = "raw",
         val dedupeKey: String = "",
         val timestampMs: Long = System.currentTimeMillis(),
+        val address: String = "",
+        val isBand: Boolean = false,
+    )
+
+    /** A BLE advertiser address heard during scanning — feeds the "pick my band" UI. */
+    data class SeenAddress(
+        val address: String,
+        val rssi: Int,
+        val lastSeenMs: Long,
+        val count: Int,
     )
 
     data class UiState(
@@ -44,6 +54,7 @@ object ServiceState {
         val storeRevision: Int = 0,
         val livePackets: List<LivePacket> = emptyList(),
         val rawLivePackets: List<LivePacket> = emptyList(),
+        val seenAddresses: List<SeenAddress> = emptyList(),
         val starlightLoopEnabled: Boolean = false,
         val starlightLoopPacketId: Long = -1L,
         val starlightIntervalMs: Long = 3000L,
@@ -60,6 +71,7 @@ object ServiceState {
     )
 
     private const val MAX_LIVE = 120
+    private const val MAX_ADDRESSES = 80
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -81,11 +93,12 @@ object ServiceState {
         listeners.remove(listener)
     }
 
-    fun appendLive(hex: String, label: String, rssi: Int, note: String) {
+    fun appendLive(hex: String, label: String, rssi: Int, note: String, address: String = "", isBand: Boolean = false) {
         val canonical = HexUtils.canonicalHex(hex)
         val classified = MagicClassifier.classify(canonical)
         val txHex = classified?.hex ?: canonical
         val dedupeKey = LivePacketSort.liveDedupeKey(hex, classified)
+        val now = System.currentTimeMillis()
         val packet = LivePacket(
             hex = txHex,
             label = classified?.label ?: label,
@@ -94,12 +107,30 @@ object ServiceState {
             category = classified?.category ?: MagicCategory.UNKNOWN,
             typeInfo = classified?.typeInfo ?: "raw",
             dedupeKey = dedupeKey,
+            timestampMs = now,
+            address = address,
+            isBand = isBand,
         )
         update {
             val withoutDup = it.livePackets.filter { p -> p.dedupeKey != dedupeKey }
+            val addresses = if (address.isEmpty()) {
+                it.seenAddresses
+            } else {
+                val prev = it.seenAddresses.firstOrNull { a -> a.address == address }
+                val updated = SeenAddress(
+                    address = address,
+                    rssi = rssi,
+                    lastSeenMs = now,
+                    count = (prev?.count ?: 0) + 1,
+                )
+                (listOf(updated) + it.seenAddresses.filter { a -> a.address != address })
+                    .sortedByDescending { a -> a.lastSeenMs }
+                    .take(MAX_ADDRESSES)
+            }
             it.copy(
                 livePackets = (listOf(packet) + withoutDup).take(MAX_LIVE),
                 rawLivePackets = (listOf(packet) + it.rawLivePackets).take(MAX_LIVE),
+                seenAddresses = addresses,
                 storeRevision = it.storeRevision + 1,
             )
         }

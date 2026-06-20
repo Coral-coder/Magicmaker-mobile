@@ -18,9 +18,13 @@ class MagicStore(context: Context) {
     private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
     private val prefs = appContext.getSharedPreferences("magicmaker", Context.MODE_PRIVATE)
 
-    private val documentsDir = appContext.filesDir
-    private val sessionsDir = File(documentsDir, "scan_sessions").also { it.mkdirs() }
-    private val storeFile = File(documentsDir, "magicmaker_store.json")
+    // Capture logs go to app-specific *external* storage so they can be pulled off
+    // the device over USB/MTP (Android/data/com.magicmaker.android/files/scan_sessions),
+    // with a fallback to internal storage if external is unavailable.
+    private val sessionsDir = (appContext.getExternalFilesDir("scan_sessions")
+        ?: File(appContext.filesDir, "scan_sessions")).also { it.mkdirs() }
+    // The app's own state stays in private internal storage.
+    private val storeFile = File(appContext.filesDir, "magicmaker_store.json")
 
     var presets: List<MagicPacket> = emptyList()
         private set
@@ -41,6 +45,18 @@ class MagicStore(context: Context) {
     private var nextRecordingId = 1L
     private var nextRuleId = 1L
     private var activeSessionFile: File? = null
+    private var activeBandFile: File? = null
+
+    /** Per-session de-dupe accumulator: canonical hex -> running tally for the unique-list export. */
+    private data class UniqueAgg(
+        var count: Int,
+        val firstMs: Long,
+        var lastMs: Long,
+        val label: String,
+        val category: MagicCategory,
+        val addresses: MutableSet<String>,
+    )
+    private val sessionUnique = LinkedHashMap<String, UniqueAgg>()
 
     val allLearnedPackets: List<MagicPacket>
         get() = learnedColors + learnedLibrary + learnedRaw
@@ -256,6 +272,26 @@ class MagicStore(context: Context) {
         ServiceState.bumpStoreRevision()
     }
 
+    /** Rename a captured/library packet. Only touches the label field. */
+    @Synchronized
+    fun renamePacket(id: Long, newLabel: String) {
+        val label = newLabel.trim()
+        if (label.isEmpty()) return
+
+        fun updateList(list: List<MagicPacket>): List<MagicPacket> =
+            list.map { if (it.id == id) it.copy(label = label) else it }
+
+        when {
+            learnedColors.any { it.id == id } -> learnedColors = updateList(learnedColors)
+            learnedLibrary.any { it.id == id } -> learnedLibrary = updateList(learnedLibrary)
+            learnedRaw.any { it.id == id } -> learnedRaw = updateList(learnedRaw)
+            presets.any { it.id == id } -> presets = updateList(presets)
+            else -> return
+        }
+        save()
+        ServiceState.bumpStoreRevision()
+    }
+
     @Synchronized
     fun deletePacketById(id: Long) {
         when {
@@ -264,6 +300,40 @@ class MagicStore(context: Context) {
             learnedLibrary.any { it.id == id } -> deleteLearnedLibrary(id)
             learnedRaw.any { it.id == id } -> deleteLearnedRaw(id)
         }
+    }
+
+    // ---- MagicBand identity (source-address tagging) -------------------------
+    // Note: a phone only hears broadcast advertisements, which carry a *source*
+    // address (the advertiser), never a destination. So we can tag packets FROM a
+    // chosen address, not "to" it. The band's address is also usually a rotating
+    // private address, so the user may need to re-pick it from the seen list.
+
+    private fun normalizeAddress(a: String): String = a.trim().uppercase()
+
+    fun bandAddresses(): Set<String> =
+        prefs.getString("band_addresses", "")
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.toSet()
+            ?: emptySet()
+
+    fun isBandAddress(address: String): Boolean =
+        address.isNotEmpty() && normalizeAddress(address) in bandAddresses()
+
+    @Synchronized
+    fun addBandAddress(address: String) {
+        val a = normalizeAddress(address)
+        if (a.isEmpty()) return
+        prefs.edit().putString("band_addresses", (bandAddresses() + a).joinToString(",")).apply()
+        ServiceState.bumpStoreRevision()
+    }
+
+    @Synchronized
+    fun removeBandAddress(address: String) {
+        val a = normalizeAddress(address)
+        prefs.edit().putString("band_addresses", (bandAddresses() - a).joinToString(",")).apply()
+        ServiceState.bumpStoreRevision()
     }
 
     fun saveLabHex(hex: String) {
@@ -282,21 +352,21 @@ class MagicStore(context: Context) {
     }
 
     @Synchronized
-    fun processHeardPacket(hex: String, rssi: Int, persistToSession: Boolean): RecordEvent? {
+    fun processHeardPacket(hex: String, rssi: Int, persistToSession: Boolean, address: String = ""): RecordEvent? {
         val canonical = HexUtils.canonicalHex(hex)
         if (!HexUtils.isDisneyBlePacket(canonical)) return null
 
         val classified = MagicClassifier.classify(canonical)
         val event = if (classified != null) {
             addClassifiedToLibrary(classified, rawHex = hex, rssi = rssi).also {
-                if (persistToSession) persistRecording(classified, rssi, it.reason)
+                if (persistToSession) persistRecording(classified, rssi, it.reason, address)
             }
         } else {
             hearRawPacket(canonical, rssi).also {
                 if (persistToSession) {
                     persistRecording(
                         ClassifiedPacket(canonical, it.packet.label, MagicCategory.UNKNOWN, "raw", "", it.packet.simKey),
-                        rssi, it.reason,
+                        rssi, it.reason, address,
                     )
                 }
             }
@@ -339,8 +409,8 @@ class MagicStore(context: Context) {
             return RecordEvent(preview, false, "Heard ${preview.colors} (unrecognized wand format)")
         }
         val stored = libraryPacketFrom(classified, rawHex)
-        val key = stored.simKey
-        if (learnedColors.any { it.typeInfo == "starlight" && it.simKey == key }) {
+        val key = HexUtils.canonicalHex(stored.hex)
+        if (learnedColors.any { it.typeInfo == "starlight" && HexUtils.canonicalHex(it.hex) == key }) {
             updateLearnedColor(stored, verified = true)
             return RecordEvent(stored, false, "Verified ${stored.colors}")
         }
@@ -355,8 +425,8 @@ class MagicStore(context: Context) {
         if (isDuplicateOfPreset(classified)) {
             return RecordEvent(classified.toPacket(), false, "Recorded (built-in color)")
         }
-        val key = MagicClassifier.libraryDedupeKey(classified)
-        learnedColors.firstOrNull { MagicClassifier.libraryDedupeKey(it.toClassified()) == key }?.let {
+        val key = HexUtils.canonicalHex(classified.hex)
+        learnedColors.firstOrNull { HexUtils.canonicalHex(it.hex) == key }?.let {
             return RecordEvent(it, false, "Verified ${classified.colors}")
         }
         val packet = classified.toPacket(userRecorded = true).copy(id = nextPacketId++)
@@ -366,8 +436,10 @@ class MagicStore(context: Context) {
     }
 
     private fun addShowAnimToLibrary(classified: ClassifiedPacket, rssi: Int): RecordEvent {
-        val key = MagicClassifier.libraryDedupeKey(classified)
-        learnedLibrary.firstOrNull { MagicClassifier.libraryDedupeKey(it.toClassified()) == key }?.let { existing ->
+        // Per-distinct: keep every identified packet whose exact hex we haven't seen,
+        // rather than collapsing by function code.
+        val key = HexUtils.canonicalHex(classified.hex)
+        learnedLibrary.firstOrNull { HexUtils.canonicalHex(it.hex) == key }?.let { existing ->
             val updated = existing.copy(hex = classified.hex, label = classified.label)
             if (updated != existing) {
                 learnedLibrary = learnedLibrary.map { if (it.id == existing.id) updated else it }
@@ -442,8 +514,9 @@ class MagicStore(context: Context) {
         }
     }
 
-    private fun persistRecording(classified: ClassifiedPacket, rssi: Int, note: String) {
+    private fun persistRecording(classified: ClassifiedPacket, rssi: Int, note: String, address: String) {
         if (activeSessionFile == null) beginScanSession()
+        val band = isBandAddress(address)
         val rec = Recording(
             id = nextRecordingId++,
             timestampMs = System.currentTimeMillis(),
@@ -454,10 +527,34 @@ class MagicStore(context: Context) {
             typeInfo = classified.typeInfo,
             colors = classified.colors,
             libraryNote = note,
+            sourceAddress = address,
+            isBand = band,
         )
         recordings = listOf(rec) + recordings
-        appendToSession(rec)
+        appendToSession(rec)                 // full chronological log (replay source)
+        if (band) appendToBandSession(rec)   // band-only log
+        accumulateUnique(rec)                // dedup tally, written at session end
         save()
+    }
+
+    /** Adds/updates the per-session unique tally used to generate the deduped export. */
+    private fun accumulateUnique(rec: Recording) {
+        val key = HexUtils.canonicalHex(rec.hex)
+        val agg = sessionUnique[key]
+        if (agg == null) {
+            sessionUnique[key] = UniqueAgg(
+                count = 1,
+                firstMs = rec.timestampMs,
+                lastMs = rec.timestampMs,
+                label = rec.label,
+                category = rec.category,
+                addresses = mutableSetOf<String>().apply { if (rec.sourceAddress.isNotEmpty()) add(rec.sourceAddress) },
+            )
+        } else {
+            agg.count += 1
+            agg.lastMs = rec.timestampMs
+            if (rec.sourceAddress.isNotEmpty()) agg.addresses.add(rec.sourceAddress)
+        }
     }
 
     fun findAutoResponses(classified: ClassifiedPacket, rawHex: String): List<String>? {
@@ -543,10 +640,13 @@ class MagicStore(context: Context) {
 
     @Synchronized
     fun beginScanSession(): File {
-        val name = "scan_${SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss", Locale.US).format(Date())}.csv"
-        val file = File(sessionsDir, name)
-        file.writeText("timestamp_ms,hex,rssi,label,category,type_info,colors,note\n")
+        val stamp = SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss", Locale.US).format(Date())
+        val file = File(sessionsDir, "scan_$stamp.csv")
+        file.writeText(SESSION_HEADER)
         activeSessionFile = file
+        // Band-only log shares the timestamp so the trio sorts together.
+        activeBandFile = File(sessionsDir, "scan_${stamp}_band.csv")
+        sessionUnique.clear()
         refreshSessions()
         return file
     }
@@ -554,7 +654,10 @@ class MagicStore(context: Context) {
     @Synchronized
     fun endScanSession(): String? {
         val name = activeSessionFile?.name
+        writeUniqueExport()
         activeSessionFile = null
+        activeBandFile = null
+        sessionUnique.clear()
         refreshSessions()
         return name
     }
@@ -567,11 +670,40 @@ class MagicStore(context: Context) {
             ?: emptyList()
     }
 
+    private fun csvField(value: String): String = value.replace(",", " ").replace("\n", " ")
+
+    private fun sessionRow(rec: Recording): String =
+        "${rec.timestampMs},${rec.hex},${rec.rssi},${csvField(rec.label)},${rec.category.name}," +
+            "${rec.typeInfo},${csvField(rec.colors)},${csvField(rec.libraryNote)}," +
+            "${rec.sourceAddress},${rec.isBand}\n"
+
     private fun appendToSession(rec: Recording) {
-        val file = activeSessionFile ?: return
-        file.appendText(
-            "${rec.timestampMs},${rec.hex},${rec.rssi},${rec.label},${rec.category.name}," +
-                "${rec.typeInfo},${rec.colors},${rec.libraryNote}\n",
-        )
+        activeSessionFile?.appendText(sessionRow(rec))
+    }
+
+    private fun appendToBandSession(rec: Recording) {
+        val file = activeBandFile ?: return
+        if (!file.exists()) file.writeText(SESSION_HEADER)
+        file.appendText(sessionRow(rec))
+    }
+
+    /** Writes the deduped unique-packet list for the session (one row per distinct hex). */
+    private fun writeUniqueExport() {
+        if (sessionUnique.isEmpty()) return
+        val base = activeSessionFile?.name?.removeSuffix(".csv") ?: return
+        val file = File(sessionsDir, "${base}_unique.csv")
+        val sb = StringBuilder("hex,count,first_ms,last_ms,label,category,addresses\n")
+        for ((hex, agg) in sessionUnique) {
+            sb.append(
+                "$hex,${agg.count},${agg.firstMs},${agg.lastMs},${csvField(agg.label)}," +
+                    "${agg.category.name},${agg.addresses.joinToString(" ")}\n",
+            )
+        }
+        file.writeText(sb.toString())
+    }
+
+    companion object {
+        private const val SESSION_HEADER =
+            "timestamp_ms,hex,rssi,label,category,type_info,colors,note,source_address,is_band\n"
     }
 }

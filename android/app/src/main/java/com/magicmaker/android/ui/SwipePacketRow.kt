@@ -1,6 +1,9 @@
 package com.magicmaker.android.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -12,7 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.unit.dp
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SwipePacketRow(
     label: String,
@@ -22,6 +25,7 @@ fun SwipePacketRow(
     onTap: () -> Unit,
     onDelete: () -> Unit,
     onPromote: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
     dismissOnDelete: Boolean = false,
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
@@ -72,8 +76,15 @@ fun SwipePacketRow(
         },
         content = {
             Surface(
-                onClick = onTap,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (onLongPress != null) {
+                            Modifier.combinedClickable(onClick = onTap, onLongClick = onLongPress)
+                        } else {
+                            Modifier.clickable(onClick = onTap)
+                        },
+                    ),
                 shape = RectangleShape,
                 tonalElevation = 0.dp,
                 shadowElevation = 0.dp,
