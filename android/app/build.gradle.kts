@@ -11,12 +11,35 @@ android {
         applicationId = "com.magicmaker.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        // OTA: version is overridable from CI so each cloud build is a new,
+        // higher version that the in-app updater can detect.
+        //   ./gradlew assembleRelease -PmmVersionCode=42 -PmmVersionName=1.0.42
+        versionCode = (project.findProperty("mmVersionCode") as String?)?.toInt() ?: 1
+        versionName = (project.findProperty("mmVersionName") as String?) ?: "1.0.0"
+    }
+
+    // OTA: a stable release signing key is REQUIRED — Android rejects an update
+    // whose signature differs from the installed build. The key never lives in
+    // the repo; it is supplied via env vars (CI secrets / local.properties).
+    signingConfigs {
+        create("release") {
+            val storePath = System.getenv("MM_KEYSTORE_FILE")
+            if (!storePath.isNullOrBlank() && file(storePath).exists()) {
+                storeFile = file(storePath)
+                storePassword = System.getenv("MM_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MM_KEY_ALIAS")
+                keyPassword = System.getenv("MM_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
+            // Only attach the release signing config when a keystore is provided,
+            // so unsigned/local builds still succeed without secrets.
+            if (!System.getenv("MM_KEYSTORE_FILE").isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -60,4 +83,17 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("com.google.zxing:core:3.5.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // OTA: Firebase App Distribution in-app updater. Checks for a newer build,
+    // prompts the user, downloads and installs it. The full SDK is only active
+    // for builds delivered via App Distribution; it no-ops otherwise.
+    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
+    implementation("com.google.firebase:firebase-appdistribution-api-ktx:16.0.0-beta14")
+    implementation("com.google.firebase:firebase-appdistribution:16.0.0-beta14")
+}
+
+// OTA: process google-services.json only when present so a fresh checkout
+// (no Firebase config yet) still builds debug APKs via ./tools/deploy.sh.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }
