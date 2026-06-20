@@ -24,7 +24,7 @@ android {
     signingConfigs {
         create("release") {
             val storePath = System.getenv("MM_KEYSTORE_FILE")
-            if (storePath != null && file(storePath).exists()) {
+            if (!storePath.isNullOrBlank() && file(storePath).exists()) {
                 storeFile = file(storePath)
                 storePassword = System.getenv("MM_KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("MM_KEY_ALIAS")
@@ -37,7 +37,7 @@ android {
         release {
             // Only attach the release signing config when a keystore is provided,
             // so unsigned/local builds still succeed without secrets.
-            if (System.getenv("MM_KEYSTORE_FILE") != null) {
+            if (!System.getenv("MM_KEYSTORE_FILE").isNullOrBlank()) {
                 signingConfig = signingConfigs.getByName("release")
             }
             isMinifyEnabled = false

@@ -7,14 +7,39 @@ This wires up **over-the-air updates** (Firebase App Distribution) and a
 - App Distribution only delivers to **testers you invite** (your Google account).
 - The signing key and Firebase service account live as **GitHub secrets**, never in git.
 
+## Quick start — manual install, ZERO setup (current mode)
+
+You don't need Firebase or a keystore to get started. With no secrets configured,
+pushing a version tag builds a **debug APK** and attaches it to a **GitHub
+Release** you can download and sideload:
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+Then: repo → **Releases** → download `app-debug.apk` → install on the phone.
+
+Notes:
+- Release assets are **private** (you must be signed into GitHub to download —
+  e.g. open the release in your phone's browser while logged in).
+- A debug APK is fine for manual installs. **Heads-up:** when you later switch to
+  signed release builds (below), the signature changes, so you'll have to
+  **uninstall the debug build once** before installing the release one.
+- The in-app updater stays dormant until Firebase is configured — the app runs
+  normally without it.
+
+## Full OTA mode — set up when you're ready
+
 Once configured, releasing a new build is just:
 
 ```bash
 git tag v1.0.1 && git push origin v1.0.1
 ```
 
-CI builds a signed APK, ships it to App Distribution, and your device gets an
-in-app "Update available" prompt the next time you open the app.
+CI builds a signed APK, attaches it to the GitHub Release, ships it to App
+Distribution, and your device gets an in-app "Update available" prompt the next
+time you open the app. The workflow detects the secrets automatically — add them
+and the next tag upgrades from debug→signed and turns on OTA.
 
 ---
 
