@@ -2,6 +2,12 @@
 
 Disney MagicBand+ / Starlight wand research tools for **iPhone** and **Android**.
 
+**Monorepo:** https://github.com/Coral-coder/Magicmaker-mobile
+
+```bash
+git clone https://github.com/Coral-coder/Magicmaker-mobile.git
+```
+
 | Platform | Path | Build |
 |----------|------|-------|
 | iOS | [`ios/`](ios/) | Open `ios/MagicMaker.xcodeproj` in Xcode — use **Release** scheme on device |
