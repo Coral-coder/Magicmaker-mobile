@@ -707,6 +707,37 @@ private fun CategoryPickerDialog(
 }
 
 @Composable
+private fun RenameDialog(
+    currentLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf(currentLabel) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename packet", style = techLabel()) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                textStyle = techLabel(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(text) },
+                enabled = text.isNotBlank(),
+            ) { Text("SAVE", style = techLabel()) }
+        },
+        dismissButton = {
+            TextButton(onDismiss) { Text("CANCEL", style = techLabel()) }
+        },
+    )
+}
+
+@Composable
 private fun WandTab(
     app: MagicMakerApp,
     storeRevision: Int,
@@ -840,6 +871,7 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
     var visibleSections by remember { mutableStateOf(LivePacketSection.entries.toSet()) }
     var collapsed by remember { mutableStateOf(UiPrefs.loadCollapsedTx(ctx)) }
     var recategorizePacket by remember { mutableStateOf<MagicPacket?>(null) }
+    var renameTarget by remember { mutableStateOf<MagicPacket?>(null) }
     var deleteTarget by remember { mutableStateOf<MagicPacket?>(null) }
     var loopOn by remember(state.txLoopEnabled) { mutableStateOf(state.txLoopEnabled) }
     var txLoopSettingsCollapsed by remember { mutableStateOf(UiPrefs.isTxLoopSettingsCollapsed(ctx)) }
@@ -931,7 +963,7 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
             SectionFilterDropdown(visibleSections) { section ->
                 visibleSections = if (section in visibleSections) visibleSections - section else visibleSections + section
             }
-            Text("TAP TX · SWIPE ← DEL · SWIPE → RECAT", style = techLabel(), color = AppColors.TextDim)
+            Text("TAP TX · HOLD RENAME · SWIPE ← DEL · SWIPE → RECAT", style = techLabel(), color = AppColors.TextDim)
         },
         content = {
             HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
@@ -960,6 +992,7 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
                                                     onTap = { onSelectPacket(packet) },
                                                     onRecategorize = { recategorizePacket = packet },
                                                     onDelete = { deleteTarget = packet },
+                                                    onRename = { renameTarget = packet },
                                                 )
                                             }
                                         }
@@ -974,6 +1007,7 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
                                         onTap = { onSelectPacket(packet) },
                                         onRecategorize = { recategorizePacket = packet },
                                         onDelete = { deleteTarget = packet },
+                                        onRename = { renameTarget = packet },
                                     )
                                 }
                             }
@@ -991,6 +1025,17 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
             onPick = { category ->
                 app.store.recategorizePacket(packet.id, category)
                 recategorizePacket = null
+            },
+        )
+    }
+
+    renameTarget?.let { packet ->
+        RenameDialog(
+            currentLabel = packet.label,
+            onDismiss = { renameTarget = null },
+            onConfirm = { newLabel ->
+                app.store.renamePacket(packet.id, newLabel)
+                renameTarget = null
             },
         )
     }
@@ -1018,6 +1063,7 @@ private fun TxSwipeRow(
     onTap: () -> Unit,
     onRecategorize: () -> Unit,
     onDelete: () -> Unit,
+    onRename: () -> Unit,
 ) {
     SwipePacketRow(
         label = packet.label,
@@ -1027,6 +1073,7 @@ private fun TxSwipeRow(
         onTap = onTap,
         onDelete = onDelete,
         onPromote = onRecategorize,
+        onLongPress = onRename,
         dismissOnDelete = false,
     )
 }
