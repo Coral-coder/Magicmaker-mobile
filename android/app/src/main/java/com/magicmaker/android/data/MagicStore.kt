@@ -256,6 +256,26 @@ class MagicStore(context: Context) {
         ServiceState.bumpStoreRevision()
     }
 
+    /** Rename a captured/library packet. Only touches the label field. */
+    @Synchronized
+    fun renamePacket(id: Long, newLabel: String) {
+        val label = newLabel.trim()
+        if (label.isEmpty()) return
+
+        fun updateList(list: List<MagicPacket>): List<MagicPacket> =
+            list.map { if (it.id == id) it.copy(label = label) else it }
+
+        when {
+            learnedColors.any { it.id == id } -> learnedColors = updateList(learnedColors)
+            learnedLibrary.any { it.id == id } -> learnedLibrary = updateList(learnedLibrary)
+            learnedRaw.any { it.id == id } -> learnedRaw = updateList(learnedRaw)
+            presets.any { it.id == id } -> presets = updateList(presets)
+            else -> return
+        }
+        save()
+        ServiceState.bumpStoreRevision()
+    }
+
     @Synchronized
     fun deletePacketById(id: Long) {
         when {
