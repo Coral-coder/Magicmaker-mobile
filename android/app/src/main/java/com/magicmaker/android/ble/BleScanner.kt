@@ -9,7 +9,7 @@ import com.magicmaker.android.core.HexUtils
 import com.magicmaker.android.relay.RelayProtocol
 
 class BleScanner(
-    private val onDisneyPacket: (hex: String, rssi: Int) -> Unit,
+    private val onDisneyPacket: (hex: String, rssi: Int, address: String) -> Unit,
     private val onRelayCommand: ((hex: String, durationMs: Int) -> Unit)? = null,
     private val onScanFailed: ((Int) -> Unit)? = null,
 ) {
@@ -71,6 +71,14 @@ class BleScanner(
         if (skipRelay) return
 
         val hex = HexUtils.pickBestDisneyHex(HexUtils.collectDisneyHexCandidates(record)) ?: return
-        onDisneyPacket(hex, result.rssi)
+        // Advertiser (source) address. On Android 12+ this is usually a rotating
+        // Resolvable Private Address, not the band's identity MAC. Reading it needs
+        // BLUETOOTH_CONNECT (granted); guard against SecurityException just in case.
+        val address = try {
+            result.device?.address.orEmpty()
+        } catch (_: SecurityException) {
+            ""
+        }
+        onDisneyPacket(hex, result.rssi, address)
     }
 }

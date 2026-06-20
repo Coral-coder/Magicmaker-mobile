@@ -363,7 +363,7 @@ class MagicMakerForegroundService : Service() {
             { store.getStarlightBurstMs() },
         )
         bleScanner = BleScanner(
-            onDisneyPacket = { hex, rssi -> onHeard(hex, rssi) },
+            onDisneyPacket = { hex, rssi, address -> onHeard(hex, rssi, address) },
             onScanFailed = { code -> restartScanDelayed(code) },
         )
         leScanner = adapter.bluetoothLeScanner
@@ -624,15 +624,16 @@ class MagicMakerForegroundService : Service() {
         }
     }
 
-    private fun onHeard(hex: String, rssi: Int) {
+    private fun onHeard(hex: String, rssi: Int, address: String = "") {
         executor.execute {
-            val event = store.processHeardPacket(hex, rssi, recordSession)
+            val event = store.processHeardPacket(hex, rssi, recordSession, address)
             val classified = MagicClassifier.classify(HexUtils.canonicalHex(hex))
             val label = event?.packet?.label ?: classified?.label ?: "?"
             val note = event?.reason ?: "Heard"
             val now = System.currentTimeMillis()
+            val isBand = store.isBandAddress(address)
 
-            ServiceState.appendLive(hex, label, rssi, note)
+            ServiceState.appendLive(hex, label, rssi, note, address, isBand)
             if (now - lastHeardUiAt > 250) {
                 lastHeardUiAt = now
                 val wandIdx = if (classified?.typeInfo == "starlight") {

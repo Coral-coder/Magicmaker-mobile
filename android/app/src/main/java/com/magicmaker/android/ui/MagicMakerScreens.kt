@@ -390,6 +390,87 @@ private fun ConfirmDeleteDialog(
     )
 }
 
+private fun liveSubtitle(pkt: ServiceState.LivePacket, includeNote: Boolean): String {
+    val sb = StringBuilder("RSSI ${pkt.rssi}")
+    if (pkt.address.isNotEmpty()) sb.append(" · ${pkt.address}")
+    if (pkt.isBand) sb.append(" · BAND")
+    if (includeNote && pkt.note.isNotEmpty()) sb.append(" | ${pkt.note}")
+    return sb.toString()
+}
+
+@Composable
+private fun BandConfigSection(app: MagicMakerApp, state: ServiceState.UiState) {
+    val storeRev = state.storeRevision
+    val bandAddrs = remember(storeRev) { app.store.bandAddresses() }
+    var manual by remember { mutableStateOf("") }
+
+    Surface(color = AppColors.Cyan.copy(alpha = 0.06f), shape = RectangleShape) {
+        Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("MY MAGICBAND · TAGS SOURCE ADDR", style = techLabel(), color = AppColors.Cyan)
+            if (bandAddrs.isEmpty()) {
+                Text("NONE SET — PICK FROM HEARD OR ENTER MAC", style = techLabel(), color = AppColors.TextDim)
+            } else {
+                bandAddrs.forEach { addr ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(addr, style = techLabel(), color = AppColors.Cyan)
+                        TextButton(
+                            onClick = { app.store.removeBandAddress(addr) },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) { Text("REMOVE", style = techLabel(), color = AppColors.Amber) }
+                    }
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = manual,
+                    onValueChange = { manual = it },
+                    singleLine = true,
+                    textStyle = techLabel(),
+                    placeholder = { Text("AA:BB:CC:DD:EE:FF", style = techLabel(), color = AppColors.TextDim) },
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedButton(
+                    onClick = { if (manual.isNotBlank()) { app.store.addBandAddress(manual); manual = "" } },
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) { Text("ADD", style = techLabel()) }
+            }
+            if (state.seenAddresses.isNotEmpty()) {
+                Text("HEARD (TAP TO TAG):", style = techLabel(), color = AppColors.TextDim)
+                state.seenAddresses.take(8).forEach { seen ->
+                    val isBand = seen.address.uppercase() in bandAddrs
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${seen.address}  ${seen.rssi}dBm ·${seen.count}",
+                            style = techLabel(),
+                            color = if (isBand) AppColors.Cyan else AppColors.TextDim,
+                        )
+                        TextButton(
+                            onClick = {
+                                if (isBand) app.store.removeBandAddress(seen.address)
+                                else app.store.addBandAddress(seen.address)
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) { Text(if (isBand) "UNTAG" else "TAG", style = techLabel(), color = AppColors.Cyan) }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ScanTab(state: ServiceState.UiState) {
     val ctx = LocalContext.current
@@ -511,6 +592,7 @@ private fun ScanTab(state: ServiceState.UiState) {
             SectionFilterDropdown(visibleSections) { section ->
                 visibleSections = if (section in visibleSections) visibleSections - section else visibleSections + section
             }
+            BandConfigSection(app, state)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (viewMode == ScanViewMode.RAW) "BUF RAW ${state.rawLivePackets.size}" else "BUF UNIQUE ${state.livePackets.size}",
@@ -545,7 +627,8 @@ private fun ScanTab(state: ServiceState.UiState) {
                         SwipePacketRow(
                             label = pkt.label,
                             hex = pkt.hex,
-                            subtitle = "RSSI ${pkt.rssi} | ${pkt.note}",
+                            subtitle = liveSubtitle(pkt, includeNote = true),
+                            selected = pkt.isBand,
                             onTap = { MagicMakerForegroundService.transmit(ctx, pkt.hex) },
                             onDelete = { deleteScanRequest = ScanDeleteRequest(pkt, raw = true) },
                             onPromote = { promoteTarget = pkt },
@@ -575,7 +658,8 @@ private fun ScanTab(state: ServiceState.UiState) {
                                                     SwipePacketRow(
                                                         label = pkt.label,
                                                         hex = pkt.hex,
-                                                        subtitle = "RSSI ${pkt.rssi}",
+                                                        subtitle = liveSubtitle(pkt, includeNote = false),
+                                                        selected = pkt.isBand,
                                                         onTap = { MagicMakerForegroundService.transmit(ctx, pkt.hex) },
                                                         onDelete = { deleteScanRequest = ScanDeleteRequest(pkt, raw = false) },
                                                         onPromote = { promoteTarget = pkt },
@@ -591,7 +675,8 @@ private fun ScanTab(state: ServiceState.UiState) {
                                         SwipePacketRow(
                                             label = pkt.label,
                                             hex = pkt.hex,
-                                            subtitle = "RSSI ${pkt.rssi} | ${pkt.note}",
+                                            subtitle = liveSubtitle(pkt, includeNote = true),
+                                            selected = pkt.isBand,
                                             onTap = { MagicMakerForegroundService.transmit(ctx, pkt.hex) },
                                             onDelete = { deleteScanRequest = ScanDeleteRequest(pkt, raw = false) },
                                             onPromote = { promoteTarget = pkt },
