@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+**/build/
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+.cxx/
+.externalNativeBuild/
+captures/
+
+# Kotlin / Java
+.kotlin/
+*.class
+
+# Logs / crash
+*.log
+hs_err_pid*
+replay_pid*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# APK outputs (build via CI or ./tools/deploy.sh)
+*.apk
+*.aab
+
+# Env overrides (machine-specific)
+tools/deploy.local.sh

@@ -1,0 +1,1142 @@
+package com.magicmaker.android.service
+
+import android.app.*
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
+import androidx.core.app.NotificationCompat
+import com.magicmaker.android.MainActivity
+import com.magicmaker.android.MagicMakerApp
+import com.magicmaker.android.R
+import com.magicmaker.android.ble.BleAdvertiser
+import com.magicmaker.android.ble.BleScanner
+import com.magicmaker.android.core.*
+import com.magicmaker.android.data.MagicStore
+import com.magicmaker.android.relay.HotspotManager
+import com.magicmaker.android.relay.RelayCommands
+import com.magicmaker.android.relay.RelayGattServer
+import com.magicmaker.android.relay.RelayHttpServer
+import com.magicmaker.android.relay.RelayPairingPayload
+import com.magicmaker.android.relay.RelayProtocol
+import java.util.concurrent.Executors
+
+/**
+ * Background BLE engine: scan, auto-response, transmit.
+ * Relay (WiFi / GATT) reserved for future iPhone remote control.
+ */
+class MagicMakerForegroundService : Service() {
+
+    companion object {
+        const val CHANNEL_ID = "magicmaker_ble"
+        const val NOTIFICATION_ID = 1001
+
+        const val ACTION_START = "com.magicmaker.android.START"
+        const val ACTION_STOP = "com.magicmaker.android.STOP"
+        const val ACTION_TRANSMIT = "com.magicmaker.android.TRANSMIT"
+        const val ACTION_VIBRATE = "com.magicmaker.android.VIBRATE"
+        const val ACTION_SET_RELAY = "com.magicmaker.android.SET_RELAY"
+        const val ACTION_SET_RECORDING = "com.magicmaker.android.SET_RECORDING"
+        const val ACTION_SET_AUTO = "com.magicmaker.android.SET_AUTO"
+        const val ACTION_CLEAR_LIVE = "com.magicmaker.android.CLEAR_LIVE"
+        const val ACTION_SET_SCAN = "com.magicmaker.android.SET_SCAN"
+        const val ACTION_SET_STARLIGHT_LOOP = "com.magicmaker.android.SET_STARLIGHT_LOOP"
+        const val ACTION_SET_TX_LOOP = "com.magicmaker.android.SET_TX_LOOP"
+        const val ACTION_REFRESH_RELAY_CACHE = "com.magicmaker.android.REFRESH_RELAY_CACHE"
+
+        const val EXTRA_HEX = "hex"
+        const val EXTRA_RELAY_MODE = "relay_mode"
+        const val EXTRA_RECORDING = "recording"
+        const val EXTRA_SCAN = "scan_active"
+        const val EXTRA_AUTO = "auto"
+        const val EXTRA_STARLIGHT_ENABLED = "starlight_enabled"
+        const val EXTRA_STARLIGHT_PACKET_ID = "starlight_packet_id"
+        const val EXTRA_STARLIGHT_INTERVAL_MS = "starlight_interval_ms"
+        const val EXTRA_TX_LOOP_ENABLED = "tx_loop_enabled"
+        const val EXTRA_TX_LOOP_PACKET_ID = "tx_loop_packet_id"
+        const val EXTRA_TX_LOOP_INTERVAL_MS = "tx_loop_interval_ms"
+
+        fun start(context: Context) {
+            launch(context, ACTION_START)
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean(PREF_SERVICE_STARTED, true)
+                .apply()
+        }
+
+        fun stop(context: Context) {
+            launch(context, ACTION_STOP)
+        }
+
+        fun transmit(context: Context, hex: String) {
+            launch(context, ACTION_TRANSMIT) { putExtra(EXTRA_HEX, hex) }
+        }
+
+        fun vibrate(context: Context) {
+            launch(context, ACTION_VIBRATE)
+        }
+
+        fun send(context: Context, action: String, configure: Intent.() -> Unit = {}) {
+            launch(context, action, configure)
+        }
+
+        fun setStarlightLoop(
+            context: Context,
+            enabled: Boolean,
+            packetId: Long? = null,
+            intervalMs: Long? = null,
+        ) {
+            launch(context, ACTION_SET_STARLIGHT_LOOP) {
+                putExtra(EXTRA_STARLIGHT_ENABLED, enabled)
+                packetId?.let { putExtra(EXTRA_STARLIGHT_PACKET_ID, it) }
+                intervalMs?.let { putExtra(EXTRA_STARLIGHT_INTERVAL_MS, it) }
+            }
+        }
+
+        fun setTxLoop(
+            context: Context,
+            enabled: Boolean,
+            packetId: Long? = null,
+            intervalMs: Long? = null,
+        ) {
+            launch(context, ACTION_SET_TX_LOOP) {
+                putExtra(EXTRA_TX_LOOP_ENABLED, enabled)
+                packetId?.let { putExtra(EXTRA_TX_LOOP_PACKET_ID, it) }
+                intervalMs?.let { putExtra(EXTRA_TX_LOOP_INTERVAL_MS, it) }
+            }
+        }
+
+        /** Push latest storeRevision / catalog to GATT after UI-side MagicStore edits. */
+        fun refreshRelayCache(context: Context) {
+            launch(context, ACTION_REFRESH_RELAY_CACHE)
+        }
+
+        private fun launch(context: Context, action: String, configure: Intent.() -> Unit = {}) {
+            val i = Intent(context, MagicMakerForegroundService::class.java)
+                .setAction(action)
+                .apply(configure)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(i)
+            } else {
+                context.startService(i)
+            }
+        }
+
+        private const val PREFS = "magicmaker"
+        private const val PREF_SERVICE_STARTED = "service_was_started"
+        const val PREF_START_ON_BOOT = "start_on_boot"
+        const val PREF_SCAN_ACTIVE = "scan_active"
+        const val PREF_RECORD_SESSION = "record_session"
+    }
+
+    private lateinit var store: MagicStore
+    private var transmitter: MagicTransmitter? = null
+    private var bleAdvertiser: BleAdvertiser? = null
+    private var bleScanner: BleScanner? = null
+    private var leScanner: android.bluetooth.le.BluetoothLeScanner? = null
+    private var scanCallback: android.bluetooth.le.ScanCallback? = null
+    private var httpServer: RelayHttpServer? = null
+    private var gattServer: RelayGattServer? = null
+    private var hotspotManager: HotspotManager? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    private val executor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var scanResumeRunnable: Runnable? = null
+    private var relayMode = RelayControlMode.STANDALONE
+    private var recordSession = true
+    private var autoEnabled = true
+    private var lastAutoAt = 0L
+    private var lastNotifyAt = 0L
+    private var lastHeardUiAt = 0L
+    private var booted = false
+    private var starlightLoopEnabled = false
+    private var starlightLoopPacketId = -1L
+    private var starlightIntervalMs = 3000L
+    private var starlightLoopRunnable: Runnable? = null
+    private var txLoopEnabled = false
+    private var txLoopPacketId = -1L
+    private var txLoopIntervalMs = 3000L
+    private var txLoopRunnable: Runnable? = null
+    private var screenOn = true
+    private var userWantsScan = true
+    private var txRunning = false
+    private val txQueue = ArrayDeque<() -> Unit>()
+
+    private val systemEventsReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    screenOn = false
+                    if (booted && userWantsScan) restartScanWithScreenMode()
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    screenOn = true
+                    ensureWakeLockHeld()
+                    if (booted && userWantsScan) restartScanWithScreenMode()
+                }
+                BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                    val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                    when (state) {
+                        BluetoothAdapter.STATE_ON -> {
+                            if (!booted) boot() else {
+                                restartRelay()
+                                if (userWantsScan) restartScanWithScreenMode()
+                            }
+                        }
+                        BluetoothAdapter.STATE_OFF -> {
+                            publishState { it.copy(running = false, scanActive = false, status = "Turn on Bluetooth") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createChannel()
+        store = (application as MagicMakerApp).store
+        loadPrefs()
+        registerSystemEventsReceiver()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> {
+                shutdown()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_TRANSMIT -> {
+                if (!booted) boot()
+                intent.getStringExtra(EXTRA_HEX)?.let { queueSend(it) }
+                return START_STICKY
+            }
+            ACTION_VIBRATE -> {
+                if (!booted) boot()
+                queueVibrate()
+                return START_STICKY
+            }
+            ACTION_SET_RELAY -> {
+                intent.getStringExtra(EXTRA_RELAY_MODE)?.let {
+                    relayMode = runCatching { RelayControlMode.valueOf(it) }.getOrDefault(relayMode)
+                    savePrefs()
+                    if (!booted) boot() else restartRelay()
+                }
+                return START_STICKY
+            }
+            ACTION_SET_RECORDING -> {
+                recordSession = intent.getBooleanExtra(EXTRA_RECORDING, recordSession)
+                if (recordSession) {
+                    val file = store.beginScanSession()
+                    publishState {
+                        it.copy(recordSessionActive = true, activeSessionName = file.name)
+                    }
+                } else {
+                    val name = store.endScanSession()
+                    publishState {
+                        it.copy(recordSessionActive = false, activeSessionName = name ?: "")
+                    }
+                }
+                return START_STICKY
+            }
+            ACTION_SET_AUTO -> {
+                autoEnabled = intent.getBooleanExtra(EXTRA_AUTO, autoEnabled)
+                savePrefs()
+                publishState { it.copy(autoEnabled = autoEnabled) }
+                gattServer?.refreshStatusCharacteristic()
+                gattServer?.refreshCatalogBuffer()
+                return START_STICKY
+            }
+            ACTION_CLEAR_LIVE -> {
+                ServiceState.clearLive()
+                return START_STICKY
+            }
+            ACTION_SET_SCAN -> {
+                if (!booted) boot()
+                userWantsScan = intent.getBooleanExtra(EXTRA_SCAN, true)
+                savePrefs()
+                if (userWantsScan) resumeScan() else pauseScan()
+                return START_STICKY
+            }
+            ACTION_SET_STARLIGHT_LOOP -> {
+                if (!booted) boot()
+                if (intent.hasExtra(EXTRA_STARLIGHT_ENABLED)) {
+                    starlightLoopEnabled = intent.getBooleanExtra(EXTRA_STARLIGHT_ENABLED, false)
+                }
+                if (intent.hasExtra(EXTRA_STARLIGHT_PACKET_ID)) {
+                    starlightLoopPacketId = intent.getLongExtra(EXTRA_STARLIGHT_PACKET_ID, starlightLoopPacketId)
+                }
+                if (intent.hasExtra(EXTRA_STARLIGHT_INTERVAL_MS)) {
+                    starlightIntervalMs = intent.getLongExtra(EXTRA_STARLIGHT_INTERVAL_MS, starlightIntervalMs)
+                        .coerceIn(500L, 60_000L)
+                }
+                savePrefs()
+                if (starlightLoopEnabled) {
+                    stopTxLoop()
+                    startStarlightLoop()
+                } else {
+                    stopStarlightLoop()
+                }
+                publishStarlightState()
+                return START_STICKY
+            }
+            ACTION_SET_TX_LOOP -> {
+                if (!booted) boot()
+                if (intent.hasExtra(EXTRA_TX_LOOP_ENABLED)) {
+                    txLoopEnabled = intent.getBooleanExtra(EXTRA_TX_LOOP_ENABLED, false)
+                }
+                if (intent.hasExtra(EXTRA_TX_LOOP_PACKET_ID)) {
+                    txLoopPacketId = intent.getLongExtra(EXTRA_TX_LOOP_PACKET_ID, txLoopPacketId)
+                }
+                if (intent.hasExtra(EXTRA_TX_LOOP_INTERVAL_MS)) {
+                    txLoopIntervalMs = intent.getLongExtra(EXTRA_TX_LOOP_INTERVAL_MS, txLoopIntervalMs)
+                        .coerceIn(500L, 60_000L)
+                }
+                savePrefs()
+                if (txLoopEnabled) {
+                    stopStarlightLoop()
+                    startTxLoop()
+                } else {
+                    stopTxLoop()
+                }
+                publishTxLoopState()
+                return START_STICKY
+            }
+            ACTION_REFRESH_RELAY_CACHE -> {
+                if (!booted) boot()
+                gattServer?.refreshStatusCharacteristic()
+                gattServer?.refreshCatalogBuffer()
+                return START_STICKY
+            }
+            else -> boot()
+        }
+        return START_STICKY
+    }
+
+    private fun boot() {
+        ensureWakeLockHeld()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification("Starting…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification("Starting…"))
+        }
+
+        val adapter = getSystemService(BluetoothManager::class.java)?.adapter
+        if (adapter == null || !adapter.isEnabled) {
+            publishState { it.copy(running = false, status = "Turn on Bluetooth") }
+            return
+        }
+
+        if (booted) {
+            if (userWantsScan && bleScanner?.isScanning != true) resumeScan()
+            publishState {
+                it.copy(
+                    running = true,
+                    scanActive = bleScanner?.isScanning == true,
+                    status = if (screenOn) "Scanning" else "Scanning (screen off)",
+                )
+            }
+            ensureWakeLockHeld()
+            return
+        }
+        booted = true
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putBoolean(PREF_SERVICE_STARTED, true)
+            .apply()
+
+        bleAdvertiser = BleAdvertiser(adapter.bluetoothLeAdvertiser) { msg -> publishStatus(msg) }
+        transmitter = MagicTransmitter(
+            bleAdvertiser!!,
+            { store.getWakeupPreambleMs() },
+            { store.getCommandBurstMs() },
+            { store.getStarlightBurstMs() },
+        )
+        bleScanner = BleScanner(
+            onDisneyPacket = { hex, rssi -> onHeard(hex, rssi) },
+            onScanFailed = { code -> restartScanDelayed(code) },
+        )
+        leScanner = adapter.bluetoothLeScanner
+        scanCallback = bleScanner!!.buildCallback()
+        if (userWantsScan) startScan() else publishState { it.copy(scanActive = false) }
+        runCatching { restartRelay() }.onFailure { publishStatus("Relay error: ${it.message ?: "unknown"}") }
+
+        publishState {
+            it.copy(
+                running = true,
+                status = "Scanning",
+                scanActive = true,
+                relayMode = relayMode,
+                autoEnabled = autoEnabled,
+                recordSessionActive = recordSession,
+                activeSessionName = store.scanSessions.firstOrNull()?.name ?: it.activeSessionName,
+                starlightLoopEnabled = starlightLoopEnabled,
+                starlightLoopPacketId = starlightLoopPacketId,
+                starlightIntervalMs = starlightIntervalMs,
+                starlightLoopLabel = starlightLoopLabel(),
+                txLoopEnabled = txLoopEnabled,
+                txLoopPacketId = txLoopPacketId,
+                txLoopIntervalMs = txLoopIntervalMs,
+                txLoopLabel = txLoopLabel(),
+                wakeupPreambleMs = store.getWakeupPreambleMs(),
+                commandBurstMs = store.getCommandBurstMs(),
+                starlightBurstMs = store.getStarlightBurstMs(),
+            )
+        }
+        if (recordSession && store.scanSessions.isEmpty()) {
+            val file = store.beginScanSession()
+            publishState { it.copy(recordSessionActive = true, activeSessionName = file.name) }
+        }
+        if (starlightLoopEnabled) startStarlightLoop()
+        if (txLoopEnabled) startTxLoop()
+    }
+
+    private fun txLoopHex(): String? {
+        if (txLoopPacketId < 0) return null
+        return store.findTransmitPacket(txLoopPacketId)?.hex?.let { HexUtils.canonicalHex(it) }
+    }
+
+    private fun txLoopLabel(): String {
+        if (txLoopPacketId < 0) return "none"
+        return store.findTransmitPacket(txLoopPacketId)?.label ?: "unknown"
+    }
+
+    private fun starlightLoopHex(): String? {
+        if (starlightLoopPacketId < 0) return null
+        return store.findLearnedStarlight(starlightLoopPacketId)?.hex?.let { HexUtils.canonicalHex(it) }
+    }
+
+    private fun starlightLoopLabel(): String {
+        if (starlightLoopPacketId < 0) return "none"
+        return store.findLearnedStarlight(starlightLoopPacketId)?.label ?: "unknown"
+    }
+
+    private fun pauseGattForManufacturerTx() {
+        gattServer?.pauseConnectableAdvertising()
+    }
+
+    private fun resumeGattAfterManufacturerTx() {
+        gattServer?.resumeConnectableAdvertising()
+    }
+
+    private fun enqueueRadioWork(work: () -> Unit) {
+        mainHandler.post {
+            txQueue.addLast(work)
+            drainRadioQueue()
+        }
+    }
+
+    private fun drainRadioQueue() {
+        if (txRunning || txQueue.isEmpty()) return
+        txRunning = true
+        txQueue.removeFirst()()
+    }
+
+    private fun finishRadioWork() {
+        txRunning = false
+        drainRadioQueue()
+    }
+
+    /** Pause scan (+ GATT relay ADV when active), run one manufacturer burst, then restore. */
+    private fun runManufacturerTx(
+        status: String,
+        onCompleteStatus: String,
+        send: (onDone: () -> Unit) -> Unit,
+        afterComplete: (() -> Unit)? = null,
+    ) {
+        enqueueRadioWork {
+            pauseScanNow()
+            pauseGattForManufacturerTx()
+            publishStatus(status)
+            send {
+                resumeGattAfterManufacturerTx()
+                publishStatus(onCompleteStatus)
+                scheduleResumeScan()
+                afterComplete?.invoke()
+                finishRadioWork()
+            }
+        }
+    }
+
+    private fun queueSend(hex: String) {
+        val txHex = HexUtils.canonicalHex(hex)
+        val starlight = HexUtils.isStarlightPacket(txHex)
+        if (starlight) {
+            val idx = MagicClassifier.starlightLearnColorIndex(txHex)
+                ?: MagicClassifier.starlightColorIndex(txHex)
+            publishState { it.copy(wandDisplayColorIndex = idx) }
+        }
+        val doneStatus = when {
+            txLoopEnabled -> "TX loop"
+            starlight && starlightLoopEnabled -> "Wand loop"
+            else -> "Scanning"
+        }
+        runManufacturerTx(
+            status = if (starlight) "Wand TX…" else "TX…",
+            onCompleteStatus = doneStatus,
+            send = { onDone ->
+                if (transmitter != null) transmitter?.send(txHex, onDone) else onDone()
+            },
+        )
+    }
+
+    private fun queueVibrate() {
+        runManufacturerTx(
+            status = "Vibrate…",
+            onCompleteStatus = "Scanning",
+            send = { onDone ->
+                if (transmitter != null) transmitter?.vibrateBand(onDone) else onDone()
+            },
+        )
+    }
+
+    private fun startStarlightLoop() {
+        stopStarlightLoopSchedule()
+        starlightLoopEnabled = true
+        scheduleStarlightBurst(immediate = true)
+    }
+
+    private fun stopStarlightLoop() {
+        starlightLoopEnabled = false
+        stopStarlightLoopSchedule()
+    }
+
+    private fun stopStarlightLoopSchedule() {
+        starlightLoopRunnable?.let { mainHandler.removeCallbacks(it) }
+        starlightLoopRunnable = null
+    }
+
+    private fun scheduleStarlightBurst(immediate: Boolean) {
+        stopStarlightLoopSchedule()
+        val task = Runnable {
+            if (!starlightLoopEnabled || !booted) return@Runnable
+            val hex = starlightLoopHex()
+            if (hex == null) {
+                publishStatus("Wand: pick a learned color")
+                stopStarlightLoop()
+                publishStarlightState()
+                return@Runnable
+            }
+            runManufacturerTx(
+                status = "Wand loop…",
+                onCompleteStatus = "Wand loop",
+                send = { onDone ->
+                    if (transmitter != null) transmitter?.send(hex, onDone) else onDone()
+                },
+                afterComplete = {
+                    publishStarlightState()
+                    if (starlightLoopEnabled) {
+                        starlightLoopRunnable = Runnable { scheduleStarlightBurst(immediate = true) }
+                        mainHandler.postDelayed(starlightLoopRunnable!!, starlightIntervalMs)
+                    }
+                },
+            )
+        }
+        starlightLoopRunnable = task
+        if (immediate) mainHandler.post(task) else mainHandler.postDelayed(task, starlightIntervalMs)
+    }
+
+    private fun publishStarlightState() {
+        publishState {
+            it.copy(
+                starlightLoopEnabled = starlightLoopEnabled,
+                starlightLoopPacketId = starlightLoopPacketId,
+                starlightIntervalMs = starlightIntervalMs,
+                starlightLoopLabel = starlightLoopLabel(),
+            )
+        }
+    }
+
+    private fun startTxLoop() {
+        stopTxLoopSchedule()
+        txLoopEnabled = true
+        scheduleTxBurst(immediate = true)
+    }
+
+    private fun stopTxLoop() {
+        txLoopEnabled = false
+        stopTxLoopSchedule()
+    }
+
+    private fun stopTxLoopSchedule() {
+        txLoopRunnable?.let { mainHandler.removeCallbacks(it) }
+        txLoopRunnable = null
+    }
+
+    private fun scheduleTxBurst(immediate: Boolean) {
+        stopTxLoopSchedule()
+        val task = Runnable {
+            if (!txLoopEnabled || !booted) return@Runnable
+            val hex = txLoopHex()
+            if (hex == null) {
+                publishStatus("TX loop: pick a library row")
+                stopTxLoop()
+                publishTxLoopState()
+                return@Runnable
+            }
+            runManufacturerTx(
+                status = "TX loop…",
+                onCompleteStatus = "TX loop",
+                send = { onDone ->
+                    if (transmitter != null) transmitter?.send(hex, onDone) else onDone()
+                },
+                afterComplete = {
+                    publishTxLoopState()
+                    if (txLoopEnabled) {
+                        txLoopRunnable = Runnable { scheduleTxBurst(immediate = true) }
+                        mainHandler.postDelayed(txLoopRunnable!!, txLoopIntervalMs)
+                    }
+                },
+            )
+        }
+        txLoopRunnable = task
+        if (immediate) mainHandler.post(task) else mainHandler.postDelayed(task, txLoopIntervalMs)
+    }
+
+    private fun publishTxLoopState() {
+        publishState {
+            it.copy(
+                txLoopEnabled = txLoopEnabled,
+                txLoopPacketId = txLoopPacketId,
+                txLoopIntervalMs = txLoopIntervalMs,
+                txLoopLabel = txLoopLabel(),
+            )
+        }
+    }
+
+    private fun publishTimingState() {
+        publishState {
+            it.copy(
+                wakeupPreambleMs = store.getWakeupPreambleMs(),
+                commandBurstMs = store.getCommandBurstMs(),
+                starlightBurstMs = store.getStarlightBurstMs(),
+            )
+        }
+    }
+
+    private fun onHeard(hex: String, rssi: Int) {
+        executor.execute {
+            val event = store.processHeardPacket(hex, rssi, recordSession)
+            val classified = MagicClassifier.classify(HexUtils.canonicalHex(hex))
+            val label = event?.packet?.label ?: classified?.label ?: "?"
+            val note = event?.reason ?: "Heard"
+            val now = System.currentTimeMillis()
+
+            ServiceState.appendLive(hex, label, rssi, note)
+            if (now - lastHeardUiAt > 250) {
+                lastHeardUiAt = now
+                val wandIdx = if (classified?.typeInfo == "starlight") {
+                    MagicClassifier.starlightLearnColorIndex(hex)
+                        ?: MagicClassifier.starlightColorIndex(HexUtils.canonicalHex(hex))
+                } else null
+                publishState {
+                    it.copy(
+                        packetsHeard = it.packetsHeard + 1,
+                        lastHeardHex = hex,
+                        lastHeardLabel = label,
+                        wandDisplayColorIndex = wandIdx ?: it.wandDisplayColorIndex,
+                    )
+                }
+            } else {
+                ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
+            }
+
+            if (!autoEnabled || classified == null) return@execute
+            if (now - lastAutoAt < 800) return@execute
+            val responseHexes = store.findAutoResponses(classified, hex) ?: return@execute
+            lastAutoAt = now
+            publishState { it.copy(autoResponsesSent = it.autoResponsesSent + 1, status = "Auto→${classified.label} (${responseHexes.size})") }
+            mainHandler.post {
+                runManufacturerTx(
+                    status = "Auto→${classified.label}",
+                    onCompleteStatus = "Scanning",
+                    send = { onDone ->
+                        if (transmitter != null) transmitter?.sendSequence(responseHexes, onDone) else onDone()
+                    },
+                )
+            }
+        }
+    }
+
+    private fun restartRelay() {
+        httpServer?.stop()
+        httpServer = null
+        gattServer?.stop()
+        gattServer = null
+        hotspotManager?.stopHotspot()
+
+        val handlers = relayCommandHandlers()
+        startGattRelay(handlers)
+
+        when (relayMode) {
+            RelayControlMode.STANDALONE, RelayControlMode.BLE_GATT -> publishState {
+                it.copy(
+                    relayMode = relayMode,
+                    relayIp = "",
+                    hotspotSsid = "",
+                    hotspotPassword = "",
+                    status = if (it.scanActive) "Scanning" else it.status,
+                )
+            }
+            RelayControlMode.WIFI_HOTSPOT -> {
+                hotspotManager = HotspotManager(this) { publishStatus(it) }
+                hotspotManager?.startHotspot { info ->
+                    httpServer = RelayHttpServer(
+                        RelayProtocol.HTTP_PORT,
+                        onCommand = { hex -> queueSend(hex) },
+                        onVibrate = { queueVibrate() },
+                        statusProvider = { ServiceState.statusJson() },
+                        commandHandlers = handlers,
+                    ).also { it.start() }
+                    publishState {
+                        it.copy(
+                            relayMode = relayMode,
+                            relayIp = info.gatewayIp,
+                            httpPort = RelayProtocol.HTTP_PORT,
+                            hotspotSsid = info.ssid,
+                            hotspotPassword = info.password,
+                            status = "WiFi relay ${info.gatewayIp}:${RelayProtocol.HTTP_PORT}",
+                            relayLinked = gattServer != null && ServiceState.state.value.relayLinked,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun startGattRelay(handlers: RelayCommands.Handlers) {
+        val bt = getSystemService(BluetoothManager::class.java) ?: run {
+            publishStatus("Bluetooth unavailable")
+            return
+        }
+        runCatching {
+            gattServer = RelayGattServer(
+                this, bt,
+                onTransmit = { hex, _ -> queueSend(hex) },
+                onStatus = { msg ->
+                    publishStatus(msg)
+                    when {
+                        msg.contains("linked", ignoreCase = true) -> {
+                            publishState { s -> s.copy(relayLinked = true, status = msg) }
+                            gattServer?.refreshStatusCharacteristic()
+                            gattServer?.refreshCatalogBuffer()
+                        }
+                        msg.contains("idle", ignoreCase = true) ||
+                            msg.contains("disconnected", ignoreCase = true) -> {
+                            publishState { s -> s.copy(relayLinked = false, status = msg) }
+                            gattServer?.refreshStatusCharacteristic()
+                            gattServer?.refreshCatalogBuffer()
+                        }
+                        msg.contains("listening", ignoreCase = true) ||
+                            msg.contains("failed", ignoreCase = true) -> {
+                            publishState { s -> s.copy(status = msg) }
+                        }
+                    }
+                },
+                commandHandlers = handlers,
+            ).also { it.start() }
+        }.onFailure { publishStatus("GATT relay failed: ${it.message}") }
+    }
+
+    private fun relayCommandHandlers(): RelayCommands.Handlers = RelayCommands.Handlers(
+        transmit = { hex -> queueSend(hex) },
+        vibrate = { queueVibrate() },
+        interrogate = { queueSend(PacketBuilder.WAKEUP_PING) },
+        setScan = { enabled ->
+            if (enabled) resumeScan() else pauseScan()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        setAuto = { enabled ->
+            autoEnabled = enabled
+            savePrefs()
+            publishState { it.copy(autoEnabled = enabled) }
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        setRecording = { enabled ->
+            if (enabled == recordSession) return@Handlers
+            recordSession = enabled
+            if (enabled) {
+                val file = store.beginScanSession()
+                publishState { it.copy(recordSessionActive = true, activeSessionName = file.name) }
+            } else {
+                val name = store.endScanSession()
+                publishState { it.copy(recordSessionActive = false, activeSessionName = name ?: "") }
+            }
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        clearLive = {
+            ServiceState.clearLive()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        setStarlightLoop = { enabled, packetId, intervalMs ->
+            if (!booted) boot()
+            starlightLoopEnabled = enabled
+            packetId?.let { starlightLoopPacketId = it }
+            intervalMs?.let { starlightIntervalMs = it.coerceIn(500L, 60_000L) }
+            savePrefs()
+            if (starlightLoopEnabled) {
+                stopTxLoop()
+                startStarlightLoop()
+            } else {
+                stopStarlightLoop()
+            }
+            publishStarlightState()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        setTxLoop = { enabled, packetId, intervalMs ->
+            if (!booted) boot()
+            txLoopEnabled = enabled
+            packetId?.let { txLoopPacketId = it }
+            intervalMs?.let { txLoopIntervalMs = it.coerceIn(500L, 60_000L) }
+            savePrefs()
+            if (txLoopEnabled) {
+                stopStarlightLoop()
+                startTxLoop()
+            } else {
+                stopTxLoop()
+            }
+            publishTxLoopState()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        setWakeupPreamble = { ms ->
+            store.saveWakeupPreambleMs(ms)
+            publishTimingState()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        setCommandBurst = { ms ->
+            store.saveCommandBurstMs(ms)
+            publishTimingState()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        setStarlightBurst = { ms ->
+            store.saveStarlightBurstMs(ms)
+            publishTimingState()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        saveCustomPreset = { label, hex ->
+            val err = store.saveCustomPreset(label, hex)
+            if (err != null) throw IllegalArgumentException(err)
+            ServiceState.bumpStoreRevision()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        removeLive = { dedupeKey ->
+            ServiceState.removeLive(dedupeKey)
+            gattServer?.refreshStatusCharacteristic()
+        },
+        removeRawLive = { timestampMs, hex ->
+            ServiceState.removeRawLive(timestampMs, hex)
+            gattServer?.refreshStatusCharacteristic()
+        },
+        deleteWandColor = { packetId ->
+            store.deleteLearnedColor(packetId)
+            if (starlightLoopEnabled && packetId == starlightLoopPacketId) {
+                val next = store.learnedStarlightPackets().firstOrNull()
+                if (next != null) {
+                    starlightLoopPacketId = next.id
+                    savePrefs()
+                    startStarlightLoop()
+                } else {
+                    starlightLoopEnabled = false
+                    starlightLoopPacketId = -1L
+                    savePrefs()
+                    stopStarlightLoop()
+                }
+            }
+            publishStarlightState()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        clearWandLibrary = {
+            store.clearLearnedStarlight()
+            starlightLoopEnabled = false
+            starlightLoopPacketId = -1L
+            savePrefs()
+            stopStarlightLoop()
+            publishStarlightState()
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        addAutoRule = { name, triggerId, responseIds, responseHexes ->
+            store.addAutoRule(name, triggerId, responseIds, responseHexes)
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        deleteAutoRule = { ruleId ->
+            store.deleteAutoRule(ruleId)
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        setAutoRuleEnabled = { ruleId, enabled ->
+            store.setAutoRuleEnabled(ruleId, enabled)
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+        catalogJson = {
+            RelayCommands.buildCatalog(
+                transmitPresets = store.allTransmitPackets(),
+                wandColors = store.learnedStarlightPackets(),
+                autoRules = store.autoRules,
+                wakeupPreambleMs = store.getWakeupPreambleMs(),
+                commandBurstMs = store.getCommandBurstMs(),
+                starlightBurstMs = store.getStarlightBurstMs(),
+            )
+        },
+        statusJson = { ServiceState.statusJson() },
+        liveJson = { ServiceState.liveJson() },
+        pairingJson = {
+            val s = ServiceState.state.value
+            RelayPairingPayload.json(
+                ssid = s.hotspotSsid.ifEmpty { HotspotManager.HOTSPOT_SSID },
+                password = s.hotspotPassword.ifEmpty { HotspotManager.HOTSPOT_PASSWORD },
+                gatewayIp = s.relayIp.ifEmpty { HotspotManager.DEFAULT_GATEWAY },
+                httpPort = s.httpPort,
+            )
+        },
+        mbleTap = { token, durationMs ->
+            val payload = com.magicmaker.android.core.MbleBeaconBuilder.manufacturerPayload(token)
+            bleAdvertiser?.burstManufacturer(
+                manufacturerId = com.magicmaker.android.core.MbleBeaconBuilder.MANUFACTURER_ID,
+                payload = payload,
+                durationMs = durationMs,
+            ) {}
+            gattServer?.refreshStatusCharacteristic()
+            gattServer?.refreshCatalogBuffer()
+        },
+    )
+
+    private fun restartScanWithScreenMode() {
+        mainHandler.post {
+            if (!booted || !userWantsScan) return@post
+            startScanNow()
+        }
+    }
+
+    private fun restartScanDelayed(errorCode: Int = 0) {
+        val reason = when (errorCode) {
+            1 -> "scan failed (already started)"
+            2 -> "scan failed (app registration)"
+            3 -> "scan failed (internal error)"
+            4 -> "scan failed (feature unsupported)"
+            5 -> "scan failed (out of hardware resources)"
+            6 -> "scan failed (scanning too frequently)"
+            else -> "scan restarting"
+        }
+        publishStatus(reason)
+        mainHandler.postDelayed({
+            if (leScanner != null && scanCallback != null && userWantsScan) startScanNow()
+        }, 800)
+    }
+
+    private fun scheduleResumeScan() {
+        scanResumeRunnable?.let { mainHandler.removeCallbacks(it) }
+        scanResumeRunnable = Runnable { startScanNow() }
+        mainHandler.postDelayed(scanResumeRunnable!!, TransmitTiming.SCAN_RESUME_DELAY_MS)
+    }
+
+    private fun startScanNow() {
+        val s = leScanner ?: return
+        val cb = scanCallback ?: return
+        val scanner = bleScanner ?: return
+        if (!userWantsScan) return
+        runCatching {
+            runCatching { s.stopScan(cb) }
+            scanner.markStopped()
+            s.startScan(scanner.scanFilters(), scanner.scanSettings(screenOn), cb)
+            scanner.markStarted()
+            publishState {
+                it.copy(
+                    scanActive = true,
+                    status = if (screenOn) "Scanning" else "Scanning (screen off)",
+                )
+            }
+        }.onFailure { e ->
+            publishStatus("Scan error: ${e.message ?: "unknown"}")
+            restartScanDelayed()
+        }
+    }
+
+    private fun pauseScanNow() {
+        scanResumeRunnable?.let { mainHandler.removeCallbacks(it) }
+        val s = leScanner ?: return
+        val cb = scanCallback ?: return
+        runCatching { s.stopScan(cb) }
+        bleScanner?.markStopped()
+        publishState { it.copy(scanActive = false) }
+    }
+
+    private fun startScan() = mainHandler.post { startScanNow() }
+
+    private fun pauseScanQuiet() {
+        val s = leScanner ?: return
+        val cb = scanCallback ?: return
+        runCatching { s.stopScan(cb) }
+        bleScanner?.markStopped()
+    }
+
+    private fun pauseScan() = mainHandler.post { pauseScanNow() }
+
+    private fun resumeScan() = scheduleResumeScan()
+
+    private fun shutdown() {
+        scanResumeRunnable?.let { mainHandler.removeCallbacks(it) }
+        txQueue.clear()
+        txRunning = false
+        stopStarlightLoop()
+        stopTxLoop()
+        pauseScanNow()
+        httpServer?.stop()
+        gattServer?.stop()
+        hotspotManager?.stopHotspot()
+        bleAdvertiser?.stopAll()
+        releaseWakeLock()
+        booted = false
+        ServiceState.update { ServiceState.UiState() }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+    }
+
+    private fun loadPrefs() {
+        val p = getSharedPreferences(PREFS, MODE_PRIVATE)
+        relayMode = runCatching {
+            RelayControlMode.valueOf(p.getString("relay_mode", RelayControlMode.BLE_GATT.name)!!)
+        }.getOrDefault(RelayControlMode.BLE_GATT)
+        autoEnabled = p.getBoolean("auto_enabled", true)
+        recordSession = p.getBoolean(PREF_RECORD_SESSION, true)
+        userWantsScan = p.getBoolean(PREF_SCAN_ACTIVE, true)
+        starlightLoopEnabled = p.getBoolean("starlight_loop_enabled", false)
+        starlightLoopPacketId = p.getLong("starlight_loop_packet_id", -1L)
+        starlightIntervalMs = p.getLong("starlight_interval_ms", 3000L).coerceIn(500L, 60_000L)
+        txLoopEnabled = p.getBoolean("tx_loop_enabled", false)
+        txLoopPacketId = p.getLong("tx_loop_packet_id", -1L)
+        txLoopIntervalMs = p.getLong("tx_loop_interval_ms", 3000L).coerceIn(500L, 60_000L)
+    }
+
+    private fun savePrefs() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString("relay_mode", relayMode.name)
+            .putBoolean("auto_enabled", autoEnabled)
+            .putBoolean(PREF_RECORD_SESSION, recordSession)
+            .putBoolean(PREF_SCAN_ACTIVE, userWantsScan)
+            .putBoolean("starlight_loop_enabled", starlightLoopEnabled)
+            .putLong("starlight_loop_packet_id", starlightLoopPacketId)
+            .putLong("starlight_interval_ms", starlightIntervalMs)
+            .putBoolean("tx_loop_enabled", txLoopEnabled)
+            .putLong("tx_loop_packet_id", txLoopPacketId)
+            .putLong("tx_loop_interval_ms", txLoopIntervalMs)
+            .apply()
+    }
+
+    private fun publishStatus(msg: String) = publishState { it.copy(status = msg) }
+
+    private fun publishState(transform: (ServiceState.UiState) -> ServiceState.UiState) {
+        ServiceState.update(transform)
+        gattServer?.refreshStatusCharacteristic()
+        gattServer?.refreshCatalogBuffer()
+        val now = System.currentTimeMillis()
+        if (now - lastNotifyAt < 800) return
+        lastNotifyAt = now
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, notification(ServiceState.state.value.status))
+    }
+
+    private fun acquireWakeLock() {
+        ensureWakeLockHeld()
+    }
+
+    private fun ensureWakeLockHeld() {
+        val pm = getSystemService(PowerManager::class.java) ?: return
+        if (wakeLock?.isHeld == true) return
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MagicMaker::Ble").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+    }
+
+    private fun registerSystemEventsReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(systemEventsReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(systemEventsReceiver, filter)
+        }
+    }
+
+    private fun unregisterSystemEventsReceiver() {
+        runCatching { unregisterReceiver(systemEventsReceiver) }
+    }
+
+    private fun createChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel_name), NotificationManager.IMPORTANCE_LOW),
+            )
+        }
+    }
+
+    private fun notification(text: String): Notification {
+        val s = ServiceState.state.value
+        val detail = buildString {
+            append(text)
+            if (s.scanActive) append(" · scan")
+            if (s.autoEnabled) append(" · auto")
+            if (s.recordSessionActive) append(" · rec")
+            if (s.starlightLoopEnabled) append(" · wand ${s.starlightLoopLabel}")
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(getString(R.string.notification_title))
+            .setContentText(detail)
+            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setOngoing(true)
+            .setContentIntent(
+                PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE),
+            )
+            .build()
+    }
+
+    override fun onDestroy() {
+        unregisterSystemEventsReceiver()
+        shutdown()
+        super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean(PREF_SERVICE_STARTED, false)) {
+            start(applicationContext)
+        }
+    }
+}

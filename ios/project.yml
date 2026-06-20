@@ -1,0 +1,43 @@
+name: MagicMaker
+options:
+  bundleIdPrefix: com.magicmaker
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    DEVELOPMENT_TEAM: ""
+    OTHER_LDFLAGS: ["$(inherited)", "-ld_classic"]
+targets:
+  MagicMaker:
+    type: application
+    platform: iOS
+    sources:
+      - path: MagicMaker
+        excludes:
+          - Info.plist
+    info:
+      path: MagicMaker/Info.plist
+      properties:
+        CFBundleDisplayName: MagicMaker
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIBackgroundModes:
+          - bluetooth-central
+        NSBluetoothAlwaysUsageDescription: "MagicMaker scans and sends Disney BLE packets for wand colors and show effects."
+        NSBluetoothPeripheralUsageDescription: "MagicMaker transmits BLE packets to MagicBands and wands."
+        NSLocalNetworkUsageDescription: "MagicMaker sends transmit commands to your Android relay over the local WiFi hotspot."
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        BGTaskSchedulerPermittedIdentifiers: []
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.magicmaker.ios
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_DEBUG_DYLIB: NO
+        ENABLE_PREVIEWS: NO

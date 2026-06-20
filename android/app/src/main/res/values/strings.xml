@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MagicMaker</string>
+    <string name="notification_channel_name">MagicMaker BLE</string>
+    <string name="notification_title">MagicMaker active</string>
+    <string name="notification_scanning">Scanning Disney BLE</string>
+    <string name="notification_idle">Relay ready</string>
+</resources>
