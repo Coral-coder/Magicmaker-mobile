@@ -68,6 +68,10 @@ object ServiceState {
         val commandBurstMs: Int = TransmitTiming.COMMAND_BURST_MS,
         val starlightBurstMs: Int = TransmitTiming.STARLIGHT_BURST_MS,
         val relayLinked: Boolean = false,
+        val replayActive: Boolean = false,
+        val replayProgress: Int = 0,
+        val replayTotal: Int = 0,
+        val replayLabel: String = "",
     )
 
     private const val MAX_LIVE = 120

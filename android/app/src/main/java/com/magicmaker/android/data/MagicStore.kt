@@ -20,11 +20,30 @@ class MagicStore(context: Context) {
     private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
     private val prefs = appContext.getSharedPreferences(PREFS_MAIN, Context.MODE_PRIVATE)
 
-    // Capture logs go to app-specific *external* storage so they can be pulled off
-    // the device over USB/MTP (Android/data/com.magicmaker.android/files/scan_sessions),
-    // with a fallback to internal storage if external is unavailable.
-    private val sessionsDir = (appContext.getExternalFilesDir("scan_sessions")
-        ?: File(appContext.filesDir, "scan_sessions")).also { it.mkdirs() }
+    // Where NEW capture logs are written. Prefer the user-accessible SD location
+    // (/sdcard/MagicMaker/logs) when all-files access is granted (survives uninstall,
+    // browsable on a computer), otherwise the app's external files dir.
+    private fun logsDir(): File {
+        if (AllFilesAccess.granted(appContext)) {
+            val sd = File(Environment.getExternalStorageDirectory(), "MagicMaker/logs")
+            if (sd.exists() || sd.mkdirs()) return sd
+        }
+        return (appContext.getExternalFilesDir("scan_sessions")
+            ?: File(appContext.filesDir, "scan_sessions")).also { it.mkdirs() }
+    }
+
+    /**
+     * Every place logs have ever been written, so old captures are never lost when
+     * the storage location changes: SD (new), app external files (band-tagging era),
+     * and internal files (oldest).
+     */
+    private fun allLogDirs(): List<File> = buildList {
+        if (AllFilesAccess.granted(appContext)) {
+            add(File(Environment.getExternalStorageDirectory(), "MagicMaker/logs"))
+        }
+        appContext.getExternalFilesDir("scan_sessions")?.let { add(it) }
+        add(File(appContext.filesDir, "scan_sessions"))
+    }.distinctBy { it.absolutePath }
     // The app's own state stays in private internal storage (fast, always writable).
     private val storeFile = File(appContext.filesDir, "magicmaker_store.json")
     // Canonical, user-editable copy on shared storage: survives uninstall, editable
@@ -759,14 +778,17 @@ class MagicStore(context: Context) {
         ServiceState.bumpStoreRevision()
     }
 
+    val sessionActive: Boolean get() = activeSessionFile != null
+
     @Synchronized
     fun beginScanSession(): File {
+        val dir = logsDir()
         val stamp = SimpleDateFormat("yyyy-MM-dd'T'HH-mm-ss", Locale.US).format(Date())
-        val file = File(sessionsDir, "scan_$stamp.csv")
+        val file = File(dir, "scan_$stamp.csv")
         file.writeText(SESSION_HEADER)
         activeSessionFile = file
         // Band-only log shares the timestamp so the trio sorts together.
-        activeBandFile = File(sessionsDir, "scan_${stamp}_band.csv")
+        activeBandFile = File(dir, "scan_${stamp}_band.csv")
         sessionUnique.clear()
         refreshSessions()
         return file
@@ -784,11 +806,75 @@ class MagicStore(context: Context) {
     }
 
     fun refreshSessions() {
-        scanSessions = sessionsDir.listFiles()
-            ?.filter { it.extension == "csv" }
-            ?.sortedByDescending { it.name }
-            ?.map { ScanSessionFile(it.absolutePath, it.name) }
-            ?: emptyList()
+        scanSessions = allLogDirs()
+            .flatMap { it.listFiles()?.toList() ?: emptyList() }
+            .filter { it.extension == "csv" }
+            .sortedByDescending { it.lastModified() }
+            .map { ScanSessionFile(it.absolutePath, it.name) }
+    }
+
+    /** A capture log on disk (chronological session file), for the Logs tab. */
+    data class LogFile(
+        val path: String,
+        val name: String,
+        val sizeBytes: Long,
+        val modifiedMs: Long,
+        val packetCount: Int,
+    )
+
+    /** A single recorded packet parsed from a chronological log file. */
+    data class LoggedPacket(
+        val timestampMs: Long,
+        val hex: String,
+        val rssi: Int,
+        val label: String,
+        val category: String,
+        val typeInfo: String,
+        val sourceAddress: String,
+        val isBand: Boolean,
+    )
+
+    /**
+     * Chronological session logs from every storage location (so old captures stay
+     * accessible), excluding the _band / _unique sidecars, newest first.
+     */
+    fun listLogs(): List<LogFile> =
+        allLogDirs()
+            .flatMap { it.listFiles()?.toList() ?: emptyList() }
+            .filter { it.extension == "csv" && !it.name.endsWith("_band.csv") && !it.name.endsWith("_unique.csv") }
+            .sortedByDescending { it.lastModified() }
+            .map { f ->
+                val lines = runCatching { f.readLines().size - 1 }.getOrDefault(0).coerceAtLeast(0)
+                LogFile(f.absolutePath, f.name, f.length(), f.lastModified(), lines)
+            }
+
+    fun readLog(path: String): List<LoggedPacket> = runCatching {
+        File(path).readLines().drop(1).mapNotNull { line ->
+            val c = line.split(",")
+            if (c.size < 6) return@mapNotNull null
+            LoggedPacket(
+                timestampMs = c.getOrNull(0)?.toLongOrNull() ?: return@mapNotNull null,
+                hex = c.getOrNull(1).orEmpty(),
+                rssi = c.getOrNull(2)?.toIntOrNull() ?: 0,
+                label = c.getOrNull(3).orEmpty(),
+                category = c.getOrNull(4).orEmpty(),
+                typeInfo = c.getOrNull(5).orEmpty(),
+                sourceAddress = c.getOrNull(8).orEmpty(),
+                isBand = c.getOrNull(9)?.toBoolean() ?: false,
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    @Synchronized
+    fun deleteLog(path: String): Boolean {
+        val f = File(path)
+        val base = f.name.removeSuffix(".csv")
+        val ok = runCatching { f.delete() }.getOrDefault(false)
+        // Remove sidecars too.
+        runCatching { File(f.parentFile, "${base}_band.csv").delete() }
+        runCatching { File(f.parentFile, "${base}_unique.csv").delete() }
+        refreshSessions()
+        return ok
     }
 
     private fun csvField(value: String): String = value.replace(",", " ").replace("\n", " ")
@@ -811,8 +897,9 @@ class MagicStore(context: Context) {
     /** Writes the deduped unique-packet list for the session (one row per distinct hex). */
     private fun writeUniqueExport() {
         if (sessionUnique.isEmpty()) return
-        val base = activeSessionFile?.name?.removeSuffix(".csv") ?: return
-        val file = File(sessionsDir, "${base}_unique.csv")
+        val active = activeSessionFile ?: return
+        val base = active.name.removeSuffix(".csv")
+        val file = File(active.parentFile, "${base}_unique.csv")
         val sb = StringBuilder("hex,count,first_ms,last_ms,label,category,addresses\n")
         for ((hex, agg) in sessionUnique) {
             sb.append(

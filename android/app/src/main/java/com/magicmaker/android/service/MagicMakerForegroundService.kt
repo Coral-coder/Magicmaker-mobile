@@ -51,6 +51,8 @@ class MagicMakerForegroundService : Service() {
         const val ACTION_SET_STARLIGHT_LOOP = "com.magicmaker.android.SET_STARLIGHT_LOOP"
         const val ACTION_SET_TX_LOOP = "com.magicmaker.android.SET_TX_LOOP"
         const val ACTION_REFRESH_RELAY_CACHE = "com.magicmaker.android.REFRESH_RELAY_CACHE"
+        const val ACTION_REPLAY = "com.magicmaker.android.REPLAY"
+        const val ACTION_REPLAY_STOP = "com.magicmaker.android.REPLAY_STOP"
 
         const val EXTRA_HEX = "hex"
         const val EXTRA_RELAY_MODE = "relay_mode"
@@ -63,6 +65,10 @@ class MagicMakerForegroundService : Service() {
         const val EXTRA_TX_LOOP_ENABLED = "tx_loop_enabled"
         const val EXTRA_TX_LOOP_PACKET_ID = "tx_loop_packet_id"
         const val EXTRA_TX_LOOP_INTERVAL_MS = "tx_loop_interval_ms"
+        const val EXTRA_REPLAY_PATH = "replay_path"
+        const val EXTRA_REPLAY_CATEGORIES = "replay_categories"
+        const val EXTRA_REPLAY_ADDRESS = "replay_address"
+        const val EXTRA_REPLAY_BAND_ONLY = "replay_band_only"
 
         fun start(context: Context) {
             launch(context, ACTION_START)
@@ -118,6 +124,25 @@ class MagicMakerForegroundService : Service() {
             launch(context, ACTION_REFRESH_RELAY_CACHE)
         }
 
+        fun replay(
+            context: Context,
+            path: String,
+            categories: List<String>,
+            address: String,
+            bandOnly: Boolean,
+        ) {
+            launch(context, ACTION_REPLAY) {
+                putExtra(EXTRA_REPLAY_PATH, path)
+                putExtra(EXTRA_REPLAY_CATEGORIES, categories.joinToString(","))
+                putExtra(EXTRA_REPLAY_ADDRESS, address)
+                putExtra(EXTRA_REPLAY_BAND_ONLY, bandOnly)
+            }
+        }
+
+        fun stopReplay(context: Context) {
+            launch(context, ACTION_REPLAY_STOP)
+        }
+
         private fun launch(context: Context, action: String, configure: Intent.() -> Unit = {}) {
             val i = Intent(context, MagicMakerForegroundService::class.java)
                 .setAction(action)
@@ -134,6 +159,12 @@ class MagicMakerForegroundService : Service() {
         const val PREF_START_ON_BOOT = "start_on_boot"
         const val PREF_SCAN_ACTIVE = "scan_active"
         const val PREF_RECORD_SESSION = "record_session"
+
+        // Replay step bounds: each packet is broadcast for the recorded gap to the next,
+        // clamped so BLE advertising is practical.
+        private const val REPLAY_MIN_STEP_MS = 60L
+        private const val REPLAY_MAX_STEP_MS = 10_000L
+        private const val REPLAY_TAIL_MS = 800L
     }
 
     private lateinit var store: MagicStore
@@ -169,6 +200,8 @@ class MagicMakerForegroundService : Service() {
     private var userWantsScan = true
     private var txRunning = false
     private val txQueue = ArrayDeque<() -> Unit>()
+    private var replaying = false
+    private var replayCancel = false
 
     private val systemEventsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -266,7 +299,31 @@ class MagicMakerForegroundService : Service() {
                 if (!booted) boot()
                 userWantsScan = intent.getBooleanExtra(EXTRA_SCAN, true)
                 savePrefs()
-                if (userWantsScan) resumeScan() else pauseScan()
+                if (userWantsScan) {
+                    resumeScan()
+                    ensureLoggingStarted() // always-on capture while scanning
+                } else {
+                    pauseScan()
+                    stopLogging()
+                }
+                return START_STICKY
+            }
+            ACTION_REPLAY -> {
+                if (!booted) boot()
+                val path = intent.getStringExtra(EXTRA_REPLAY_PATH)
+                if (path != null) {
+                    startReplay(
+                        path = path,
+                        categories = intent.getStringExtra(EXTRA_REPLAY_CATEGORIES)
+                            ?.split(",")?.filter { it.isNotEmpty() }?.toSet() ?: emptySet(),
+                        address = intent.getStringExtra(EXTRA_REPLAY_ADDRESS).orEmpty(),
+                        bandOnly = intent.getBooleanExtra(EXTRA_REPLAY_BAND_ONLY, false),
+                    )
+                }
+                return START_STICKY
+            }
+            ACTION_REPLAY_STOP -> {
+                replayCancel = true
                 return START_STICKY
             }
             ACTION_SET_STARLIGHT_LOOP -> {
@@ -393,10 +450,7 @@ class MagicMakerForegroundService : Service() {
                 starlightBurstMs = store.getStarlightBurstMs(),
             )
         }
-        if (recordSession && store.scanSessions.isEmpty()) {
-            val file = store.beginScanSession()
-            publishState { it.copy(recordSessionActive = true, activeSessionName = file.name) }
-        }
+        if (userWantsScan) ensureLoggingStarted()
         if (starlightLoopEnabled) startStarlightLoop()
         if (txLoopEnabled) startTxLoop()
     }
@@ -420,6 +474,100 @@ class MagicMakerForegroundService : Service() {
         if (starlightLoopPacketId < 0) return "none"
         return store.findLearnedStarlight(starlightLoopPacketId)?.label ?: "unknown"
     }
+
+    /** Always-on capture: ensure a log session is open while scanning. */
+    private fun ensureLoggingStarted() {
+        recordSession = true
+        if (!store.sessionActive) {
+            val file = store.beginScanSession()
+            publishState { it.copy(recordSessionActive = true, activeSessionName = file.name) }
+        } else {
+            publishState { it.copy(recordSessionActive = true) }
+        }
+    }
+
+    private fun stopLogging() {
+        val name = store.endScanSession()
+        publishState { it.copy(recordSessionActive = false, activeSessionName = name ?: "") }
+    }
+
+    // ---- Replay -------------------------------------------------------------
+
+    private fun startReplay(path: String, categories: Set<String>, address: String, bandOnly: Boolean) {
+        if (replaying) return
+        executor.execute {
+            val filtered = store.readLog(path)
+                .filter { p ->
+                    (categories.isEmpty() || p.category in categories) &&
+                        (address.isEmpty() || p.sourceAddress.equals(address, ignoreCase = true)) &&
+                        (!bandOnly || p.isBand)
+                }
+                .sortedBy { it.timestampMs }
+            if (filtered.isEmpty()) {
+                publishStatus("Replay: no matching packets")
+                return@execute
+            }
+            val steps = ArrayList<Pair<String, Long>>(filtered.size)
+            for (i in filtered.indices) {
+                val hex = HexUtils.canonicalHex(filtered[i].hex)
+                if (hex.isEmpty()) continue
+                val gap = if (i < filtered.lastIndex) {
+                    filtered[i + 1].timestampMs - filtered[i].timestampMs
+                } else {
+                    REPLAY_TAIL_MS
+                }
+                steps.add(hex to gap.coerceIn(REPLAY_MIN_STEP_MS, REPLAY_MAX_STEP_MS))
+            }
+            if (steps.isEmpty()) {
+                publishStatus("Replay: nothing to send")
+                return@execute
+            }
+            replaying = true
+            replayCancel = false
+            mainHandler.post {
+                pauseScanNow()
+                pauseGattForManufacturerTx()
+                publishState {
+                    it.copy(
+                        replayActive = true,
+                        replayTotal = steps.size,
+                        replayProgress = 0,
+                        replayLabel = path.substringAfterLast('/'),
+                        status = "Replaying",
+                    )
+                }
+                runReplayStep(steps, 0)
+            }
+        }
+    }
+
+    private fun runReplayStep(steps: List<Pair<String, Long>>, index: Int) {
+        if (replayCancel || index >= steps.size) {
+            finishReplay()
+            return
+        }
+        publishState { it.copy(replayProgress = index + 1) }
+        val (hex, durationMs) = steps[index]
+        val adv = bleAdvertiser
+        if (adv == null) {
+            finishReplay()
+            return
+        }
+        adv.burst(hex, durationMs.toInt()) {
+            runReplayStep(steps, index + 1)
+        }
+    }
+
+    private fun finishReplay() {
+        if (!replaying) return
+        replaying = false
+        bleAdvertiser?.stopAll()
+        resumeGattAfterManufacturerTx()
+        publishState { it.copy(replayActive = false, status = if (scanActiveNow()) "Scanning" else "Idle") }
+        if (userWantsScan) scheduleResumeScan()
+    }
+
+    private fun scanActiveNow(): Boolean = userWantsScan
 
     private fun pauseGattForManufacturerTx() {
         gattServer?.pauseConnectableAdvertising()

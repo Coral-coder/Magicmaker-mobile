@@ -12,6 +12,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -45,6 +47,7 @@ private enum class AppTab(val label: String) {
     Wand("WAND"),
     Auto("AUTO"),
     Relay("RELAY"),
+    Logs("LOGS"),
     Lab("LAB"),
 }
 
@@ -138,6 +141,7 @@ fun MagicMakerAppRoot() {
                                     AppTab.Wand -> Icons.Default.AutoAwesome
                                     AppTab.Auto -> Icons.Default.AutoMode
                                     AppTab.Relay -> Icons.Default.Wifi
+                                    AppTab.Logs -> Icons.Default.History
                                     AppTab.Lab -> Icons.Default.Science
                                 },
                                 contentDescription = t.label,
@@ -180,6 +184,7 @@ fun MagicMakerAppRoot() {
                     )
                     AppTab.Auto -> AutoTab(app, state)
                     AppTab.Relay -> RelayTab(state, coreGranted, wifiGranted) { wifiPermLauncher.launch(wifiPerms.toTypedArray()) }
+                    AppTab.Logs -> LogsTab(app, state)
                     AppTab.Lab -> LabTabScreen(app, LocalContext.current, state.storeRevision)
                 }
             }
@@ -534,6 +539,149 @@ private fun LibraryFileSection(app: MagicMakerApp, state: ServiceState.UiState) 
                     modifier = Modifier.height(28.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                 ) { Text("IMPORT", style = techLabel()) }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
+    val ctx = LocalContext.current
+    var refreshTick by remember { mutableIntStateOf(0) }
+    val logs = remember(refreshTick, state.recordSessionActive) { app.store.listLogs() }
+    var selectedPath by remember { mutableStateOf<String?>(null) }
+
+    val packets = remember(selectedPath, refreshTick) {
+        selectedPath?.let { app.store.readLog(it) } ?: emptyList()
+    }
+    val categories = remember(packets) {
+        packets.map { it.category }.filter { it.isNotEmpty() }.distinct().sorted()
+    }
+    val addresses = remember(packets) {
+        packets.map { it.sourceAddress }.filter { it.isNotEmpty() }.distinct()
+    }
+    var selectedCats by remember(selectedPath) { mutableStateOf(setOf<String>()) }
+    var selectedAddr by remember(selectedPath) { mutableStateOf("") }
+    var bandOnly by remember(selectedPath) { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = AppDimens.pad)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("CAPTURE LOGS", style = techHeader())
+            TextButton(onClick = { refreshTick++ }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                Text("REFRESH", style = techLabel(), color = AppColors.Cyan)
+            }
+        }
+        if (state.replayActive) {
+            Surface(color = AppColors.Cyan.copy(alpha = 0.12f), shape = RectangleShape) {
+                Row(
+                    Modifier.fillMaxWidth().padding(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "REPLAYING ${state.replayProgress}/${state.replayTotal} · ${state.replayLabel}",
+                        style = techLabel(),
+                        color = AppColors.Cyan,
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButton(
+                        onClick = { MagicMakerForegroundService.stopReplay(ctx) },
+                        modifier = Modifier.height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) { Text("STOP", style = techLabel(), color = AppColors.Amber) }
+                }
+            }
+        }
+        HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
+        if (logs.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("NO LOGS YET — START A SCAN", style = techLabel(), color = AppColors.TextDim)
+            }
+            return
+        }
+        LazyColumn {
+            items(logs, key = { it.path }) { log ->
+                val isSel = selectedPath == log.path
+                Surface(
+                    onClick = { selectedPath = if (isSel) null else log.path },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RectangleShape,
+                    color = if (isSel) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface,
+                ) {
+                    Column(Modifier.padding(vertical = 4.dp)) {
+                        Text(log.name, style = techLabel(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "${log.packetCount} PKTS · ${log.sizeBytes / 1024}KB",
+                            style = techLabel(),
+                            color = AppColors.TextDim,
+                        )
+                    }
+                }
+                if (isSel) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(start = 8.dp, bottom = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        if (categories.isNotEmpty()) {
+                            Text("FILTER TYPES (NONE = ALL)", style = techLabel(), color = AppColors.TextDim)
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                categories.forEach { cat ->
+                                    FilterChip(
+                                        selected = cat in selectedCats,
+                                        onClick = {
+                                            selectedCats = if (cat in selectedCats) selectedCats - cat else selectedCats + cat
+                                        },
+                                        label = { Text(cat, style = techLabel()) },
+                                        modifier = Modifier.height(28.dp),
+                                    )
+                                }
+                            }
+                        }
+                        if (addresses.isNotEmpty()) {
+                            Text("FILTER SOURCE (TAP = ONLY THAT MAC)", style = techLabel(), color = AppColors.TextDim)
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                addresses.take(12).forEach { addr ->
+                                    FilterChip(
+                                        selected = selectedAddr == addr,
+                                        onClick = { selectedAddr = if (selectedAddr == addr) "" else addr },
+                                        label = { Text(addr, style = techLabel()) },
+                                        modifier = Modifier.height(28.dp),
+                                    )
+                                }
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text("BAND ONLY", style = techLabel(), color = AppColors.TextDim)
+                            Switch(checked = bandOnly, onCheckedChange = { bandOnly = it })
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
+                            OutlinedButton(
+                                onClick = {
+                                    MagicMakerForegroundService.replay(ctx, log.path, selectedCats.toList(), selectedAddr, bandOnly)
+                                },
+                                enabled = !state.replayActive,
+                                modifier = Modifier.height(30.dp).weight(1f),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) { Text("REPLAY", style = techLabel()) }
+                            OutlinedButton(
+                                onClick = {
+                                    app.store.deleteLog(log.path)
+                                    selectedPath = null
+                                    refreshTick++
+                                    Toast.makeText(ctx, "Log deleted", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.height(30.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) { Text("DELETE", style = techLabel(), color = MaterialTheme.colorScheme.error) }
+                        }
+                    }
+                }
+                HorizontalDivider(thickness = 0.5.dp, color = AppColors.PanelLine)
             }
         }
     }
