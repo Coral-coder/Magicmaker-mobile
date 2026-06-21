@@ -4,12 +4,13 @@ name: Android Release & OTA
 # download + sideload it manually. Stays fully private (private repo + private
 # release assets).
 #
-# Zero-setup mode (current): with no secrets configured, this builds a
-# debug-signed APK — installable straight away, no keystore/Firebase needed.
+# Zero-setup mode: with no secrets configured, this builds a debug-signed APK —
+# installable manually, but NOT OTA-upgradable (needs the stable keystore).
 #
 # The same workflow upgrades automatically when you add secrets:
-#   - KEYSTORE_BASE64 (+ password/alias)  -> builds a SIGNED release APK
-#   - FIREBASE_APP_ID (+ service account) -> also pushes to App Distribution (OTA)
+#   - KEYSTORE_BASE64 (+ password/alias)  -> builds a SIGNED release APK (needed for OTA)
+#   - UPDATE_TOKEN (fine-grained read-only PAT) -> baked in so the app can self-update
+#     from this repo's GitHub Releases.
 #
 # Trigger by pushing a version tag:  git tag v1.0.1 && git push origin v1.0.1
 # Or run manually from the Actions tab (workflow_dispatch) for just an artifact.
@@ -28,8 +29,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HAS_KEYSTORE: ${{ secrets.KEYSTORE_BASE64 != '' }}
-      HAS_FIREBASE: ${{ secrets.FIREBASE_APP_ID != '' }}
-      HAS_GOOGLE_SERVICES: ${{ secrets.GOOGLE_SERVICES_JSON != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -60,12 +59,6 @@ jobs:
             echo "::notice::No keystore secret — building a DEBUG APK (installable; not OTA-upgradable to release builds without a reinstall)."
           fi
 
-      - name: Write google-services.json (only if configured)
-        if: ${{ env.HAS_GOOGLE_SERVICES == 'true' }}
-        env:
-          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-        run: printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
-
       - name: Build APK
         working-directory: android
         env:
@@ -73,10 +66,12 @@ jobs:
           MM_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           MM_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           MM_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
         run: |
           ./gradlew ${{ steps.plan.outputs.task }} --no-daemon \
             -PmmVersionCode=${{ github.run_number }} \
-            -PmmVersionName="${{ github.ref_name }}"
+            -PmmVersionName="${{ github.ref_name }}" \
+            -PmmUpdateToken="$UPDATE_TOKEN"
 
       - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4
@@ -94,13 +89,3 @@ jobs:
           generate_release_notes: true
           files: ${{ steps.plan.outputs.apk }}
           fail_on_unmatched_files: true
-
-      - name: Distribute to Firebase App Distribution (only if configured)
-        if: ${{ env.HAS_FIREBASE == 'true' }}
-        uses: wzieba/Firebase-Distribution-Github-Action@v1
-        with:
-          appId: ${{ secrets.FIREBASE_APP_ID }}
-          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          groups: testers
-          file: ${{ steps.plan.outputs.apk }}
-          releaseNotes: "${{ github.ref_name }} — ${{ github.sha }}"
