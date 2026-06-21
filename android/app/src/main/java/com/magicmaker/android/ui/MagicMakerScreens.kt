@@ -27,6 +27,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.RectangleShape
@@ -40,6 +41,7 @@ import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.service.ServiceState
 import com.magicmaker.android.relay.RelayPairingPayload
 import com.magicmaker.android.relay.RelayProtocol
+import kotlinx.coroutines.launch
 
 private enum class AppTab(val label: String) {
     Scan("SCAN"),
@@ -48,7 +50,19 @@ private enum class AppTab(val label: String) {
     Auto("AUTO"),
     Relay("RELAY"),
     Logs("LOGS"),
+    Diagnostics("DIAG"),
     Lab("LAB"),
+}
+
+private fun tabIcon(t: AppTab): ImageVector = when (t) {
+    AppTab.Scan -> Icons.Default.BluetoothSearching
+    AppTab.Transmit -> Icons.Default.Send
+    AppTab.Wand -> Icons.Default.AutoAwesome
+    AppTab.Auto -> Icons.Default.AutoMode
+    AppTab.Relay -> Icons.Default.Wifi
+    AppTab.Logs -> Icons.Default.History
+    AppTab.Diagnostics -> Icons.Default.Insights
+    AppTab.Lab -> Icons.Default.Science
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -120,72 +134,80 @@ fun MagicMakerAppRoot() {
         }
     }
 
-    Scaffold(
-        containerColor = AppColors.Navy,
-        bottomBar = {
-            NavigationBar(
-                modifier = Modifier.navigationBarsPadding(),
-                containerColor = AppColors.Panel,
-                tonalElevation = 0.dp,
-                windowInsets = WindowInsets(0, 0, 0, 0),
-            ) {
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(drawerContainerColor = AppColors.Panel) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "MAGICMAKER",
+                    style = techHeader(),
+                    color = AppColors.Cyan,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
                 AppTab.entries.forEach { t ->
-                    NavigationBarItem(
+                    NavigationDrawerItem(
+                        label = { Text(t.label, style = techLabel()) },
                         selected = tab == t,
-                        onClick = { tab = t },
-                        icon = {
-                            Icon(
-                                when (t) {
-                                    AppTab.Scan -> Icons.Default.BluetoothSearching
-                                    AppTab.Transmit -> Icons.Default.Send
-                                    AppTab.Wand -> Icons.Default.AutoAwesome
-                                    AppTab.Auto -> Icons.Default.AutoMode
-                                    AppTab.Relay -> Icons.Default.Wifi
-                                    AppTab.Logs -> Icons.Default.History
-                                    AppTab.Lab -> Icons.Default.Science
-                                },
-                                contentDescription = t.label,
-                                modifier = Modifier.size(AppDimens.icon),
-                            )
+                        icon = { Icon(tabIcon(t), contentDescription = t.label, modifier = Modifier.size(AppDimens.icon)) },
+                        onClick = {
+                            tab = t
+                            scope.launch { drawerState.close() }
                         },
-                        label = {
-                            Text(
-                                t.label,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = techLabel(),
-                            )
-                        },
+                        modifier = Modifier.padding(horizontal = 8.dp),
                     )
                 }
             }
         },
-    ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
-            TelemetryLine(state)
-            if (!coreGranted) {
-                Column(Modifier.padding(AppDimens.pad)) {
-                    Text("PERMS REQUIRED: BT · LOC · NOTIFY", style = techLabel(), color = AppColors.Amber)
-                    Spacer(Modifier.height(AppDimens.gap))
-                    OutlinedButton({ permLauncher.launch(allPerms.toTypedArray()) }) { Text("GRANT", style = techLabel()) }
-                }
-            } else {
-                when (tab) {
-                    AppTab.Scan -> ScanTab(state)
-                    AppTab.Transmit -> TransmitTab(app, state)
-                    AppTab.Wand -> WandTab(
-                        app = app,
-                        storeRevision = state.storeRevision,
-                        starlightLoopEnabled = state.starlightLoopEnabled,
-                        starlightLoopPacketId = state.starlightLoopPacketId,
-                        starlightIntervalMs = state.starlightIntervalMs,
-                        wandDisplayColorIndex = state.wandDisplayColorIndex,
-                        running = state.running,
-                    )
-                    AppTab.Auto -> AutoTab(app, state)
-                    AppTab.Relay -> RelayTab(state, coreGranted, wifiGranted) { wifiPermLauncher.launch(wifiPerms.toTypedArray()) }
-                    AppTab.Logs -> LogsTab(app, state)
-                    AppTab.Lab -> LabTabScreen(app, LocalContext.current, state.storeRevision)
+    ) {
+        Scaffold(
+            containerColor = AppColors.Navy,
+            topBar = {
+                TopAppBar(
+                    title = { Text("MM · ${tab.label}", style = techHeader()) },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Menu")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = AppColors.Panel,
+                        titleContentColor = AppColors.Cyan,
+                        navigationIconContentColor = AppColors.Cyan,
+                    ),
+                )
+            },
+        ) { pad ->
+            Column(Modifier.padding(pad).fillMaxSize()) {
+                TelemetryLine(state)
+                if (!coreGranted) {
+                    Column(Modifier.padding(AppDimens.pad)) {
+                        Text("PERMS REQUIRED: BT · LOC · NOTIFY", style = techLabel(), color = AppColors.Amber)
+                        Spacer(Modifier.height(AppDimens.gap))
+                        OutlinedButton({ permLauncher.launch(allPerms.toTypedArray()) }) { Text("GRANT", style = techLabel()) }
+                    }
+                } else {
+                    when (tab) {
+                        AppTab.Scan -> ScanTab(state)
+                        AppTab.Transmit -> TransmitTab(app, state)
+                        AppTab.Wand -> WandTab(
+                            app = app,
+                            storeRevision = state.storeRevision,
+                            starlightLoopEnabled = state.starlightLoopEnabled,
+                            starlightLoopPacketId = state.starlightLoopPacketId,
+                            starlightIntervalMs = state.starlightIntervalMs,
+                            wandDisplayColorIndex = state.wandDisplayColorIndex,
+                            running = state.running,
+                        )
+                        AppTab.Auto -> AutoTab(app, state)
+                        AppTab.Relay -> RelayTab(state, coreGranted, wifiGranted) { wifiPermLauncher.launch(wifiPerms.toTypedArray()) }
+                        AppTab.Logs -> LogsTab(app, state)
+                        AppTab.Diagnostics -> DiagnosticsTab(state)
+                        AppTab.Lab -> LabTabScreen(app, LocalContext.current, state.storeRevision)
+                    }
                 }
             }
         }
@@ -542,6 +564,64 @@ private fun LibraryFileSection(app: MagicMakerApp, state: ServiceState.UiState) 
             }
         }
     }
+}
+
+@Composable
+private fun DiagnosticsTab(state: ServiceState.UiState) {
+    var priorityCollapsed by remember { mutableStateOf(false) }
+    var otherCollapsed by remember { mutableStateOf(true) }
+    val priority = remember(state.sources) { state.sources.filter { it.priority } }
+    val other = remember(state.sources) { state.sources.filter { !it.priority } }
+
+    Column(Modifier.fillMaxSize().padding(horizontal = AppDimens.pad)) {
+        Text("BROADCAST SOURCES · ${state.sources.size}", style = techHeader())
+        Text("PRIORITY = SENT SHOW/ANIM/COLOR", style = techLabel(), color = AppColors.TextDim)
+        HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
+        if (state.sources.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("NO SOURCES — START A SCAN", style = techLabel(), color = AppColors.TextDim)
+            }
+            return
+        }
+        LazyColumn {
+            item(key = "diag-prio-hdr") {
+                CollapsibleSectionHeader("Priority", priority.size, priorityCollapsed) {
+                    priorityCollapsed = !priorityCollapsed
+                }
+            }
+            if (!priorityCollapsed) items(priority, key = { "p-${it.address}" }) { SourceRow(it) }
+            item(key = "diag-other-hdr") {
+                CollapsibleSectionHeader("Other", other.size, otherCollapsed) {
+                    otherCollapsed = !otherCollapsed
+                }
+            }
+            if (!otherCollapsed) items(other, key = { "o-${it.address}" }) { SourceRow(it) }
+        }
+    }
+}
+
+@Composable
+private fun SourceRow(s: ServiceState.SourceStat) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                s.address.ifEmpty { "(unknown)" },
+                style = techLabel(),
+                color = if (s.priority) AppColors.Cyan else AppColors.TextDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text("BEST ${s.bestRssi} · NOW ${s.lastRssi} dBm", style = techLabel(), color = AppColors.TextDim)
+        }
+        Text(
+            "${s.count} PKTS · ${s.categories.joinToString(" ")}",
+            style = techLabel(),
+            color = AppColors.TextDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    HorizontalDivider(thickness = 0.5.dp, color = AppColors.PanelLine)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

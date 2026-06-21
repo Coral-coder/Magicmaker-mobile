@@ -492,21 +492,29 @@ class MagicStore(context: Context) {
     }
 
     @Synchronized
-    fun processHeardPacket(hex: String, rssi: Int, persistToSession: Boolean, address: String = ""): RecordEvent? {
+    fun processHeardPacket(
+        hex: String,
+        rssi: Int,
+        persistToSession: Boolean,
+        address: String = "",
+        lat: Double = Double.NaN,
+        lng: Double = Double.NaN,
+        accuracy: Float = -1f,
+    ): RecordEvent? {
         val canonical = HexUtils.canonicalHex(hex)
         if (!HexUtils.isDisneyBlePacket(canonical)) return null
 
         val classified = MagicClassifier.classify(canonical)
         val event = if (classified != null) {
             addClassifiedToLibrary(classified, rawHex = hex, rssi = rssi).also {
-                if (persistToSession) persistRecording(classified, rssi, it.reason, address)
+                if (persistToSession) persistRecording(classified, rssi, it.reason, address, lat, lng, accuracy)
             }
         } else {
             hearRawPacket(canonical, rssi).also {
                 if (persistToSession) {
                     persistRecording(
                         ClassifiedPacket(canonical, it.packet.label, MagicCategory.UNKNOWN, "raw", "", it.packet.simKey),
-                        rssi, it.reason, address,
+                        rssi, it.reason, address, lat, lng, accuracy,
                     )
                 }
             }
@@ -654,7 +662,15 @@ class MagicStore(context: Context) {
         }
     }
 
-    private fun persistRecording(classified: ClassifiedPacket, rssi: Int, note: String, address: String) {
+    private fun persistRecording(
+        classified: ClassifiedPacket,
+        rssi: Int,
+        note: String,
+        address: String,
+        lat: Double = Double.NaN,
+        lng: Double = Double.NaN,
+        accuracy: Float = -1f,
+    ) {
         if (activeSessionFile == null) beginScanSession()
         val band = isBandAddress(address)
         val rec = Recording(
@@ -669,6 +685,9 @@ class MagicStore(context: Context) {
             libraryNote = note,
             sourceAddress = address,
             isBand = band,
+            lat = lat,
+            lng = lng,
+            accuracy = accuracy,
         )
         recordings = listOf(rec) + recordings
         appendToSession(rec)                 // full chronological log (replay source)
@@ -832,6 +851,9 @@ class MagicStore(context: Context) {
         val typeInfo: String,
         val sourceAddress: String,
         val isBand: Boolean,
+        val lat: Double = Double.NaN,
+        val lng: Double = Double.NaN,
+        val accuracy: Float = -1f,
     )
 
     /**
@@ -861,6 +883,9 @@ class MagicStore(context: Context) {
                 typeInfo = c.getOrNull(5).orEmpty(),
                 sourceAddress = c.getOrNull(8).orEmpty(),
                 isBand = c.getOrNull(9)?.toBoolean() ?: false,
+                lat = c.getOrNull(10)?.toDoubleOrNull() ?: Double.NaN,
+                lng = c.getOrNull(11)?.toDoubleOrNull() ?: Double.NaN,
+                accuracy = c.getOrNull(12)?.toFloatOrNull() ?: -1f,
             )
         }
     }.getOrDefault(emptyList())
@@ -879,10 +904,14 @@ class MagicStore(context: Context) {
 
     private fun csvField(value: String): String = value.replace(",", " ").replace("\n", " ")
 
-    private fun sessionRow(rec: Recording): String =
-        "${rec.timestampMs},${rec.hex},${rec.rssi},${csvField(rec.label)},${rec.category.name}," +
+    private fun sessionRow(rec: Recording): String {
+        val lat = if (rec.lat.isNaN()) "" else rec.lat.toString()
+        val lng = if (rec.lng.isNaN()) "" else rec.lng.toString()
+        val acc = if (rec.accuracy < 0f) "" else rec.accuracy.toString()
+        return "${rec.timestampMs},${rec.hex},${rec.rssi},${csvField(rec.label)},${rec.category.name}," +
             "${rec.typeInfo},${csvField(rec.colors)},${csvField(rec.libraryNote)}," +
-            "${rec.sourceAddress},${rec.isBand}\n"
+            "${rec.sourceAddress},${rec.isBand},$lat,$lng,$acc\n"
+    }
 
     private fun appendToSession(rec: Recording) {
         activeSessionFile?.appendText(sessionRow(rec))
@@ -912,7 +941,7 @@ class MagicStore(context: Context) {
 
     companion object {
         private const val SESSION_HEADER =
-            "timestamp_ms,hex,rssi,label,category,type_info,colors,note,source_address,is_band\n"
+            "timestamp_ms,hex,rssi,label,category,type_info,colors,note,source_address,is_band,lat,lng,accuracy\n"
         private const val PREFS_MAIN = "magicmaker"
         private const val PREFS_UI = "magicmaker_ui"
     }

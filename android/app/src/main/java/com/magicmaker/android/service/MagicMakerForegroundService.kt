@@ -7,7 +7,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -177,6 +181,14 @@ class MagicMakerForegroundService : Service() {
     private var gattServer: RelayGattServer? = null
     private var hotspotManager: HotspotManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var locationManager: LocationManager? = null
+    @Volatile private var lastLocation: Location? = null
+    private val locationListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) { lastLocation = location }
+        override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+        override fun onProviderEnabled(provider: String) {}
+        override fun onProviderDisabled(provider: String) {}
+    }
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -451,6 +463,7 @@ class MagicMakerForegroundService : Service() {
             )
         }
         if (userWantsScan) ensureLoggingStarted()
+        startLocationUpdates()
         if (starlightLoopEnabled) startStarlightLoop()
         if (txLoopEnabled) startTxLoop()
     }
@@ -473,6 +486,24 @@ class MagicMakerForegroundService : Service() {
     private fun starlightLoopLabel(): String {
         if (starlightLoopPacketId < 0) return "none"
         return store.findLearnedStarlight(starlightLoopPacketId)?.label ?: "unknown"
+    }
+
+    /** Stamp each captured packet with the latest fix so packets can be mapped. */
+    private fun startLocationUpdates() {
+        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
+        val lm = locationManager
+            ?: (getSystemService(Context.LOCATION_SERVICE) as? LocationManager)?.also { locationManager = it }
+            ?: return
+        runCatching {
+            lastLocation = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+        }
+        runCatching { lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2000L, 0f, locationListener) }
+        runCatching { lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 0f, locationListener) }
+    }
+
+    private fun stopLocationUpdates() {
+        runCatching { locationManager?.removeUpdates(locationListener) }
     }
 
     /** Always-on capture: ensure a log session is open while scanning. */
@@ -774,7 +805,13 @@ class MagicMakerForegroundService : Service() {
 
     private fun onHeard(hex: String, rssi: Int, address: String = "") {
         executor.execute {
-            val event = store.processHeardPacket(hex, rssi, recordSession, address)
+            val loc = lastLocation
+            val event = store.processHeardPacket(
+                hex, rssi, recordSession, address,
+                lat = loc?.latitude ?: Double.NaN,
+                lng = loc?.longitude ?: Double.NaN,
+                accuracy = loc?.accuracy ?: -1f,
+            )
             val classified = MagicClassifier.classify(HexUtils.canonicalHex(hex))
             val label = event?.packet?.label ?: classified?.label ?: "?"
             val note = event?.reason ?: "Heard"
@@ -1157,6 +1194,7 @@ class MagicMakerForegroundService : Service() {
         gattServer?.stop()
         hotspotManager?.stopHotspot()
         bleAdvertiser?.stopAll()
+        stopLocationUpdates()
         releaseWakeLock()
         booted = false
         ServiceState.update { ServiceState.UiState() }
