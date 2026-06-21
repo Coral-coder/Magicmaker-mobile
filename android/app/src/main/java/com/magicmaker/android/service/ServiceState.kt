@@ -34,6 +34,17 @@ object ServiceState {
         val count: Int,
     )
 
+    /** Per-broadcaster diagnostics: one entry per source MAC. */
+    data class SourceStat(
+        val address: String,
+        val count: Int,
+        val bestRssi: Int,
+        val lastRssi: Int,
+        val lastSeenMs: Long,
+        val priority: Boolean,        // sent at least one show control / animation / color
+        val categories: Set<String>,
+    )
+
     data class UiState(
         val running: Boolean = false,
         val status: String = "Idle",
@@ -55,6 +66,7 @@ object ServiceState {
         val livePackets: List<LivePacket> = emptyList(),
         val rawLivePackets: List<LivePacket> = emptyList(),
         val seenAddresses: List<SeenAddress> = emptyList(),
+        val sources: List<SourceStat> = emptyList(),
         val starlightLoopEnabled: Boolean = false,
         val starlightLoopPacketId: Long = -1L,
         val starlightIntervalMs: Long = 3000L,
@@ -68,10 +80,15 @@ object ServiceState {
         val commandBurstMs: Int = TransmitTiming.COMMAND_BURST_MS,
         val starlightBurstMs: Int = TransmitTiming.STARLIGHT_BURST_MS,
         val relayLinked: Boolean = false,
+        val replayActive: Boolean = false,
+        val replayProgress: Int = 0,
+        val replayTotal: Int = 0,
+        val replayLabel: String = "",
     )
 
     private const val MAX_LIVE = 120
     private const val MAX_ADDRESSES = 80
+    private const val MAX_SOURCES = 300
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -111,6 +128,15 @@ object ServiceState {
             address = address,
             isBand = isBand,
         )
+        if (address.isNotEmpty()) {
+            val s = sourceStats.getOrPut(address) { MutSource(0, Int.MIN_VALUE, rssi, now, mutableSetOf()) }
+            s.count += 1
+            s.lastRssi = rssi
+            if (rssi > s.bestRssi) s.bestRssi = rssi
+            s.lastSeenMs = now
+            s.cats.add(packet.category.name)
+        }
+        val sourcesList = buildSourcesList()
         update {
             val withoutDup = it.livePackets.filter { p -> p.dedupeKey != dedupeKey }
             val addresses = if (address.isEmpty()) {
@@ -131,13 +157,42 @@ object ServiceState {
                 livePackets = (listOf(packet) + withoutDup).take(MAX_LIVE),
                 rawLivePackets = (listOf(packet) + it.rawLivePackets).take(MAX_LIVE),
                 seenAddresses = addresses,
+                sources = sourcesList,
                 storeRevision = it.storeRevision + 1,
             )
         }
     }
 
+    private data class MutSource(
+        var count: Int,
+        var bestRssi: Int,
+        var lastRssi: Int,
+        var lastSeenMs: Long,
+        val cats: MutableSet<String>,
+    )
+    private val sourceStats = LinkedHashMap<String, MutSource>()
+    private val priorityCats = setOf("SHOW", "ANIMATION", "COLOR")
+
+    private fun buildSourcesList(): List<SourceStat> =
+        sourceStats.entries.map { (addr, s) ->
+            SourceStat(
+                address = addr,
+                count = s.count,
+                bestRssi = s.bestRssi,
+                lastRssi = s.lastRssi,
+                lastSeenMs = s.lastSeenMs,
+                priority = s.cats.any { it in priorityCats },
+                categories = s.cats.toSortedSet(),
+            )
+        }.sortedWith(
+            compareByDescending<SourceStat> { it.priority }
+                .thenByDescending { it.count }
+                .thenByDescending { it.bestRssi },
+        ).take(MAX_SOURCES)
+
     fun clearLive() {
-        update { it.copy(livePackets = emptyList(), rawLivePackets = emptyList()) }
+        sourceStats.clear()
+        update { it.copy(livePackets = emptyList(), rawLivePackets = emptyList(), sources = emptyList()) }
     }
 
     fun removeLive(dedupeKey: String) {

@@ -36,6 +36,9 @@ data class Recording(
     val libraryNote: String,
     val sourceAddress: String = "",
     val isBand: Boolean = false,
+    val lat: Double = Double.NaN,
+    val lng: Double = Double.NaN,
+    val accuracy: Float = -1f,
 )
 
 data class AutoResponseRule(
