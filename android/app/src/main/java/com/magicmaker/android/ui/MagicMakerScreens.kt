@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.magicmaker.android.MagicMakerApp
 import com.magicmaker.android.core.*
+import com.magicmaker.android.service.AllFilesAccess
 import com.magicmaker.android.service.BatteryOptimization
 import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.service.ServiceState
@@ -472,6 +474,66 @@ private fun BandConfigSection(app: MagicMakerApp, state: ServiceState.UiState) {
 }
 
 @Composable
+private fun LibraryFileSection(app: MagicMakerApp, state: ServiceState.UiState) {
+    val ctx = LocalContext.current
+    var granted by remember { mutableStateOf(AllFilesAccess.granted(ctx)) }
+
+    // Re-check access whenever the screen recomposes after returning from Settings.
+    LaunchedEffect(state.storeRevision) { granted = AllFilesAccess.granted(ctx) }
+
+    val writePermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { ok -> granted = ok || AllFilesAccess.granted(ctx) }
+
+    Surface(color = AppColors.Cyan.copy(alpha = 0.06f), shape = RectangleShape) {
+        Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("LIBRARY FILE (SD · EDITABLE)", style = techLabel(), color = AppColors.Cyan)
+            Text(app.store.libraryFilePath, style = techLabel(), color = AppColors.TextDim, maxLines = 2)
+            if (!granted) {
+                Text("ACCESS NOT GRANTED", style = techLabel(), color = AppColors.Amber)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
+                if (!granted) {
+                    OutlinedButton(
+                        onClick = {
+                            val intent = AllFilesAccess.requestIntent(ctx)
+                            if (intent != null) ctx.startActivity(intent)
+                            else writePermLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        },
+                        modifier = Modifier.height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) { Text("GRANT ACCESS", style = techLabel()) }
+                }
+                OutlinedButton(
+                    onClick = {
+                        val path = app.store.exportLibrary()
+                        Toast.makeText(
+                            ctx,
+                            if (path != null) "Exported to $path" else "Grant storage access first",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) { Text("EXPORT", style = techLabel()) }
+                OutlinedButton(
+                    onClick = {
+                        val ok = app.store.importLibrary()
+                        Toast.makeText(
+                            ctx,
+                            if (ok) "Library imported" else "No file at path (or unreadable)",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                    modifier = Modifier.height(28.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) { Text("IMPORT", style = techLabel()) }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ScanTab(state: ServiceState.UiState) {
     val ctx = LocalContext.current
     val app = ctx.applicationContext as MagicMakerApp
@@ -593,6 +655,7 @@ private fun ScanTab(state: ServiceState.UiState) {
                 visibleSections = if (section in visibleSections) visibleSections - section else visibleSections + section
             }
             BandConfigSection(app, state)
+            LibraryFileSection(app, state)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (viewMode == ScanViewMode.RAW) "BUF RAW ${state.rawLivePackets.size}" else "BUF UNIQUE ${state.livePackets.size}",

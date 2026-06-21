@@ -1,9 +1,11 @@
 package com.magicmaker.android.data
 
 import android.content.Context
+import android.os.Environment
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.magicmaker.android.core.*
+import com.magicmaker.android.service.AllFilesAccess
 import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.service.ServiceState
 import java.io.File
@@ -23,8 +25,13 @@ class MagicStore(context: Context) {
     // with a fallback to internal storage if external is unavailable.
     private val sessionsDir = (appContext.getExternalFilesDir("scan_sessions")
         ?: File(appContext.filesDir, "scan_sessions")).also { it.mkdirs() }
-    // The app's own state stays in private internal storage.
+    // The app's own state stays in private internal storage (fast, always writable).
     private val storeFile = File(appContext.filesDir, "magicmaker_store.json")
+    // Canonical, user-editable copy on shared storage: survives uninstall, editable
+    // over USB, and auto-loaded on launch. Requires all-files access (see AllFilesAccess).
+    private val externalLibraryDir = File(Environment.getExternalStorageDirectory(), "MagicMaker")
+    private val externalLibraryFile = File(externalLibraryDir, "magicmaker_library.json")
+    val libraryFilePath: String get() = externalLibraryFile.absolutePath
 
     var presets: List<MagicPacket> = emptyList()
         private set
@@ -115,37 +122,102 @@ class MagicStore(context: Context) {
         save()
     }
 
+    // True once the external file is the loaded/imported source of truth. Until then
+    // we never overwrite an existing external library (avoids clobbering real data
+    // with freshly-seeded defaults before the user imports it).
+    private var externalAuthoritative = false
+
     fun load() {
-        if (!storeFile.exists()) return
-        runCatching {
-            gson.fromJson(storeFile.readText(), PersistedState::class.java)
-        }.onSuccess { state ->
-            presets = state.presets
-            learnedColors = state.learnedColors
-            learnedLibrary = state.learnedLibrary
-            learnedRaw = state.learnedRaw ?: emptyList()
-            recordings = state.recordings
-            autoRules = state.autoRules
-            nextPacketId = state.nextPacketId
-            nextRecordingId = state.nextRecordingId
-            nextRuleId = state.nextRuleId
-            prefs.edit()
-                .putString("starlight_serial", state.starlightSerial)
-                .putString("lab_hex", state.labHex)
-                .putString("lab_label", state.labLabel)
-                .apply()
+        readBestState()?.let { applyState(it.first) }
+        // When access is granted we can see the real external state, so internal and
+        // external are reconciled (readBestState already loaded the newer of the two):
+        // it's safe to treat external as writable, and to seed it if missing.
+        // When NOT granted we stay non-authoritative so a later save can't clobber a
+        // real external library we simply couldn't read on a fresh install.
+        if (AllFilesAccess.granted(appContext)) {
+            externalAuthoritative = true
+            if (!externalLibraryFile.exists()) writeExternal(gson.toJson(buildState()))
         }
     }
 
+    /** Loads from the SD-card library if it's present and at least as new as the internal copy. */
+    private fun readBestState(): Pair<PersistedState, Boolean>? {
+        val extExists = runCatching { externalLibraryFile.exists() }.getOrDefault(false)
+        val useExternal = extExists &&
+            (!storeFile.exists() || externalLibraryFile.lastModified() >= storeFile.lastModified())
+        val file = when {
+            useExternal -> externalLibraryFile
+            storeFile.exists() -> storeFile
+            else -> return null
+        }
+        val state = runCatching { gson.fromJson(file.readText(), PersistedState::class.java) }.getOrNull()
+            ?: return null
+        return state to useExternal
+    }
+
+    private fun applyState(state: PersistedState) {
+        presets = state.presets
+        learnedColors = state.learnedColors
+        learnedLibrary = state.learnedLibrary
+        learnedRaw = state.learnedRaw ?: emptyList()
+        recordings = state.recordings
+        autoRules = state.autoRules
+        nextPacketId = state.nextPacketId
+        nextRecordingId = state.nextRecordingId
+        nextRuleId = state.nextRuleId
+        prefs.edit()
+            .putString("starlight_serial", state.starlightSerial)
+            .putString("lab_hex", state.labHex)
+            .putString("lab_label", state.labLabel)
+            .apply()
+    }
+
+    private fun buildState(): PersistedState = PersistedState(
+        presets, learnedColors, learnedLibrary, learnedRaw, recordings, autoRules,
+        nextPacketId, nextRecordingId, nextRuleId,
+        getStarlightSerial(), getLabHex(), getLabLabel(),
+    )
+
     @Synchronized
     fun save() {
-        val state = PersistedState(
-            presets, learnedColors, learnedLibrary, learnedRaw, recordings, autoRules,
-            nextPacketId, nextRecordingId, nextRuleId,
-            getStarlightSerial(), getLabHex(), getLabLabel(),
-        )
-        storeFile.writeText(gson.toJson(state))
+        val json = gson.toJson(buildState())
+        storeFile.writeText(json)
+        writeExternal(json)
     }
+
+    private fun writeExternal(json: String) {
+        if (!AllFilesAccess.granted(appContext)) return
+        runCatching {
+            // Don't overwrite an existing external library we haven't imported/loaded yet.
+            if (!externalAuthoritative && externalLibraryFile.exists()) return@runCatching
+            externalLibraryDir.mkdirs()
+            externalLibraryFile.writeText(json)
+            externalAuthoritative = true
+        }
+    }
+
+    /** Force-write the current library to the SD-card file. Returns the path, or null if it failed. */
+    @Synchronized
+    fun exportLibrary(): String? = runCatching {
+        externalLibraryDir.mkdirs()
+        externalLibraryFile.writeText(gson.toJson(buildState()))
+        externalAuthoritative = true
+        externalLibraryFile.absolutePath
+    }.getOrNull()
+
+    /** Replace the in-memory + internal library from the SD-card file. Returns true on success. */
+    @Synchronized
+    fun importLibrary(): Boolean = runCatching {
+        if (!externalLibraryFile.exists()) return false
+        val state = gson.fromJson(externalLibraryFile.readText(), PersistedState::class.java)
+            ?: return false
+        applyState(state)
+        externalAuthoritative = true
+        save()
+        mergeBuiltInPresets()
+        ServiceState.bumpStoreRevision()
+        true
+    }.getOrElse { false }
 
     fun packetsFor(category: MagicCategory): List<MagicPacket> = when (category) {
         MagicCategory.COLOR -> learnedColors
