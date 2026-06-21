@@ -116,7 +116,7 @@ object AppUpdater {
         }
         val dir = File(activity.cacheDir, "updates").also { it.mkdirs() }
         val out = File(dir, "update.apk")
-        conn.inputStream.use { input -> out.outputStream.use { input.copyTo(it) } }
+        conn.inputStream.use { input -> out.outputStream().use { input.copyTo(it) } }
         conn.disconnect()
         return out
     }
