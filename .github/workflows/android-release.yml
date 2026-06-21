@@ -26,6 +26,12 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - main
+    paths:
+      # Releasing where tag pushes are restricted: bump .github/RELEASE_VERSION
+      # on main and this publishes that version.
+      - ".github/RELEASE_VERSION"
 
 permissions:
   contents: write # needed to create the GitHub Release + tag
@@ -50,11 +56,15 @@ jobs:
       - name: Resolve version
         id: ver
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
             echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           elif [ -n "${{ inputs.version }}" ]; then
             echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif [ -f .github/RELEASE_VERSION ]; then
+            V="$(tr -d ' \t\r\n' < .github/RELEASE_VERSION)"
+            echo "version=$V" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "version=0.0.0-dev${{ github.run_number }}" >> "$GITHUB_OUTPUT"
