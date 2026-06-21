@@ -16,6 +16,14 @@ android {
         //   ./gradlew assembleRelease -PmmVersionCode=42 -PmmVersionName=1.0.42
         versionCode = (project.findProperty("mmVersionCode") as String?)?.toInt() ?: 1
         versionName = (project.findProperty("mmVersionName") as String?) ?: "1.0.0"
+
+        // OTA: GitHub-Releases updater. Token is injected at build time (CI secret or
+        // local gradle property) and embedded in BuildConfig — never committed. Empty
+        // token => updater is dormant (local/debug builds).
+        val updateToken = (project.findProperty("mmUpdateToken") as String?) ?: ""
+        val updateRepo = (project.findProperty("mmUpdateRepo") as String?) ?: "Coral-coder/Magicmaker-mobile"
+        buildConfigField("String", "UPDATE_TOKEN", "\"$updateToken\"")
+        buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
     }
 
     // OTA: a stable release signing key is REQUIRED — Android rejects an update
@@ -56,6 +64,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
@@ -83,17 +92,5 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("com.google.zxing:core:3.5.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
-
-    // OTA: Firebase App Distribution in-app updater. Checks for a newer build,
-    // prompts the user, downloads and installs it. The full SDK is only active
-    // for builds delivered via App Distribution; it no-ops otherwise.
-    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
-    implementation("com.google.firebase:firebase-appdistribution-api-ktx:16.0.0-beta14")
-    implementation("com.google.firebase:firebase-appdistribution:16.0.0-beta14")
-}
-
-// OTA: process google-services.json only when present so a fresh checkout
-// (no Firebase config yet) still builds debug APKs via ./tools/deploy.sh.
-if (file("google-services.json").exists()) {
-    apply(plugin = "com.google.gms.google-services")
+    // OTA uses the GitHub Releases API via HttpURLConnection + org.json — no extra deps.
 }

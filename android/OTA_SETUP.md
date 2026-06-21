@@ -1,131 +1,62 @@
-# MagicMaker Android — OTA + CI setup
+# MagicMaker Android — OTA via GitHub Releases
 
-This wires up **over-the-air updates** (Firebase App Distribution) and a
-**cloud build pipeline** (GitHub Actions). Everything stays **private and free**:
+Over-the-air updates straight from this repo's **GitHub Releases**. No Firebase.
+On launch the app checks the latest release, and if it's newer than what's installed
+it prompts to download + install the signed APK. Everything stays private.
 
-- GitHub Actions is free on private repos (~2,000 min/month; a build is ~5–10 min).
-- App Distribution only delivers to **testers you invite** (your Google account).
-- The signing key and Firebase service account live as **GitHub secrets**, never in git.
-
-## Quick start — manual install, ZERO setup (current mode)
-
-You don't need Firebase or a keystore to get started. With no secrets configured,
-pushing a version tag builds a **debug APK** and attaches it to a **GitHub
-Release** you can download and sideload:
-
-```bash
-git tag v1.0.1 && git push origin v1.0.1
+```
+push tag  ──►  CI builds signed APK  ──►  attached to GitHub Release
+                                              │
+        app on phone ◄── checks /releases/latest (embedded read-only PAT) ──┘
+        prompts "Update vX" → downloads asset → installs
 ```
 
-Then: repo → **Releases** → download `app-debug.apk` → install on the phone.
+## Two one-time prerequisites
 
-Notes:
-- Release assets are **private** (you must be signed into GitHub to download —
-  e.g. open the release in your phone's browser while logged in).
-- A debug APK is fine for manual installs. **Heads-up:** when you later switch to
-  signed release builds (below), the signature changes, so you'll have to
-  **uninstall the debug build once** before installing the release one.
-- The in-app updater stays dormant until Firebase is configured — the app runs
-  normally without it.
-
-## Full OTA mode — set up when you're ready
-
-Once configured, releasing a new build is just:
+### 1. Stable release keystore  (REQUIRED for OTA)
+Android refuses an update whose signature differs from the installed build, so every
+release must be signed with the **same** key. Generate one you keep:
 
 ```bash
-git tag v1.0.1 && git push origin v1.0.1
-```
-
-CI builds a signed APK, attaches it to the GitHub Release, ships it to App
-Distribution, and your device gets an in-app "Update available" prompt the next
-time you open the app. The workflow detects the secrets automatically — add them
-and the next tag upgrades from debug→signed and turns on OTA.
-
----
-
-## What is already implemented (in this branch)
-
-- `app/build.gradle.kts` — release signing config (reads env vars, no secrets in
-  repo), CI-overridable `versionCode`/`versionName`, Firebase App Distribution
-  dependencies, and conditional Google Services plugin.
-- `MainActivity.onResume()` → `AppUpdater.checkForUpdate(this)` — checks for a
-  newer build whenever the app is foregrounded.
-- `update/AppUpdater.kt` — guarded so the app runs fine before Firebase is set up.
-- `AndroidManifest.xml` — `REQUEST_INSTALL_PACKAGES` for the in-app installer.
-- `.github/workflows/android-release.yml` — the cloud pipeline.
-- `.gitignore` — excludes `google-services.json`, keystores, `keystore.properties`.
-
-## What you need to do (one time)
-
-### 1. Generate a release keystore (you keep the master copy)
-
-```bash
-keytool -genkeypair -v \
-  -keystore magicmaker-release.jks \
-  -alias magicmaker \
-  -keyalg RSA -keysize 2048 -validity 10000
-
-# Then base64-encode it for the GitHub secret:
+keytool -genkeypair -v -keystore magicmaker-release.jks \
+  -alias magicmaker -keyalg RSA -keysize 2048 -validity 10000
 base64 -i magicmaker-release.jks | tr -d '\n' > keystore.b64
 ```
+> Back this up. Lose it and you can never ship another update to installed builds.
+> Until the keystore secrets are set, CI builds a *debug* APK (installable manually,
+> but NOT self-updatable — debug keys differ per build).
 
-> ⚠️ Back this file up somewhere safe. If you lose it you can never ship an
-> update to already-installed builds — Android rejects a different signature.
+### 2. Fine-grained read-only PAT  (to download from the private repo)
+GitHub → Settings → Developer settings → **Fine-grained tokens** → new token:
+- Repository access: **only** `Coral-coder/Magicmaker-mobile`
+- Permissions: **Contents: Read-only** (that's all)
+- Copy the token.
 
-### 2. Create the Firebase project
+> ⚠️ This token is **embedded in the APK** so it can read releases. Anyone who
+> extracts it from the APK could read this repo's contents. That's the tradeoff of
+> the token approach; keep the scope read-only and the repo private.
 
-1. https://console.firebase.google.com → **Add project** (no Analytics needed).
-2. **Add app → Android**, package name **`com.magicmaker.android`**.
-3. Download **`google-services.json`**.
-4. In the console, open **Release & Monitor → App Distribution**, and under
-   **Testers & Groups** create a group named **`testers`** and add your email.
-   Accept the invite on your phone and install the **Firebase App Tester** app
-   (first install is via the invite link; after that, updates come in-app).
-5. Find the **App ID** (Project settings → Your apps): looks like
-   `1:1234567890:android:abcdef…`.
-
-### 3. Create a service account for CI uploads
-
-1. Google Cloud Console → IAM & Admin → **Service Accounts** → create one.
-2. Grant role **Firebase App Distribution Admin**.
-3. Create a **JSON key** and download it.
-
-### 4. Add GitHub repository secrets
-
-Repo → **Settings → Secrets and variables → Actions → New repository secret**:
+## GitHub repository secrets
+Settings → Secrets and variables → Actions:
 
 | Secret | Value |
 |--------|-------|
-| `KEYSTORE_BASE64` | contents of `keystore.b64` from step 1 |
-| `KEYSTORE_PASSWORD` | keystore password you chose |
-| `KEY_ALIAS` | `magicmaker` (or your alias) |
-| `KEY_PASSWORD` | key password (often same as keystore password) |
-| `GOOGLE_SERVICES_JSON` | full contents of `google-services.json` |
-| `FIREBASE_APP_ID` | the App ID from step 2.5 |
-| `FIREBASE_SERVICE_ACCOUNT` | full contents of the service account JSON |
+| `KEYSTORE_BASE64` | contents of `keystore.b64` |
+| `KEYSTORE_PASSWORD` | keystore password |
+| `KEY_ALIAS` | `magicmaker` |
+| `KEY_PASSWORD` | key password |
+| `UPDATE_TOKEN` | the fine-grained read-only PAT |
 
-> For **local** release builds you can instead export `MM_KEYSTORE_FILE`,
-> `MM_KEYSTORE_PASSWORD`, `MM_KEY_ALIAS`, `MM_KEY_PASSWORD` and drop
-> `google-services.json` into `android/app/`. Both are gitignored.
-
-### 5. Ship it
-
+## Ship an update
 ```bash
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.0.1 && git push origin v1.0.1
 ```
+CI signs the APK, bakes in the token, attaches it to the release. Next time you open
+the app it offers the update.
 
-Watch the **Actions** tab. On success your device gets the update prompt.
-
----
-
-## Notes / tuning
-
-- **versionCode** is set to the GitHub run number in CI, so it always increases.
-  Local builds default to `1` unless you pass `-PmmVersionCode=N`.
-- The App Distribution SDK artifacts are **beta** (`16.0.0-beta14`); if Google
-  publishes a newer one, bump it in `app/build.gradle.kts`. CI will surface any
-  incompatibility.
-- The in-app check runs on every foreground (`onResume`). If that feels too
-  frequent, gate it behind a button or a once-per-day timestamp in `AppUpdater`.
-- Debug builds via `./tools/deploy.sh` are unaffected and need no Firebase setup.
+## Notes
+- The updater is **dormant** without `UPDATE_TOKEN` (local/debug builds embed no token).
+- Local signed build: export `MM_KEYSTORE_FILE/MM_KEYSTORE_PASSWORD/MM_KEY_ALIAS/MM_KEY_PASSWORD`
+  and pass `-PmmUpdateToken=<PAT>` (e.g. via `~/.gradle/gradle.properties`, never committed).
+- Version check compares the release `tag_name` to the build's `versionName` (CI sets
+  it to the tag), so a new tag = an offered update.
