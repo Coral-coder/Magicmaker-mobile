@@ -36,18 +36,28 @@ class BleScanner(
     }
 
     fun scanSettings(screenOn: Boolean = true): ScanSettings = ScanSettings.Builder()
-        .setScanMode(
-            if (screenOn) ScanSettings.SCAN_MODE_LOW_LATENCY
-            else ScanSettings.SCAN_MODE_BALANCED,
-        )
+        // Low latency in both modes: auto-reply must hear triggers promptly even with
+        // the screen off (the CPU is kept awake by the service's wake lock).
+        .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
         .setReportDelay(0)
-        .setMatchMode(
-            if (screenOn) ScanSettings.MATCH_MODE_AGGRESSIVE
-            else ScanSettings.MATCH_MODE_STICKY,
-        )
+        .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
+        .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
         .build()
 
-    fun scanFilters(): List<ScanFilter> = emptyList()
+    /**
+     * Screen-off scanning REQUIRES a filter — Android drops results from unfiltered
+     * scans while the screen is off, which previously killed background auto-reply.
+     * We match any advertisement carrying Disney (0x0183) manufacturer data. Screen-on
+     * stays unfiltered so we still catch service-data / UUID / raw-AD encodings too.
+     */
+    fun scanFilters(screenOn: Boolean = true): List<ScanFilter> {
+        if (screenOn) return emptyList()
+        return listOf(
+            ScanFilter.Builder()
+                .setManufacturerData(HexUtils.DISNEY_COMPANY_ID, byteArrayOf())
+                .build(),
+        )
+    }
 
     fun markStarted() { scanning = true }
     fun markStopped() { scanning = false }

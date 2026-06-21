@@ -146,6 +146,7 @@ class MagicMakerForegroundService : Service() {
     private var gattServer: RelayGattServer? = null
     private var hotspotManager: HotspotManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -962,7 +963,7 @@ class MagicMakerForegroundService : Service() {
         runCatching {
             runCatching { s.stopScan(cb) }
             scanner.markStopped()
-            s.startScan(scanner.scanFilters(), scanner.scanSettings(screenOn), cb)
+            s.startScan(scanner.scanFilters(screenOn), scanner.scanSettings(screenOn), cb)
             scanner.markStarted()
             publishState {
                 it.copy(
@@ -1070,16 +1071,37 @@ class MagicMakerForegroundService : Service() {
 
     private fun ensureWakeLockHeld() {
         val pm = getSystemService(PowerManager::class.java) ?: return
-        if (wakeLock?.isHeld == true) return
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MagicMaker::Ble").apply {
+        if (wakeLock?.isHeld != true) {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MagicMaker::Ble").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }
+        // Keep WiFi awake too so the iPhone relay (HTTP :8765 / hotspot) stays reachable
+        // with the screen off — WiFi otherwise powers down and drops the relay.
+        ensureWifiLockHeld()
+    }
+
+    private fun ensureWifiLockHeld() {
+        if (wifiLock?.isHeld == true) return
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager ?: return
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            @Suppress("DEPRECATION")
+            android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        wifiLock = wm.createWifiLock(mode, "MagicMaker::Relay").apply {
             setReferenceCounted(false)
-            acquire()
+            runCatching { acquire() }
         }
     }
 
     private fun releaseWakeLock() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
+        wifiLock?.let { if (it.isHeld) it.release() }
+        wifiLock = null
     }
 
     private fun registerSystemEventsReceiver() {
