@@ -10,6 +10,17 @@ object UiPrefs {
     private const val KEY_TX_COLLAPSED = "tx_collapsed_sections"
     private const val KEY_LAB_TX_SETTINGS_COLLAPSED = "lab_tx_settings_collapsed"
     private const val KEY_TX_LOOP_SETTINGS_COLLAPSED = "tx_loop_settings_collapsed"
+    private const val KEY_BAND_MENU_COLLAPSED = "band_menu_collapsed"
+
+    fun isBandMenuCollapsed(context: Context): Boolean =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_BAND_MENU_COLLAPSED, true)
+
+    fun saveBandMenuCollapsed(context: Context, collapsed: Boolean) {
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_BAND_MENU_COLLAPSED, collapsed)
+            .apply()
+    }
 
     fun isLabTransmissionSettingsCollapsed(context: Context): Boolean =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

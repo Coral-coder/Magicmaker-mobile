@@ -18,7 +18,7 @@ data class ScanSessionFile(val path: String, val name: String)
 class MagicStore(context: Context) {
     private val appContext = context.applicationContext
     private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
-    private val prefs = appContext.getSharedPreferences("magicmaker", Context.MODE_PRIVATE)
+    private val prefs = appContext.getSharedPreferences(PREFS_MAIN, Context.MODE_PRIVATE)
 
     // Capture logs go to app-specific *external* storage so they can be pulled off
     // the device over USB/MTP (Android/data/com.magicmaker.android/files/scan_sessions),
@@ -95,6 +95,17 @@ class MagicStore(context: Context) {
         val starlightSerial: String = StarlightSerial.DEFAULT_SERIAL,
         val labHex: String = PacketBuilder.WAKEUP_PING,
         val labLabel: String = "",
+        // All app settings (both SharedPreferences files), type-tagged so a reinstall
+        // can restore everything: band addresses, timings, UI collapse state, etc.
+        val settings: Map<String, PrefEntry>? = null,
+        val uiSettings: Map<String, PrefEntry>? = null,
+    )
+
+    /** A single SharedPreferences value, type-tagged for lossless JSON round-trip. */
+    data class PrefEntry(
+        val type: String,
+        val value: String? = null,
+        val set: List<String>? = null,
     )
 
     init {
@@ -165,18 +176,56 @@ class MagicStore(context: Context) {
         nextPacketId = state.nextPacketId
         nextRecordingId = state.nextRecordingId
         nextRuleId = state.nextRuleId
+        // Restore explicit fields first (covers older files without the settings maps),
+        // then the full prefs snapshots which override and fill in everything else.
         prefs.edit()
             .putString("starlight_serial", state.starlightSerial)
             .putString("lab_hex", state.labHex)
             .putString("lab_label", state.labLabel)
             .apply()
+        state.settings?.let { restorePrefs(PREFS_MAIN, it) }
+        state.uiSettings?.let { restorePrefs(PREFS_UI, it) }
     }
 
     private fun buildState(): PersistedState = PersistedState(
         presets, learnedColors, learnedLibrary, learnedRaw, recordings, autoRules,
         nextPacketId, nextRecordingId, nextRuleId,
         getStarlightSerial(), getLabHex(), getLabLabel(),
+        settings = snapshotPrefs(PREFS_MAIN),
+        uiSettings = snapshotPrefs(PREFS_UI),
     )
+
+    private fun snapshotPrefs(name: String): Map<String, PrefEntry> {
+        val p = appContext.getSharedPreferences(name, Context.MODE_PRIVATE)
+        val out = LinkedHashMap<String, PrefEntry>()
+        for ((k, v) in p.all) {
+            out[k] = when (v) {
+                is Boolean -> PrefEntry("b", v.toString())
+                is Int -> PrefEntry("i", v.toString())
+                is Long -> PrefEntry("l", v.toString())
+                is Float -> PrefEntry("f", v.toString())
+                is String -> PrefEntry("s", v)
+                is Set<*> -> PrefEntry("ss", set = v.filterIsInstance<String>())
+                else -> continue
+            }
+        }
+        return out
+    }
+
+    private fun restorePrefs(name: String, entries: Map<String, PrefEntry>) {
+        val e = appContext.getSharedPreferences(name, Context.MODE_PRIVATE).edit()
+        for ((k, pe) in entries) {
+            when (pe.type) {
+                "b" -> e.putBoolean(k, pe.value.toBoolean())
+                "i" -> pe.value?.toIntOrNull()?.let { e.putInt(k, it) }
+                "l" -> pe.value?.toLongOrNull()?.let { e.putLong(k, it) }
+                "f" -> pe.value?.toFloatOrNull()?.let { e.putFloat(k, it) }
+                "s" -> e.putString(k, pe.value)
+                "ss" -> e.putStringSet(k, (pe.set ?: emptyList()).toSet())
+            }
+        }
+        e.apply()
+    }
 
     @Synchronized
     fun save() {
@@ -777,5 +826,7 @@ class MagicStore(context: Context) {
     companion object {
         private const val SESSION_HEADER =
             "timestamp_ms,hex,rssi,label,category,type_info,colors,note,source_address,is_band\n"
+        private const val PREFS_MAIN = "magicmaker"
+        private const val PREFS_UI = "magicmaker_ui"
     }
 }

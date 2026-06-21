@@ -402,13 +402,19 @@ private fun liveSubtitle(pkt: ServiceState.LivePacket, includeNote: Boolean): St
 
 @Composable
 private fun BandConfigSection(app: MagicMakerApp, state: ServiceState.UiState) {
+    val ctx = LocalContext.current
     val storeRev = state.storeRevision
     val bandAddrs = remember(storeRev) { app.store.bandAddresses() }
     var manual by remember { mutableStateOf("") }
+    var collapsed by remember { mutableStateOf(UiPrefs.isBandMenuCollapsed(ctx)) }
 
     Surface(color = AppColors.Cyan.copy(alpha = 0.06f), shape = RectangleShape) {
-        Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("MY MAGICBAND · TAGS SOURCE ADDR", style = techLabel(), color = AppColors.Cyan)
+        Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            CollapsibleSectionHeader("My MagicBand", bandAddrs.size, collapsed) {
+                collapsed = !collapsed
+                UiPrefs.saveBandMenuCollapsed(ctx, collapsed)
+            }
+            if (collapsed) return@Column
             if (bandAddrs.isEmpty()) {
                 Text("NONE SET — PICK FROM HEARD OR ENTER MAC", style = techLabel(), color = AppColors.TextDim)
             } else {

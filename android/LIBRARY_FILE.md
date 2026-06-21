@@ -5,8 +5,14 @@ you can export it, edit it on a computer, and have the app reload it after updat
 
 - **Path:** `/sdcard/MagicMaker/magicmaker_library.json`
   (`Environment.getExternalStorageDirectory()/MagicMaker/...`)
-- **Format:** the full `PersistedState` JSON (presets, learned colors/library/raw,
-  recordings, auto rules, ids, starlight serial, lab fields).
+- **Format:** the full `PersistedState` JSON — everything that wouldn't survive a
+  reinstall:
+  - **Packets in sections:** `presets`, `learnedColors`, `learnedLibrary`,
+    `learnedRaw`, plus `recordings` and `autoRules`.
+  - **All app settings** from both SharedPreferences files (`magicmaker` and
+    `magicmaker_ui`), captured generically and type-tagged: band addresses, TX
+    timings (wakeup/command/starlight), start-on-boot, lab hex/label, starlight
+    serial, and UI state like collapsed sections / band menu.
 
 ## Behavior
 
