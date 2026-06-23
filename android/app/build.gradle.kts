@@ -24,6 +24,13 @@ android {
         val updateRepo = (project.findProperty("mmUpdateRepo") as String?) ?: "Coral-coder/Magicmaker-mobile"
         buildConfigField("String", "UPDATE_TOKEN", "\"$updateToken\"")
         buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
+
+        // Cloud packet dictionary: write-scoped token + dedicated repo for the shared
+        // packets.csv. Injected at build time, never committed. Empty token => dormant.
+        val backupToken = (project.findProperty("mmBackupToken") as String?) ?: ""
+        val backupRepo = (project.findProperty("mmBackupRepo") as String?) ?: "Coral-coder/magicmaker-backups"
+        buildConfigField("String", "BACKUP_TOKEN", "\"$backupToken\"")
+        buildConfigField("String", "BACKUP_REPO", "\"$backupRepo\"")
     }
 
     // OTA: a stable release signing key is REQUIRED — Android rejects an update

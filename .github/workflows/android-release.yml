@@ -97,11 +97,13 @@ jobs:
           MM_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           MM_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
+          BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
         run: |
           ./gradlew ${{ steps.plan.outputs.task }} --no-daemon \
             -PmmVersionCode=${{ github.run_number }} \
             -PmmVersionName="${{ steps.ver.outputs.version }}" \
-            -PmmUpdateToken="$UPDATE_TOKEN"
+            -PmmUpdateToken="$UPDATE_TOKEN" \
+            -PmmBackupToken="$BACKUP_TOKEN"
 
       - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4

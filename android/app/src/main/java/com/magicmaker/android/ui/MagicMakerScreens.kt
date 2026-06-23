@@ -656,6 +656,28 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
                 Text("REFRESH", style = techLabel(), color = AppColors.Cyan)
             }
         }
+        if (app.store.cloudSyncConfigured()) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "CLOUD: ${state.cloudSyncStatus.ifBlank { "idle" }}",
+                    style = techLabel(),
+                    color = AppColors.TextDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = { app.store.cloudSync(force = true) },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) {
+                    Text("SYNC NOW", style = techLabel(), color = AppColors.Cyan)
+                }
+            }
+        }
         if (state.replayActive) {
             Surface(color = AppColors.Cyan.copy(alpha = 0.12f), shape = RectangleShape) {
                 Row(

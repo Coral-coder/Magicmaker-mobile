@@ -84,7 +84,12 @@ object ServiceState {
         val replayProgress: Int = 0,
         val replayTotal: Int = 0,
         val replayLabel: String = "",
+        val cloudSyncStatus: String = "",
     )
+
+    fun setCloudSyncStatus(status: String) {
+        update { it.copy(cloudSyncStatus = status) }
+    }
 
     private const val MAX_LIVE = 120
     private const val MAX_ADDRESSES = 80

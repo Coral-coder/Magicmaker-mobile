@@ -8,6 +8,7 @@ import com.magicmaker.android.core.*
 import com.magicmaker.android.service.AllFilesAccess
 import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.service.ServiceState
+import com.magicmaker.android.sync.PacketSync
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -519,7 +520,70 @@ class MagicStore(context: Context) {
                 }
             }
         }
+        // A new known-function packet was learned -> push it to the shared dictionary
+        // (throttled; offline-safe since the library is the durable source).
+        if (classified != null && event.added) cloudSync(force = false)
         return event
+    }
+
+    // ---- Cloud packet dictionary (shared packets.csv on a dedicated GitHub repo) ----
+
+    fun cloudSyncConfigured(): Boolean = PacketSync.configured()
+
+    /** Reconcile the on-device known packets with the shared cloud dictionary. */
+    fun cloudSync(force: Boolean) {
+        if (!PacketSync.configured()) return
+        PacketSync.sync(
+            local = cloudKnownEntries(),
+            force = force,
+            onRemoteAdded = { importCloudEntries(it) },
+            onStatus = { ServiceState.setCloudSyncStatus(it) },
+        )
+    }
+
+    /** Every packet whose function we know (presets + learned), de-duped by hex. */
+    private fun cloudKnownEntries(): List<PacketSync.Entry> {
+        val seen = HashSet<String>()
+        val out = ArrayList<PacketSync.Entry>()
+        for (p in presets + learnedColors + learnedLibrary) {
+            if (p.category == MagicCategory.UNKNOWN) continue
+            val hex = HexUtils.canonicalHex(p.hex)
+            if (hex.isNotEmpty() && seen.add(hex)) {
+                out.add(PacketSync.Entry(hex, p.label, p.category.name, p.colors))
+            }
+        }
+        return out
+    }
+
+    /** Add packets pulled from the cloud that we don't already have. */
+    @Synchronized
+    private fun importCloudEntries(entries: List<PacketSync.Entry>) {
+        val known = (presets + allLearnedPackets).map { HexUtils.canonicalHex(it.hex) }.toHashSet()
+        var added = 0
+        val additions = ArrayList<MagicPacket>()
+        for (e in entries) {
+            val hex = HexUtils.canonicalHex(e.hex)
+            if (hex.isEmpty() || !known.add(hex)) continue
+            val category = runCatching { MagicCategory.valueOf(e.category) }.getOrDefault(MagicCategory.UNKNOWN)
+            additions.add(
+                MagicPacket(
+                    id = nextPacketId++,
+                    hex = hex,
+                    label = e.function.ifBlank { "Imported" },
+                    category = category,
+                    typeInfo = "imported",
+                    colors = e.colors,
+                    simKey = "",
+                    userRecorded = false,
+                ),
+            )
+            added++
+        }
+        if (added > 0) {
+            learnedLibrary = (learnedLibrary + additions).sortedBy { it.label.lowercase() }
+            save()
+            ServiceState.bumpStoreRevision()
+        }
     }
 
     private fun addClassifiedToLibrary(classified: ClassifiedPacket, rawHex: String, rssi: Int): RecordEvent =

@@ -21,5 +21,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // OTA: check for a newer build each time the app comes to the foreground.
         AppUpdater.checkForUpdate(this)
+        // Cloud dictionary: reconcile the shared packet list on every open.
+        (application as? MagicMakerApp)?.store?.cloudSync(force = true)
     }
 }
