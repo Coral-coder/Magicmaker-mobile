@@ -95,22 +95,6 @@ class MagicStore(context: Context) {
         learnedRaw.forEach { rawHexIndex.add(HexUtils.canonicalHex(it.hex)) }
     }
 
-    /**
-     * Cleanup on load: drop auto-learned noise (guest-band telemetry in learnedRaw, pings in
-     * learnedLibrary) that earlier builds saved. Packets the user explicitly named live in
-     * presets (saveCustomPreset), so they're untouched by this.
-     */
-    private fun purgeLibraryNoise() {
-        val rawKept = learnedRaw.filter { !MagicClassifier.isLibraryNoise(it.hex) }
-        val libKept = learnedLibrary.filter { it.typeInfo != "ping" }
-        if (rawKept.size != learnedRaw.size || libKept.size != learnedLibrary.size) {
-            learnedRaw = rawKept
-            learnedLibrary = libKept
-            rebuildRawIndex()
-            save()
-        }
-    }
-
     /** Coalesce the high-volume raw-learn saves so a packet flood can't trigger an IO storm. */
     private fun coalesceRawSave(): Boolean {
         val now = System.currentTimeMillis()
@@ -227,7 +211,6 @@ class MagicStore(context: Context) {
         learnedLibrary = state.learnedLibrary
         learnedRaw = state.learnedRaw ?: emptyList()
         rebuildRawIndex()
-        purgeLibraryNoise()
         recordings = state.recordings
         autoRules = state.autoRules
         nextPacketId = state.nextPacketId
