@@ -653,6 +653,19 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
     var selectedCats by remember(selectedPath) { mutableStateOf(setOf<String>()) }
     var selectedAddr by remember(selectedPath) { mutableStateOf("") }
     var bandOnly by remember(selectedPath) { mutableStateOf(false) }
+    var analyzing by remember(selectedPath) { mutableStateOf(false) }
+    var namingTarget by remember { mutableStateOf<AnalyzedPacket?>(null) }
+    val analyzed = remember(packets, selectedCats, selectedAddr, bandOnly) {
+        packets.asSequence()
+            .filter { selectedCats.isEmpty() || it.category in selectedCats }
+            .filter { selectedAddr.isEmpty() || it.sourceAddress == selectedAddr }
+            .filter { !bandOnly || it.isBand }
+            .groupBy { HexUtils.canonicalHex(it.hex) }
+            .map { (hex, list) ->
+                AnalyzedPacket(hex, list.first().label.ifBlank { "Raw" }, list.first().category, list.size)
+            }
+            .sortedByDescending { it.count }
+    }
 
     Column(Modifier.fillMaxSize().padding(horizontal = AppDimens.pad)) {
         Row(
@@ -790,13 +803,86 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                             ) { Text("DELETE", style = techLabel(), color = MaterialTheme.colorScheme.error) }
                         }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
+                            OutlinedButton(
+                                onClick = { analyzing = !analyzing },
+                                modifier = Modifier.height(30.dp).weight(1f),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) { Text(if (analyzing) "HIDE PACKETS" else "ANALYZE", style = techLabel()) }
+                            OutlinedButton(
+                                onClick = {
+                                    val n = app.store.importHexesToLibrary(analyzed.map { it.hex })
+                                    refreshTick++
+                                    Toast.makeText(ctx, "Added $n to library", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.height(30.dp).weight(1f),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            ) { Text("ADD ALL → LIB", style = techLabel(), color = AppColors.Cyan) }
+                        }
+                        if (analyzing) {
+                            Text(
+                                "${analyzed.size} UNIQUE · TAP = TX · NAME = ADD TO LIBRARY",
+                                style = techLabel(),
+                                color = AppColors.TextDim,
+                            )
+                            analyzed.take(300).forEach { row ->
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(
+                                        Modifier.weight(1f).clickable {
+                                            MagicMakerForegroundService.transmit(ctx, row.hex)
+                                        },
+                                    ) {
+                                        Text(
+                                            "×${row.count} · ${row.label}",
+                                            style = techLabel(),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            row.hex,
+                                            style = techLabel(),
+                                            color = AppColors.CyanDim,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { namingTarget = row },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    ) { Text("NAME", style = techLabel(), color = AppColors.Cyan) }
+                                }
+                                HorizontalDivider(thickness = 0.5.dp, color = AppColors.PanelLine)
+                            }
+                            if (analyzed.size > 300) {
+                                Text("…and ${analyzed.size - 300} more (showing top 300)", style = techLabel(), color = AppColors.TextDim)
+                            }
+                        }
                     }
                 }
                 HorizontalDivider(thickness = 0.5.dp, color = AppColors.PanelLine)
             }
         }
     }
+
+    namingTarget?.let { row ->
+        RenameDialog(
+            currentLabel = row.label,
+            onDismiss = { namingTarget = null },
+            onConfirm = { newLabel ->
+                val err = app.store.saveCustomPreset(newLabel.ifBlank { row.label }, row.hex)
+                refreshTick++
+                Toast.makeText(ctx, err ?: "Added \"$newLabel\" to library", Toast.LENGTH_SHORT).show()
+                namingTarget = null
+            },
+        )
+    }
 }
+
+/** A distinct packet from a log, with how many times it appeared. */
+private data class AnalyzedPacket(val hex: String, val label: String, val category: String, val count: Int)
 
 @Composable
 private fun ScanTab(state: ServiceState.UiState, onLoadInLab: (String, String) -> Unit) {

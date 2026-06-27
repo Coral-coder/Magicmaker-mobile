@@ -85,6 +85,9 @@ class MagicStore(context: Context) {
     )
     private val sessionUnique = LinkedHashMap<String, UniqueAgg>()
 
+    /** Running count of each raw hex heard this process, so we can auto-learn repeats. */
+    private val rawHeardCounts = HashMap<String, Int>()
+
     val allLearnedPackets: List<MagicPacket>
         get() = learnedColors + learnedLibrary + learnedRaw
 
@@ -597,20 +600,87 @@ class MagicStore(context: Context) {
             MagicCategory.UNKNOWN -> hearRawPacket(classified.hex, rssi, classified.label)
         }
 
-    /** Raw / unclassified packets appear in scan and record sessions only — not the library. */
+    /**
+     * Raw / unclassified packets. The first sighting is shown live only; once we hear the
+     * exact same hex again (repeated ⇒ likely a real command, not rolling one-off noise) it
+     * is auto-learned into the library's Unknown section so nothing important is lost.
+     */
     private fun hearRawPacket(hex: String, rssi: Int, label: String? = null): RecordEvent {
         val canonical = HexUtils.canonicalHex(hex)
-        val packet = MagicPacket(
+        val displayLabel = label ?: rawPacketLabel(canonical)
+        val count = (rawHeardCounts[canonical] ?: 0) + 1
+        rawHeardCounts[canonical] = count
+
+        learnedRaw.firstOrNull { HexUtils.canonicalHex(it.hex) == canonical }?.let { existing ->
+            return RecordEvent(existing, false, "Repeated raw ×$count")
+        }
+        if (count >= 2) {
+            val packet = MagicPacket(
+                id = nextPacketId++,
+                hex = canonical,
+                label = displayLabel,
+                category = MagicCategory.UNKNOWN,
+                typeInfo = "raw",
+                simKey = "RAW:$canonical",
+                userRecorded = false,
+                rssi = rssi,
+            )
+            learnedRaw = (learnedRaw + packet).sortedBy { it.hex }
+            save()
+            ServiceState.bumpStoreRevision()
+            return RecordEvent(packet, true, "Learned repeated raw → Unknown")
+        }
+        val preview = MagicPacket(
             id = 0,
             hex = canonical,
-            label = label ?: rawPacketLabel(canonical),
+            label = displayLabel,
             category = MagicCategory.UNKNOWN,
             typeInfo = "raw",
             simKey = "RAW:$canonical",
             userRecorded = false,
             rssi = rssi,
         )
-        return RecordEvent(packet, false, "Heard raw (not saved to library)")
+        return RecordEvent(preview, false, "Heard raw (1st sighting)")
+    }
+
+    /**
+     * Bulk-import hexes (e.g. every distinct packet from a saved log) into the library:
+     * classified packets go to their proper section, everything else to Unknown. Batches the
+     * raw additions (one sort, one save) so importing thousands of distinct packets is cheap.
+     * Returns the number of new entries added.
+     */
+    @Synchronized
+    fun importHexesToLibrary(hexes: List<String>): Int {
+        val existingRaw = learnedRaw.mapTo(HashSet()) { HexUtils.canonicalHex(it.hex) }
+        val newRaw = ArrayList<MagicPacket>()
+        var added = 0
+        for (h in hexes) {
+            val canonical = HexUtils.canonicalHex(h)
+            if (canonical.isEmpty()) continue
+            val classified = MagicClassifier.classify(canonical)
+            if (classified != null && classified.category != MagicCategory.UNKNOWN) {
+                if (addClassifiedToLibrary(classified, canonical, 0).added) added++
+            } else if (existingRaw.add(canonical)) {
+                newRaw.add(
+                    MagicPacket(
+                        id = nextPacketId++,
+                        hex = canonical,
+                        label = rawPacketLabel(canonical),
+                        category = MagicCategory.UNKNOWN,
+                        typeInfo = "raw",
+                        simKey = "RAW:$canonical",
+                        userRecorded = true,
+                    ),
+                )
+                added++
+            }
+        }
+        if (newRaw.isNotEmpty()) learnedRaw = (learnedRaw + newRaw).sortedBy { it.hex }
+        if (added > 0) {
+            save()
+            ServiceState.bumpStoreRevision()
+        }
+        return added
     }
 
     private fun addStarlightToLibrary(classified: ClassifiedPacket, rssi: Int, rawHex: String): RecordEvent {
