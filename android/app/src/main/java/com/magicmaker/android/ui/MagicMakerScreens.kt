@@ -660,9 +660,11 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
             .filter { selectedCats.isEmpty() || it.category in selectedCats }
             .filter { selectedAddr.isEmpty() || it.sourceAddress == selectedAddr }
             .filter { !bandOnly || it.isBand }
-            .groupBy { HexUtils.canonicalHex(it.hex) }
-            .map { (hex, list) ->
-                AnalyzedPacket(hex, list.first().label.ifBlank { "Raw" }, list.first().category, list.size)
+            // Group by structural type so rolling per-band packets collapse into one row per type.
+            .groupBy { MagicClassifier.groupKey(it.hex) }
+            .map { (_, list) ->
+                val sample = list.first()
+                AnalyzedPacket(sample.hex, MagicClassifier.groupLabel(sample.hex), sample.category, list.size)
             }
             .sortedByDescending { it.count }
     }

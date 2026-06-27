@@ -85,9 +85,6 @@ class MagicStore(context: Context) {
     )
     private val sessionUnique = LinkedHashMap<String, UniqueAgg>()
 
-    /** Running count of each raw hex heard this process, so we can auto-learn repeats. */
-    private val rawHeardCounts = HashMap<String, Int>()
-
     val allLearnedPackets: List<MagicPacket>
         get() = learnedColors + learnedLibrary + learnedRaw
 
@@ -601,46 +598,33 @@ class MagicStore(context: Context) {
         }
 
     /**
-     * Raw / unclassified packets. The first sighting is shown live only; once we hear the
-     * exact same hex again (repeated ⇒ likely a real command, not rolling one-off noise) it
-     * is auto-learned into the library's Unknown section so nothing important is lost.
+     * Raw / unclassified packets are saved by structural *type* (header + type framing), not by
+     * exact hex — so a flood of per-band rolling packets collapses to one library entry per type
+     * (e.g. "Band C00F"). One representative is learned on first sight; later packets of the same
+     * type just re-verify, so hearing the same type a thousand times never duplicates.
      */
     private fun hearRawPacket(hex: String, rssi: Int, label: String? = null): RecordEvent {
         val canonical = HexUtils.canonicalHex(hex)
-        val displayLabel = label ?: rawPacketLabel(canonical)
-        val count = (rawHeardCounts[canonical] ?: 0) + 1
-        rawHeardCounts[canonical] = count
+        val signature = MagicClassifier.rawSignature(canonical)
+        val displayLabel = label ?: MagicClassifier.rawLabel(canonical)
 
-        learnedRaw.firstOrNull { HexUtils.canonicalHex(it.hex) == canonical }?.let { existing ->
-            return RecordEvent(existing, false, "Repeated raw ×$count")
+        learnedRaw.firstOrNull { MagicClassifier.rawSignature(it.hex) == signature }?.let { existing ->
+            return RecordEvent(existing, false, "Known type ${existing.label}")
         }
-        if (count >= 2) {
-            val packet = MagicPacket(
-                id = nextPacketId++,
-                hex = canonical,
-                label = displayLabel,
-                category = MagicCategory.UNKNOWN,
-                typeInfo = "raw",
-                simKey = "RAW:$canonical",
-                userRecorded = false,
-                rssi = rssi,
-            )
-            learnedRaw = (learnedRaw + packet).sortedBy { it.hex }
-            save()
-            ServiceState.bumpStoreRevision()
-            return RecordEvent(packet, true, "Learned repeated raw → Unknown")
-        }
-        val preview = MagicPacket(
-            id = 0,
+        val packet = MagicPacket(
+            id = nextPacketId++,
             hex = canonical,
             label = displayLabel,
             category = MagicCategory.UNKNOWN,
             typeInfo = "raw",
-            simKey = "RAW:$canonical",
+            simKey = "RAW:$signature",
             userRecorded = false,
             rssi = rssi,
         )
-        return RecordEvent(preview, false, "Heard raw (1st sighting)")
+        learnedRaw = (learnedRaw + packet).sortedBy { it.label.lowercase() }
+        save()
+        ServiceState.bumpStoreRevision()
+        return RecordEvent(packet, true, "Learned $displayLabel → Unknown")
     }
 
     /**
@@ -651,7 +635,7 @@ class MagicStore(context: Context) {
      */
     @Synchronized
     fun importHexesToLibrary(hexes: List<String>): Int {
-        val existingRaw = learnedRaw.mapTo(HashSet()) { HexUtils.canonicalHex(it.hex) }
+        val existingRawSigs = learnedRaw.mapTo(HashSet()) { MagicClassifier.rawSignature(it.hex) }
         val newRaw = ArrayList<MagicPacket>()
         var added = 0
         for (h in hexes) {
@@ -660,22 +644,25 @@ class MagicStore(context: Context) {
             val classified = MagicClassifier.classify(canonical)
             if (classified != null && classified.category != MagicCategory.UNKNOWN) {
                 if (addClassifiedToLibrary(classified, canonical, 0).added) added++
-            } else if (existingRaw.add(canonical)) {
-                newRaw.add(
-                    MagicPacket(
-                        id = nextPacketId++,
-                        hex = canonical,
-                        label = rawPacketLabel(canonical),
-                        category = MagicCategory.UNKNOWN,
-                        typeInfo = "raw",
-                        simKey = "RAW:$canonical",
-                        userRecorded = true,
-                    ),
-                )
-                added++
+            } else {
+                val signature = MagicClassifier.rawSignature(canonical)
+                if (existingRawSigs.add(signature)) {
+                    newRaw.add(
+                        MagicPacket(
+                            id = nextPacketId++,
+                            hex = canonical,
+                            label = MagicClassifier.rawLabel(canonical),
+                            category = MagicCategory.UNKNOWN,
+                            typeInfo = "raw",
+                            simKey = "RAW:$signature",
+                            userRecorded = true,
+                        ),
+                    )
+                    added++
+                }
             }
         }
-        if (newRaw.isNotEmpty()) learnedRaw = (learnedRaw + newRaw).sortedBy { it.hex }
+        if (newRaw.isNotEmpty()) learnedRaw = (learnedRaw + newRaw).sortedBy { it.label.lowercase() }
         if (added > 0) {
             save()
             ServiceState.bumpStoreRevision()

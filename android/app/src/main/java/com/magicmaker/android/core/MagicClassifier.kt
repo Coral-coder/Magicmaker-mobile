@@ -215,6 +215,36 @@ object MagicClassifier {
         }
     }
 
+    /**
+     * Structural signature for an unclassified packet — the stable framing bytes
+     * (header + type, e.g. 8301C00F0101) with the rolling middle/tail ignored. Lets us
+     * collapse a flood of per-band rolling packets into one entry per packet *type*.
+     */
+    fun rawSignature(hexRaw: String): String {
+        val h = HexUtils.canonicalHex(hexRaw)
+        return if (h.length >= 12) h.substring(0, 12) else h
+    }
+
+    /** Human label for an unclassified packet, named by its structural type (e.g. "Band C00F"). */
+    fun rawLabel(hexRaw: String): String {
+        val h = HexUtils.canonicalHex(hexRaw)
+        return when {
+            h.length >= 8 && h.startsWith("8301") -> "Band ${h.substring(4, 8)}"
+            h.length <= 20 -> "Raw: $h"
+            else -> "Raw: ${h.take(16)}…"
+        }
+    }
+
+    /** Identity used to group packets in the library / analyzed view: exact hex for classified
+     * packets (stable), structural signature for raw (collapses rolling noise). */
+    fun groupKey(hexRaw: String): String {
+        val c = classify(hexRaw)
+        return if (c != null) HexUtils.canonicalHex(c.hex) else rawSignature(hexRaw)
+    }
+
+    /** Display label for [groupKey] — the classification when known, else the structural type. */
+    fun groupLabel(hexRaw: String): String = classify(hexRaw)?.label ?: rawLabel(hexRaw)
+
     fun libraryDedupeKey(classified: ClassifiedPacket): String = when (classified.typeInfo) {
         "starlight", "single", "dual", "show_block" -> classified.simKey
         "ping" -> "FUNC:ping"
