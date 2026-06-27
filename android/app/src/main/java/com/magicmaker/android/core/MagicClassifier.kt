@@ -24,7 +24,7 @@ object MagicClassifier {
         }
 
         val pos = normalized.indexOf("E9")
-        if (pos < 0) return null
+        if (pos < 0) return classifyEffectFamily(normalized)
         val funcCode = normalized.substring(pos, minOf(pos + 4, normalized.length))
 
         val label: String
@@ -104,11 +104,23 @@ object MagicClassifier {
                 colors = ""
                 simKey = "S:$funcCode"
             }
-            else -> return null
+            else -> return classifyEffectFamily(normalized)
         }
 
         val category = categorize(normalized, label, typeInfo)
         return ClassifiedPacket(normalized, label, category, typeInfo, colors, simKey)
+    }
+
+    /**
+     * Disney device command families use an 0xEx type byte (E1/E4/E5/EA/EF…) — real
+     * effects/interactions even when we don't decode the exact action yet. Classify them by
+     * type signature so they're named + saved as Animation instead of dropped as raw. Rolling
+     * band telemetry (type C0 / 0F) is NOT 0xEx, so it stays out of here.
+     */
+    private fun classifyEffectFamily(normalized: String): ClassifiedPacket? {
+        if (normalized.length < 8 || normalized[4] != 'E') return null
+        val sig = normalized.substring(4, 8)
+        return ClassifiedPacket(normalized, "Effect $sig", MagicCategory.ANIMATION, "effect", "", "FX:$normalized")
     }
 
     fun starlightColorIndex(hex: String): Int {
@@ -238,7 +250,8 @@ object MagicClassifier {
      */
     fun isLibraryNoise(hexRaw: String): Boolean {
         val h = HexUtils.canonicalHex(hexRaw)
-        if (h.startsWith("8301C0")) return true
+        if (h.startsWith("8301C0")) return true       // guest MagicBand telemetry
+        if (h.startsWith("83010F11")) return true      // rolling per-band ID broadcasts
         return classify(h)?.typeInfo == "ping"
     }
 
