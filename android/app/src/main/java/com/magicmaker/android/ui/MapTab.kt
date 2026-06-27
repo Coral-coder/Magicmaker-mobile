@@ -69,10 +69,16 @@ private val TX_COLOR = Color.rgb(255, 140, 0)
 @Composable
 fun MapTab(app: MagicMakerApp, storeRev: Int) {
     var data by remember { mutableStateOf<MapData?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
     var mode by remember { mutableStateOf(MapMode.CAPTURES) }
 
     LaunchedEffect(storeRev) {
-        data = withContext(Dispatchers.IO) { loadMapData(app.store) }
+        data = null
+        error = null
+        // runCatching guarantees we always resolve out of the LOADING state, even on error.
+        val result = withContext(Dispatchers.IO) { runCatching { loadMapData(app.store) } }
+        result.onSuccess { data = it }
+        result.onFailure { error = it.message ?: it.javaClass.simpleName }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -83,9 +89,10 @@ fun MapTab(app: MagicMakerApp, storeRev: Int) {
         ) {
             Text("CAPTURE MAP", style = techHeader())
             Text(
-                when (val d = data) {
-                    null -> "LOADING…"
-                    else -> "${d.captures.size} PTS · ${d.transmitters.size} TX"
+                when {
+                    error != null -> "ERROR"
+                    data == null -> "LOADING…"
+                    else -> "${data!!.captures.size} PTS · ${data!!.transmitters.size} TX"
                 },
                 style = techLabel(),
                 color = AppColors.TextDim,
@@ -108,6 +115,14 @@ fun MapTab(app: MagicMakerApp, storeRev: Int) {
 
         val current = data
         when {
+            error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "MAP LOAD FAILED: $error",
+                    style = techLabel(),
+                    color = AppColors.Amber,
+                    modifier = Modifier.padding(AppDimens.pad),
+                )
+            }
             current == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = AppColors.Cyan)
             }
@@ -204,70 +219,72 @@ private fun tintedPin(ctx: Context, color: Int): Drawable? {
     return d
 }
 
-private class Obs(val lat: Double, val lng: Double, val rssi: Int, val label: String)
+/** Single-pass weighted accumulator for one transmitter — O(1) memory regardless of obs count. */
+private class TxAccum {
+    var n = 0
+    var sumW = 0.0
+    var sumWLat = 0.0
+    var sumWLng = 0.0
+    var sumWLat2 = 0.0
+    var sumWLng2 = 0.0
+    var bestRssi = -999
+    var bestLabel = ""
 
+    fun add(lat: Double, lng: Double, rssi: Int, label: String) {
+        val w = (rssi + 100).coerceAtLeast(1).toDouble().let { it * it }
+        n++
+        sumW += w
+        sumWLat += w * lat
+        sumWLng += w * lng
+        sumWLat2 += w * lat * lat
+        sumWLng2 += w * lng * lng
+        if (rssi > bestRssi) { bestRssi = rssi; bestLabel = label }
+    }
+
+    fun estimate(address: String): TxEstimate? {
+        if (sumW <= 0.0) return null
+        val lat = sumWLat / sumW
+        val lng = sumWLng / sumW
+        val mLat = 111_320.0
+        val mLng = 111_320.0 * cos(Math.toRadians(lat))
+        val varLat = (sumWLat2 / sumW - lat * lat).coerceAtLeast(0.0)
+        val varLng = (sumWLng2 / sumW - lng * lng).coerceAtLeast(0.0)
+        val radius = sqrt(varLat * mLat * mLat + varLng * mLng * mLng).coerceIn(5.0, 500.0)
+        return TxEstimate(address, lat, lng, n, bestRssi, radius, bestLabel.ifBlank { address })
+    }
+}
+
+/**
+ * RSSI-weighted centroid localization: weight each receiver position by signal strength
+ * (stronger ⇒ we were closer ⇒ counts more), report the weighted spread as the uncertainty
+ * radius. Approximate — phone RSSI is noisy — but it points at the source. Streams the logs
+ * in one pass with bounded memory so even a flood of pings can't stall or OOM the load.
+ */
 private fun loadMapData(store: MagicStore): MapData {
     val captureAgg = HashMap<String, CapturePoint>()
-    val byAddress = HashMap<String, MutableList<Obs>>()
+    val byAddress = HashMap<String, TxAccum>()
 
-    for (log in store.listLogs()) {
-        for (rec in store.readLog(log.path)) {
-            val lat = rec.lat
-            val lng = rec.lng
-            if (lat.isNaN() || lng.isNaN()) continue
-            if (lat == 0.0 && lng == 0.0) continue
-            if (lat !in -90.0..90.0 || lng !in -180.0..180.0) continue
+    store.forEachLoggedLocation { lat, lng, rssi, address, label, category ->
+        if (lat.isNaN() || lng.isNaN()) return@forEachLoggedLocation
+        if (lat == 0.0 && lng == 0.0) return@forEachLoggedLocation
+        if (lat !in -90.0..90.0 || lng !in -180.0..180.0) return@forEachLoggedLocation
 
-            val key = "${(lat * 1e5).roundToInt()},${(lng * 1e5).roundToInt()}"
-            val existing = captureAgg[key]
-            captureAgg[key] = existing?.copy(count = existing.count + 1)
-                ?: CapturePoint(lat, lng, 1, rec.label.ifBlank { "Capture" }, rec.category)
+        val key = "${(lat * 1e5).roundToInt()},${(lng * 1e5).roundToInt()}"
+        val existing = captureAgg[key]
+        captureAgg[key] = existing?.copy(count = existing.count + 1)
+            ?: CapturePoint(lat, lng, 1, label.ifBlank { "Capture" }, category)
 
-            if (rec.sourceAddress.isNotBlank()) {
-                byAddress.getOrPut(rec.sourceAddress) { mutableListOf() }
-                    .add(Obs(lat, lng, rec.rssi, rec.label.ifBlank { rec.category }))
-            }
+        if (address.isNotBlank()) {
+            byAddress.getOrPut(address) { TxAccum() }.add(lat, lng, rssi, label.ifBlank { category })
         }
     }
 
     val captures = captureAgg.values.sortedByDescending { it.count }.take(MAX_MARKERS)
     val transmitters = byAddress.entries
-        .filter { it.value.size >= MIN_TX_OBSERVATIONS }
-        .mapNotNull { (address, obs) -> estimateTransmitter(address, obs) }
+        .filter { it.value.n >= MIN_TX_OBSERVATIONS }
+        .mapNotNull { (address, acc) -> acc.estimate(address) }
         .sortedByDescending { it.count }
         .take(MAX_MARKERS)
 
     return MapData(captures, transmitters)
-}
-
-/**
- * RSSI-weighted centroid localization: weight each receiver position by signal strength
- * (stronger ⇒ we were closer ⇒ counts more), then report the weighted spread as the
- * uncertainty radius. Approximate — phone RSSI is noisy — but it points at the source.
- */
-private fun estimateTransmitter(address: String, obs: List<Obs>): TxEstimate? {
-    var sumW = 0.0
-    var sumLat = 0.0
-    var sumLng = 0.0
-    for (o in obs) {
-        val w = (o.rssi + 100).coerceAtLeast(1).toDouble().let { it * it }
-        sumW += w
-        sumLat += w * o.lat
-        sumLng += w * o.lng
-    }
-    if (sumW <= 0.0) return null
-    val lat = sumLat / sumW
-    val lng = sumLng / sumW
-
-    val metersPerDegLng = 111_320.0 * cos(Math.toRadians(lat))
-    var varW = 0.0
-    for (o in obs) {
-        val w = (o.rssi + 100).coerceAtLeast(1).toDouble().let { it * it }
-        val dLat = (o.lat - lat) * 111_320.0
-        val dLng = (o.lng - lng) * metersPerDegLng
-        varW += w * (dLat * dLat + dLng * dLng)
-    }
-    val radius = sqrt(varW / sumW).coerceIn(5.0, 500.0)
-    val best = obs.maxByOrNull { it.rssi } ?: return null
-    return TxEstimate(address, lat, lng, obs.size, best.rssi, radius, best.label)
 }

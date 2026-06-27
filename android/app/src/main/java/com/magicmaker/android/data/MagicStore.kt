@@ -934,6 +934,32 @@ class MagicStore(context: Context) {
                 LogFile(f.absolutePath, f.name, f.length(), f.lastModified(), lines)
             }
 
+    /**
+     * Streams GPS-tagged observations from every chronological log without loading whole
+     * files or building packet objects — for the map, which only needs lat/lng/rssi/addr.
+     * Rows without a parseable lat/lng are skipped cheaply.
+     */
+    fun forEachLoggedLocation(
+        action: (lat: Double, lng: Double, rssi: Int, address: String, label: String, category: String) -> Unit,
+    ) {
+        val files = allLogDirs()
+            .flatMap { it.listFiles()?.toList() ?: emptyList() }
+            .filter { it.extension == "csv" && !it.name.endsWith("_band.csv") && !it.name.endsWith("_unique.csv") }
+        for (f in files) {
+            runCatching {
+                f.useLines { seq ->
+                    seq.drop(1).forEach { line ->
+                        val c = line.split(",")
+                        if (c.size < 12) return@forEach
+                        val lat = c[10].toDoubleOrNull() ?: return@forEach
+                        val lng = c[11].toDoubleOrNull() ?: return@forEach
+                        action(lat, lng, c[2].toIntOrNull() ?: 0, c[8], c[3], c[4])
+                    }
+                }
+            }
+        }
+    }
+
     fun readLog(path: String): List<LoggedPacket> = runCatching {
         File(path).readLines().drop(1).mapNotNull { line ->
             val c = line.split(",")
