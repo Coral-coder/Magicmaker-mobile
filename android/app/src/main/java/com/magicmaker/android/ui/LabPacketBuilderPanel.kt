@@ -22,6 +22,8 @@ import androidx.compose.ui.unit.dp
 import com.magicmaker.android.MagicMakerApp
 import com.magicmaker.android.core.HexUtils
 import com.magicmaker.android.core.LabPacketBuilder
+import com.magicmaker.android.core.LabPacketTools
+import com.magicmaker.android.core.MagicClassifier
 import com.magicmaker.android.core.PacketBuilder
 import com.magicmaker.android.core.TransmitTiming
 import com.magicmaker.android.data.MagicStore
@@ -29,9 +31,9 @@ import com.magicmaker.android.service.MagicMakerForegroundService
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
-fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0) {
-    var hex by remember { mutableStateOf(app.store.getLabHex()) }
-    var label by remember { mutableStateOf(app.store.getLabLabel()) }
+fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTick: Int = 0) {
+    var hex by remember(labLoadTick) { mutableStateOf(app.store.getLabHex()) }
+    var label by remember(labLoadTick) { mutableStateOf(app.store.getLabLabel()) }
     var presetMsg by remember { mutableStateOf<String?>(null) }
     val scroll = rememberScrollState()
     val myPresets = remember(storeRev) { app.store.customPresets }
@@ -91,6 +93,14 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0) {
         HexUtils.legacyAdvertiseRejectReason(hex)?.let { reason ->
             Text(reason, style = techLabel(), color = MaterialTheme.colorScheme.error)
         }
+
+        PacketInspector(
+            hex = hex,
+            onHexChange = { built ->
+                hex = built
+                app.store.saveLabHex(built)
+            },
+        )
 
         Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
             Button({
@@ -423,6 +433,97 @@ private fun LabPacketBuilderPanel(
                     ) { Text(label.uppercase(), style = techLabel()) }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Fine-grained editor for whatever hex is currently loaded — live classification, full
+ * vibration control (0–15), and a per-byte hex grid so any field can be tweaked. Kept
+ * collapsed by default to keep the builder uncluttered.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PacketInspector(hex: String, onHexChange: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val classified = remember(hex) { runCatching { MagicClassifier.classify(HexUtils.canonicalHex(hex)) }.getOrNull() }
+    val bytes = remember(hex) { LabPacketTools.toBytes(hex) }
+    val vib = remember(hex) { LabPacketTools.tailVibration(hex) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+            )
+            Text("PACKET INSPECTOR", style = techHeader(), modifier = Modifier.weight(1f).padding(start = 4.dp))
+            Text("${bytes.size} B", style = techLabel(), color = AppColors.TextDim)
+        }
+
+        Text(
+            classified?.let { "${it.label} · ${it.category.name}" } ?: "Unclassified / raw payload",
+            style = techLabel(),
+            color = if (classified != null) AppColors.Cyan else AppColors.TextDim,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val classColors = classified?.colors
+        if (!classColors.isNullOrBlank()) {
+            Text("COLORS: ${classColors.uppercase()}", style = techLabel(), color = AppColors.CyanDim)
+        }
+
+        if (expanded) {
+            if (vib != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("VIBRATION", style = techLabel(), color = AppColors.TextDim)
+                    OutlinedButton(
+                        onClick = { onHexChange(LabPacketTools.withVibration(hex, (vib - 1).coerceAtLeast(0))) },
+                        enabled = vib > 0,
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier.size(28.dp),
+                    ) { Text("–", style = techLabel()) }
+                    Text(vib.toString().padStart(2, '0'), style = techLabel(), color = AppColors.Cyan)
+                    OutlinedButton(
+                        onClick = { onHexChange(LabPacketTools.withVibration(hex, (vib + 1).coerceAtMost(15))) },
+                        enabled = vib < 15,
+                        contentPadding = PaddingValues(0.dp),
+                        modifier = Modifier.size(28.dp),
+                    ) { Text("+", style = techLabel()) }
+                    Text("0xB0 | vib", style = techLabel(), color = AppColors.TextDim)
+                }
+            }
+
+            Text("RAW BYTES — tap to edit", style = techLabel(), color = AppColors.CyanDim)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                bytes.forEachIndexed { i, b ->
+                    OutlinedTextField(
+                        value = b,
+                        onValueChange = { v ->
+                            val nv = v.uppercase().filter { it in "0123456789ABCDEF" }.take(2)
+                            val updated = bytes.toMutableList().also { it[i] = nv }
+                            onHexChange(LabPacketTools.fromBytes(updated))
+                        },
+                        singleLine = true,
+                        textStyle = techLabel().copy(color = AppColors.CyanDim),
+                        modifier = Modifier.width(56.dp),
+                    )
+                }
+            }
+            Text(
+                "Color bytes use low 5 bits (00–1F). E0=preset · 80/80=dual · A0×5=rainbow · 40/40=xfade · tail B0|vib.",
+                style = techLabel(),
+                color = AppColors.TextDim,
+            )
         }
     }
 }

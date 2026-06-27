@@ -85,10 +85,16 @@ object ServiceState {
         val replayTotal: Int = 0,
         val replayLabel: String = "",
         val cloudSyncStatus: String = "",
+        val labLoadTick: Int = 0,
     )
 
     fun setCloudSyncStatus(status: String) {
         update { it.copy(cloudSyncStatus = status) }
+    }
+
+    /** Bumped when a packet is sent to the Lab from another screen, so the Lab reloads it. */
+    fun requestLabLoad() {
+        update { it.copy(labLoadTick = it.labLoadTick + 1) }
     }
 
     private const val MAX_LIVE = 120

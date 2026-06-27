@@ -98,6 +98,8 @@ dependencies {
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("com.google.zxing:core:3.5.3")
+    // OpenStreetMap map view for the capture map (no API key required).
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
     debugImplementation("androidx.compose.ui:ui-tooling")
     // OTA uses the GitHub Releases API via HttpURLConnection + org.json — no extra deps.
 }

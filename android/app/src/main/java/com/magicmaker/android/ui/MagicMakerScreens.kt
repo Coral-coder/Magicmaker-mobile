@@ -50,6 +50,7 @@ private enum class AppTab(val label: String) {
     Auto("AUTO"),
     Relay("RELAY"),
     Logs("LOGS"),
+    Map("MAP"),
     Diagnostics("DIAG"),
     Lab("LAB"),
 }
@@ -61,6 +62,7 @@ private fun tabIcon(t: AppTab): ImageVector = when (t) {
     AppTab.Auto -> Icons.Default.AutoMode
     AppTab.Relay -> Icons.Default.Wifi
     AppTab.Logs -> Icons.Default.History
+    AppTab.Map -> Icons.Default.Place
     AppTab.Diagnostics -> Icons.Default.Insights
     AppTab.Lab -> Icons.Default.Science
 }
@@ -190,9 +192,15 @@ fun MagicMakerAppRoot() {
                         OutlinedButton({ permLauncher.launch(allPerms.toTypedArray()) }) { Text("GRANT", style = techLabel()) }
                     }
                 } else {
+                    val loadInLab: (String, String) -> Unit = { hex, label ->
+                        app.store.saveLabHex(HexUtils.canonicalHex(hex))
+                        app.store.saveLabLabel(label)
+                        ServiceState.requestLabLoad()
+                        tab = AppTab.Lab
+                    }
                     when (tab) {
-                        AppTab.Scan -> ScanTab(state)
-                        AppTab.Transmit -> TransmitTab(app, state)
+                        AppTab.Scan -> ScanTab(state, loadInLab)
+                        AppTab.Transmit -> TransmitTab(app, state, loadInLab)
                         AppTab.Wand -> WandTab(
                             app = app,
                             storeRevision = state.storeRevision,
@@ -205,8 +213,9 @@ fun MagicMakerAppRoot() {
                         AppTab.Auto -> AutoTab(app, state)
                         AppTab.Relay -> RelayTab(state, coreGranted, wifiGranted) { wifiPermLauncher.launch(wifiPerms.toTypedArray()) }
                         AppTab.Logs -> LogsTab(app, state)
+                        AppTab.Map -> MapTab(app, state.storeRevision)
                         AppTab.Diagnostics -> DiagnosticsTab(state)
-                        AppTab.Lab -> LabTabScreen(app, LocalContext.current, state.storeRevision)
+                        AppTab.Lab -> LabTabScreen(app, LocalContext.current, state.storeRevision, state.labLoadTick)
                     }
                 }
             }
@@ -790,7 +799,7 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
 }
 
 @Composable
-private fun ScanTab(state: ServiceState.UiState) {
+private fun ScanTab(state: ServiceState.UiState, onLoadInLab: (String, String) -> Unit) {
     val ctx = LocalContext.current
     val app = ctx.applicationContext as MagicMakerApp
     var recording by remember(state.recordSessionActive) { mutableStateOf(state.recordSessionActive) }
@@ -800,6 +809,7 @@ private fun ScanTab(state: ServiceState.UiState) {
     var promoteTarget by remember { mutableStateOf<ServiceState.LivePacket?>(null) }
     var recategorizeTarget by remember { mutableStateOf<Pair<String, String>?>(null) } // hex, label
     var deleteScanRequest by remember { mutableStateOf<ScanDeleteRequest?>(null) }
+    var actionTarget by remember { mutableStateOf<Pair<ServiceState.LivePacket, Boolean>?>(null) } // packet, raw
     val wide = isWideLayout()
     var batteryOk by remember { mutableStateOf(BatteryOptimization.isIgnored(ctx)) }
     var startOnBoot by remember {
@@ -925,7 +935,7 @@ private fun ScanTab(state: ServiceState.UiState) {
                     },
                 ) { Text("CLR", style = techLabel(), color = AppColors.Amber) }
             }
-            Text("TAP REPLAY · SWIPE ← DEL · SWIPE → TX/TAG", style = techLabel(), color = AppColors.TextDim)
+            Text("TAP REPLAY · HOLD MENU · SWIPE ← DEL · SWIPE → TX/TAG", style = techLabel(), color = AppColors.TextDim)
         },
         content = {
             HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
@@ -951,6 +961,7 @@ private fun ScanTab(state: ServiceState.UiState) {
                             onTap = { MagicMakerForegroundService.transmit(ctx, pkt.hex) },
                             onDelete = { deleteScanRequest = ScanDeleteRequest(pkt, raw = true) },
                             onPromote = { promoteTarget = pkt },
+                            onLongPress = { actionTarget = pkt to true },
                             dismissOnDelete = false,
                         )
                     }
@@ -982,6 +993,7 @@ private fun ScanTab(state: ServiceState.UiState) {
                                                         onTap = { MagicMakerForegroundService.transmit(ctx, pkt.hex) },
                                                         onDelete = { deleteScanRequest = ScanDeleteRequest(pkt, raw = false) },
                                                         onPromote = { promoteTarget = pkt },
+                                                        onLongPress = { actionTarget = pkt to false },
                                                         dismissOnDelete = false,
                                                     )
                                                 }
@@ -999,6 +1011,7 @@ private fun ScanTab(state: ServiceState.UiState) {
                                             onTap = { MagicMakerForegroundService.transmit(ctx, pkt.hex) },
                                             onDelete = { deleteScanRequest = ScanDeleteRequest(pkt, raw = false) },
                                             onPromote = { promoteTarget = pkt },
+                                            onLongPress = { actionTarget = pkt to false },
                                             dismissOnDelete = false,
                                         )
                                     }
@@ -1060,6 +1073,24 @@ private fun ScanTab(state: ServiceState.UiState) {
                 }
                 deleteScanRequest = null
             },
+        )
+    }
+
+    actionTarget?.let { (pkt, raw) ->
+        val colors = MagicClassifier.classify(pkt.hex)?.colors
+        PacketActionSheet(
+            title = pkt.label,
+            hex = pkt.hex,
+            subtitle = "${pkt.category.name} · RSSI ${pkt.rssi}",
+            colors = colors,
+            actions = listOf(
+                PacketAction("Transmit") { MagicMakerForegroundService.transmit(ctx, pkt.hex); actionTarget = null },
+                PacketAction("Load in Lab") { onLoadInLab(pkt.hex, pkt.label); actionTarget = null },
+                PacketAction("Add to TX library") { app.store.saveCustomPreset(pkt.label, pkt.hex); actionTarget = null },
+                PacketAction("Recategorize") { recategorizeTarget = pkt.hex to pkt.label; actionTarget = null },
+                PacketAction("Remove", destructive = true) { deleteScanRequest = ScanDeleteRequest(pkt, raw = raw); actionTarget = null },
+            ),
+            onDismiss = { actionTarget = null },
         )
     }
 }
@@ -1269,7 +1300,7 @@ private fun WandTab(
 }
 
 @Composable
-private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
+private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState, onLoadInLab: (String, String) -> Unit) {
     val ctx = LocalContext.current
     val storeRev = state.storeRevision
     var visibleSections by remember { mutableStateOf(LivePacketSection.entries.toSet()) }
@@ -1277,6 +1308,7 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
     var recategorizePacket by remember { mutableStateOf<MagicPacket?>(null) }
     var renameTarget by remember { mutableStateOf<MagicPacket?>(null) }
     var deleteTarget by remember { mutableStateOf<MagicPacket?>(null) }
+    var actionTarget by remember { mutableStateOf<MagicPacket?>(null) }
     var loopOn by remember(state.txLoopEnabled) { mutableStateOf(state.txLoopEnabled) }
     var txLoopSettingsCollapsed by remember { mutableStateOf(UiPrefs.isTxLoopSettingsCollapsed(ctx)) }
     var selectedTxId by remember(state.txLoopPacketId, storeRev) {
@@ -1367,7 +1399,7 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
             SectionFilterDropdown(visibleSections) { section ->
                 visibleSections = if (section in visibleSections) visibleSections - section else visibleSections + section
             }
-            Text("TAP TX · HOLD RENAME · SWIPE ← DEL · SWIPE → RECAT", style = techLabel(), color = AppColors.TextDim)
+            Text("TAP TX · HOLD MENU · SWIPE ← DEL · SWIPE → RECAT", style = techLabel(), color = AppColors.TextDim)
         },
         content = {
             HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
@@ -1396,7 +1428,7 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
                                                     onTap = { onSelectPacket(packet) },
                                                     onRecategorize = { recategorizePacket = packet },
                                                     onDelete = { deleteTarget = packet },
-                                                    onRename = { renameTarget = packet },
+                                                    onLongPress = { actionTarget = packet },
                                                 )
                                             }
                                         }
@@ -1411,7 +1443,7 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
                                         onTap = { onSelectPacket(packet) },
                                         onRecategorize = { recategorizePacket = packet },
                                         onDelete = { deleteTarget = packet },
-                                        onRename = { renameTarget = packet },
+                                        onLongPress = { actionTarget = packet },
                                     )
                                 }
                             }
@@ -1456,6 +1488,24 @@ private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState) {
             },
         )
     }
+
+    actionTarget?.let { packet ->
+        val colors = packet.colors.ifBlank { MagicClassifier.classify(packet.hex)?.colors.orEmpty() }
+        PacketActionSheet(
+            title = packet.label,
+            hex = packet.hex,
+            subtitle = packet.category.name,
+            colors = colors,
+            actions = listOf(
+                PacketAction("Transmit") { onSelectPacket(packet); actionTarget = null },
+                PacketAction("Load in Lab") { onLoadInLab(packet.hex, packet.label); actionTarget = null },
+                PacketAction("Rename") { renameTarget = packet; actionTarget = null },
+                PacketAction("Recategorize") { recategorizePacket = packet; actionTarget = null },
+                PacketAction("Delete", destructive = true) { deleteTarget = packet; actionTarget = null },
+            ),
+            onDismiss = { actionTarget = null },
+        )
+    }
 }
 
 @Composable
@@ -1467,17 +1517,22 @@ private fun TxSwipeRow(
     onTap: () -> Unit,
     onRecategorize: () -> Unit,
     onDelete: () -> Unit,
-    onRename: () -> Unit,
+    onLongPress: () -> Unit,
 ) {
+    val subtitle = if (packet.colors.isNotBlank()) {
+        "${packet.category.name} · ${packet.colors}"
+    } else {
+        packet.category.name
+    }
     SwipePacketRow(
         label = packet.label,
         hex = packet.hex,
-        subtitle = packet.category.name,
+        subtitle = subtitle,
         selected = selected,
         onTap = onTap,
         onDelete = onDelete,
         onPromote = onRecategorize,
-        onLongPress = onRename,
+        onLongPress = onLongPress,
         dismissOnDelete = false,
     )
 }
