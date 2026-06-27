@@ -215,34 +215,20 @@ object MagicClassifier {
         }
     }
 
-    /**
-     * Structural signature for an unclassified packet — the stable framing bytes
-     * (header + type, e.g. 8301C00F0101) with the rolling middle/tail ignored. Lets us
-     * collapse a flood of per-band rolling packets into one entry per packet *type*.
-     */
-    fun rawSignature(hexRaw: String): String {
-        val h = HexUtils.canonicalHex(hexRaw)
-        return if (h.length >= 12) h.substring(0, 12) else h
-    }
-
-    /** Human label for an unclassified packet, named by its structural type (e.g. "Band C00F"). */
+    /** Human label for an unclassified packet — its full hex (distinct packets stay distinct). */
     fun rawLabel(hexRaw: String): String {
         val h = HexUtils.canonicalHex(hexRaw)
-        return when {
-            h.length >= 8 && h.startsWith("8301") -> "Band ${h.substring(4, 8)}"
-            h.length <= 20 -> "Raw: $h"
-            else -> "Raw: ${h.take(16)}…"
-        }
+        return if (h.length <= 24) "Raw: $h" else "Raw: ${h.take(18)}…${h.takeLast(4)}"
     }
 
-    /** Identity used to group packets in the library / analyzed view: exact hex for classified
-     * packets (stable), structural signature for raw (collapses rolling noise). */
+    /** Identity used to group packets in the library / analyzed view: the full canonical hex,
+     * so every distinct packet is kept separate (classified packets use their normalized hex). */
     fun groupKey(hexRaw: String): String {
         val c = classify(hexRaw)
-        return if (c != null) HexUtils.canonicalHex(c.hex) else rawSignature(hexRaw)
+        return if (c != null) HexUtils.canonicalHex(c.hex) else HexUtils.canonicalHex(hexRaw)
     }
 
-    /** Display label for [groupKey] — the classification when known, else the structural type. */
+    /** Display label for [groupKey] — the classification when known, else the raw hex. */
     fun groupLabel(hexRaw: String): String = classify(hexRaw)?.label ?: rawLabel(hexRaw)
 
     fun libraryDedupeKey(classified: ClassifiedPacket): String = when (classified.typeInfo) {
