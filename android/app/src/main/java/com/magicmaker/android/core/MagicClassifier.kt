@@ -231,6 +231,17 @@ object MagicClassifier {
     /** Display label for [groupKey] — the classification when known, else the raw hex. */
     fun groupLabel(hexRaw: String): String = classify(hexRaw)?.label ?: rawLabel(hexRaw)
 
+    /**
+     * Packets we never auto-save to the library: guest MagicBand telemetry (8301C0…, every
+     * nearby band broadcasts these with rolling payloads) and interaction/wakeup pings. Both
+     * are high-volume background noise, not controllable effects.
+     */
+    fun isLibraryNoise(hexRaw: String): Boolean {
+        val h = HexUtils.canonicalHex(hexRaw)
+        if (h.startsWith("8301C0")) return true
+        return classify(h)?.typeInfo == "ping"
+    }
+
     fun libraryDedupeKey(classified: ClassifiedPacket): String = when (classified.typeInfo) {
         "starlight", "single", "dual", "show_block" -> classified.simKey
         "ping" -> "FUNC:ping"

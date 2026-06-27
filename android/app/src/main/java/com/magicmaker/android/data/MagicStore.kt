@@ -95,6 +95,22 @@ class MagicStore(context: Context) {
         learnedRaw.forEach { rawHexIndex.add(HexUtils.canonicalHex(it.hex)) }
     }
 
+    /**
+     * Cleanup on load: drop auto-learned noise (guest-band telemetry in learnedRaw, pings in
+     * learnedLibrary) that earlier builds saved. Packets the user explicitly named live in
+     * presets (saveCustomPreset), so they're untouched by this.
+     */
+    private fun purgeLibraryNoise() {
+        val rawKept = learnedRaw.filter { !MagicClassifier.isLibraryNoise(it.hex) }
+        val libKept = learnedLibrary.filter { it.typeInfo != "ping" }
+        if (rawKept.size != learnedRaw.size || libKept.size != learnedLibrary.size) {
+            learnedRaw = rawKept
+            learnedLibrary = libKept
+            rebuildRawIndex()
+            save()
+        }
+    }
+
     /** Coalesce the high-volume raw-learn saves so a packet flood can't trigger an IO storm. */
     private fun coalesceRawSave(): Boolean {
         val now = System.currentTimeMillis()
@@ -211,6 +227,7 @@ class MagicStore(context: Context) {
         learnedLibrary = state.learnedLibrary
         learnedRaw = state.learnedRaw ?: emptyList()
         rebuildRawIndex()
+        purgeLibraryNoise()
         recordings = state.recordings
         autoRules = state.autoRules
         nextPacketId = state.nextPacketId
@@ -606,7 +623,15 @@ class MagicStore(context: Context) {
         }
     }
 
-    private fun addClassifiedToLibrary(classified: ClassifiedPacket, rawHex: String, rssi: Int): RecordEvent =
+    private fun addClassifiedToLibrary(classified: ClassifiedPacket, rawHex: String, rssi: Int): RecordEvent {
+        // Pings are background noise — keep them live/in logs, but never in the library.
+        if (classified.typeInfo == "ping") {
+            return RecordEvent(classified.toPacket(), false, "Ping (not saved)")
+        }
+        return addClassifiedToLibraryInner(classified, rawHex, rssi)
+    }
+
+    private fun addClassifiedToLibraryInner(classified: ClassifiedPacket, rawHex: String, rssi: Int): RecordEvent =
         when (classified.category) {
             MagicCategory.COLOR -> if (classified.typeInfo == "starlight") {
                 addStarlightToLibrary(classified, rssi, rawHex)
@@ -625,6 +650,9 @@ class MagicStore(context: Context) {
     private fun hearRawPacket(hex: String, rssi: Int, label: String? = null): RecordEvent {
         val canonical = HexUtils.canonicalHex(hex)
         val displayLabel = label ?: MagicClassifier.rawLabel(canonical)
+        if (MagicClassifier.isLibraryNoise(canonical)) {
+            return RecordEvent(rawPreview(canonical, displayLabel, rssi), false, "Band/ping (not saved)")
+        }
         if (canonical in rawHexIndex) {
             return RecordEvent(rawPreview(canonical, displayLabel, rssi), false, "Known raw")
         }
@@ -672,6 +700,7 @@ class MagicStore(context: Context) {
         for (h in hexes) {
             val canonical = HexUtils.canonicalHex(h)
             if (canonical.isEmpty()) continue
+            if (MagicClassifier.isLibraryNoise(canonical)) continue
             val classified = MagicClassifier.classify(canonical)
             if (classified != null && classified.category != MagicCategory.UNKNOWN) {
                 if (addClassifiedToLibrary(classified, canonical, 0).added) added++

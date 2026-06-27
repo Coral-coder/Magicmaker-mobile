@@ -660,7 +660,8 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
             .filter { selectedCats.isEmpty() || it.category in selectedCats }
             .filter { selectedAddr.isEmpty() || it.sourceAddress == selectedAddr }
             .filter { !bandOnly || it.isBand }
-            // Group by structural type so rolling per-band packets collapse into one row per type.
+            // Hide guest-band telemetry and pings — they're high-volume noise, not effects.
+            .filter { !MagicClassifier.isLibraryNoise(it.hex) }
             .groupBy { MagicClassifier.groupKey(it.hex) }
             .map { (_, list) ->
                 val sample = list.first()
@@ -823,7 +824,7 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
                         }
                         if (analyzing) {
                             Text(
-                                "${analyzed.size} UNIQUE · TAP = TX · NAME = ADD TO LIBRARY",
+                                "${analyzed.size} UNIQUE (pings & other bands hidden) · TAP = TX · NAME = ADD",
                                 style = techLabel(),
                                 color = AppColors.TextDim,
                             )
