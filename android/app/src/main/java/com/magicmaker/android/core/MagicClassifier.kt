@@ -119,8 +119,44 @@ object MagicClassifier {
      */
     private fun classifyEffectFamily(normalized: String): ClassifiedPacket? {
         if (normalized.length < 8 || normalized[4] != 'E') return null
-        val sig = normalized.substring(4, 8)
-        return ClassifiedPacket(normalized, "Effect $sig", MagicCategory.ANIMATION, "effect", "", "FX:$normalized")
+        val type = normalized.substring(4, 8)
+
+        // EMCOT color cue: the palette-index byte after an "EF0501A6 <flag>" sub-command.
+        fun cueColor(): String? {
+            val m = normalized.indexOf("EF0501A6")
+            if (m < 0 || m + 12 > normalized.length) return null
+            val v = normalized.substring(m + 10, m + 12).toIntOrNull(16) ?: return null
+            return StarlightColors.nameFor(v)
+        }
+
+        return when {
+            type == "EF05" -> {
+                val c = cueColor()
+                ClassifiedPacket(
+                    normalized, c?.let { "Color Cue: $it" } ?: "Color Cue (EF05)",
+                    MagicCategory.COLOR, "fx_ef05", c.orEmpty(), "FX:$normalized",
+                )
+            }
+            type == "EF08" -> ClassifiedPacket(
+                normalized, "Scene Cue (EF08)", MagicCategory.ANIMATION, "fx_ef08", "", "FX:$normalized",
+            )
+            type == "E409" -> {
+                val c = cueColor()
+                ClassifiedPacket(
+                    normalized, c?.let { "Show Burst: $it" } ?: "Show Burst (E409)",
+                    MagicCategory.ANIMATION, "fx_e409", c.orEmpty(), "FX:$normalized",
+                )
+            }
+            type == "E501" -> ClassifiedPacket(
+                normalized, "Sync Cue (E501)", MagicCategory.ANIMATION, "fx_e501", "", "FX:$normalized",
+            )
+            type.startsWith("EA") -> ClassifiedPacket(
+                normalized, "Animation (style ${type.substring(2)})", MagicCategory.ANIMATION, "fx_ea", "", "FX:$normalized",
+            )
+            else -> ClassifiedPacket(
+                normalized, "Effect $type", MagicCategory.ANIMATION, "effect", "", "FX:$normalized",
+            )
+        }
     }
 
     fun starlightColorIndex(hex: String): Int {
