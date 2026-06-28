@@ -10,8 +10,10 @@ object HexUtils {
 
     fun hexToBytes(hex: String): ByteArray {
         val clean = hex.uppercase().filter { it in "0123456789ABCDEF" }
-        require(clean.length % 2 == 0) { "Invalid hex length" }
-        return ByteArray(clean.length / 2) { i ->
+        // Tolerate an odd trailing nibble (e.g. mid-edit in the Lab hex field) by dropping it,
+        // rather than throwing — callers run on every keystroke and must not crash.
+        val byteCount = clean.length / 2
+        return ByteArray(byteCount) { i ->
             clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
         }
     }
