@@ -482,6 +482,23 @@ class MagicStore(context: Context) {
     fun isBandAddress(address: String): Boolean =
         address.isNotEmpty() && normalizeAddress(address) in bandAddresses()
 
+    /** How many guest-band telemetry packets (8301C0… / 83010F11…) are sitting in the library. */
+    fun savedBandCount(): Int = learnedRaw.count { MagicClassifier.isLibraryNoise(it.hex) }
+
+    /** Manual bulk cleanup: remove all guest-band telemetry from the library. Returns count removed. */
+    @Synchronized
+    fun deleteSavedBands(): Int {
+        val before = learnedRaw.size
+        learnedRaw = learnedRaw.filterNot { MagicClassifier.isLibraryNoise(it.hex) }
+        val removed = before - learnedRaw.size
+        if (removed > 0) {
+            rebuildRawIndex()
+            save()
+            ServiceState.bumpStoreRevision()
+        }
+        return removed
+    }
+
     @Synchronized
     fun addBandAddress(address: String) {
         val a = normalizeAddress(address)

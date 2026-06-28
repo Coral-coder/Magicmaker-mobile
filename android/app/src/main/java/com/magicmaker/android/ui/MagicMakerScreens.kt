@@ -441,8 +441,10 @@ private fun BandConfigSection(app: MagicMakerApp, state: ServiceState.UiState) {
     val ctx = LocalContext.current
     val storeRev = state.storeRevision
     val bandAddrs = remember(storeRev) { app.store.bandAddresses() }
+    val savedBands = remember(storeRev) { app.store.savedBandCount() }
     var manual by remember { mutableStateOf("") }
     var collapsed by remember { mutableStateOf(UiPrefs.isBandMenuCollapsed(ctx)) }
+    var confirmDeleteBands by remember { mutableStateOf(false) }
 
     Surface(color = AppColors.Cyan.copy(alpha = 0.06f), shape = RectangleShape) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -487,6 +489,19 @@ private fun BandConfigSection(app: MagicMakerApp, state: ServiceState.UiState) {
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                 ) { Text("ADD", style = techLabel()) }
             }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("SAVED BAND PACKETS: $savedBands", style = techLabel(), color = AppColors.TextDim)
+                if (savedBands > 0) {
+                    TextButton(
+                        onClick = { confirmDeleteBands = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) { Text("DELETE ALL", style = techLabel(), color = MaterialTheme.colorScheme.error) }
+                }
+            }
             if (state.seenAddresses.isNotEmpty()) {
                 Text("HEARD (TAP TO TAG):", style = techLabel(), color = AppColors.TextDim)
                 state.seenAddresses.take(8).forEach { seen ->
@@ -512,6 +527,30 @@ private fun BandConfigSection(app: MagicMakerApp, state: ServiceState.UiState) {
                 }
             }
         }
+    }
+
+    if (confirmDeleteBands) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteBands = false },
+            title = { Text("Delete saved band packets?", style = techLabel()) },
+            text = {
+                Text(
+                    "Removes all $savedBands guest-band telemetry packets from your library. " +
+                        "Logs and other packets are untouched. This only runs when you tap Delete.",
+                    style = techLabel(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val n = app.store.deleteSavedBands()
+                    confirmDeleteBands = false
+                    Toast.makeText(ctx, "Deleted $n band packets", Toast.LENGTH_SHORT).show()
+                }) { Text("DELETE", style = techLabel(), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteBands = false }) { Text("CANCEL", style = techLabel()) }
+            },
+        )
     }
 }
 
