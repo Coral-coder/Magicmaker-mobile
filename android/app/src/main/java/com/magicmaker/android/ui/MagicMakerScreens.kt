@@ -136,87 +136,73 @@ fun MagicMakerAppRoot() {
         }
     }
 
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet(drawerContainerColor = AppColors.Panel) {
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    "MAGICMAKER",
-                    style = techHeader(),
-                    color = AppColors.Cyan,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                )
-                HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
-                AppTab.entries.forEach { t ->
-                    NavigationDrawerItem(
-                        label = { Text(t.label, style = techLabel()) },
-                        selected = tab == t,
-                        icon = { Icon(tabIcon(t), contentDescription = t.label, modifier = Modifier.size(AppDimens.icon)) },
-                        onClick = {
-                            tab = t
-                            scope.launch { drawerState.close() }
-                        },
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                    )
-                }
-            }
-        },
-    ) {
-        Scaffold(
-            containerColor = AppColors.Navy,
-            topBar = {
+    Scaffold(
+        containerColor = AppColors.Navy,
+        topBar = {
+            Column {
                 TopAppBar(
-                    title = { Text("MM · ${tab.label}", style = techHeader()) },
-                    navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu")
-                        }
-                    },
+                    title = { Text("MAGICMAKER · ${tab.label}", style = techHeader()) },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = AppColors.Panel,
                         titleContentColor = AppColors.Cyan,
-                        navigationIconContentColor = AppColors.Cyan,
                     ),
                 )
-            },
-        ) { pad ->
-            Column(Modifier.padding(pad).fillMaxSize()) {
-                TelemetryLine(state)
-                if (!coreGranted) {
-                    Column(Modifier.padding(AppDimens.pad)) {
-                        Text("PERMS REQUIRED: BT · LOC · NOTIFY", style = techLabel(), color = AppColors.Amber)
-                        Spacer(Modifier.height(AppDimens.gap))
-                        OutlinedButton({ permLauncher.launch(allPerms.toTypedArray()) }) { Text("GRANT", style = techLabel()) }
-                    }
-                } else {
-                    val loadInLab: (String, String) -> Unit = { hex, label ->
-                        app.store.saveLabHex(HexUtils.canonicalHex(hex))
-                        app.store.saveLabLabel(label)
-                        ServiceState.requestLabLoad()
-                        tab = AppTab.Lab
-                    }
-                    when (tab) {
-                        AppTab.Scan -> ScanTab(state, loadInLab)
-                        AppTab.Transmit -> TransmitTab(app, state, loadInLab)
-                        AppTab.Wand -> WandTab(
-                            app = app,
-                            storeRevision = state.storeRevision,
-                            starlightLoopEnabled = state.starlightLoopEnabled,
-                            starlightLoopPacketId = state.starlightLoopPacketId,
-                            starlightIntervalMs = state.starlightIntervalMs,
-                            wandDisplayColorIndex = state.wandDisplayColorIndex,
-                            running = state.running,
+                ScrollableTabRow(
+                    selectedTabIndex = AppTab.entries.indexOf(tab).coerceAtLeast(0),
+                    containerColor = AppColors.Panel,
+                    contentColor = AppColors.Cyan,
+                    edgePadding = 4.dp,
+                    divider = { HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp) },
+                ) {
+                    AppTab.entries.forEach { t ->
+                        Tab(
+                            selected = tab == t,
+                            onClick = { tab = t },
+                            selectedContentColor = AppColors.Cyan,
+                            unselectedContentColor = AppColors.TextDim,
+                            icon = {
+                                Icon(tabIcon(t), contentDescription = t.label, modifier = Modifier.size(AppDimens.icon))
+                            },
+                            text = { Text(t.label, style = techLabel(), maxLines = 1) },
                         )
-                        AppTab.Auto -> AutoTab(app, state)
-                        AppTab.Relay -> RelayTab(state, coreGranted, wifiGranted) { wifiPermLauncher.launch(wifiPerms.toTypedArray()) }
-                        AppTab.Logs -> LogsTab(app, state)
-                        AppTab.Map -> MapTab(app, state.storeRevision)
-                        AppTab.Diagnostics -> DiagnosticsTab(state)
-                        AppTab.Lab -> LabTabScreen(app, LocalContext.current, state.storeRevision, state.labLoadTick)
                     }
+                }
+            }
+        },
+    ) { pad ->
+        Column(Modifier.padding(pad).fillMaxSize()) {
+            TelemetryLine(state)
+            if (!coreGranted) {
+                Column(Modifier.padding(AppDimens.pad)) {
+                    Text("PERMS REQUIRED: BT · LOC · NOTIFY", style = techLabel(), color = AppColors.Amber)
+                    Spacer(Modifier.height(AppDimens.gap))
+                    OutlinedButton({ permLauncher.launch(allPerms.toTypedArray()) }) { Text("GRANT", style = techLabel()) }
+                }
+            } else {
+                val loadInLab: (String, String) -> Unit = { hex, label ->
+                    app.store.saveLabHex(HexUtils.canonicalHex(hex))
+                    app.store.saveLabLabel(label)
+                    ServiceState.requestLabLoad()
+                    tab = AppTab.Lab
+                }
+                when (tab) {
+                    AppTab.Scan -> ScanTab(state, loadInLab)
+                    AppTab.Transmit -> TransmitTab(app, state, loadInLab)
+                    AppTab.Wand -> WandTab(
+                        app = app,
+                        storeRevision = state.storeRevision,
+                        starlightLoopEnabled = state.starlightLoopEnabled,
+                        starlightLoopPacketId = state.starlightLoopPacketId,
+                        starlightIntervalMs = state.starlightIntervalMs,
+                        wandDisplayColorIndex = state.wandDisplayColorIndex,
+                        running = state.running,
+                    )
+                    AppTab.Auto -> AutoTab(app, state)
+                    AppTab.Relay -> RelayTab(state, coreGranted, wifiGranted) { wifiPermLauncher.launch(wifiPerms.toTypedArray()) }
+                    AppTab.Logs -> LogsTab(app, state)
+                    AppTab.Map -> MapTab(app, state.storeRevision)
+                    AppTab.Diagnostics -> DiagnosticsTab(state)
+                    AppTab.Lab -> LabTabScreen(app, LocalContext.current, state.storeRevision, state.labLoadTick)
                 }
             }
         }
