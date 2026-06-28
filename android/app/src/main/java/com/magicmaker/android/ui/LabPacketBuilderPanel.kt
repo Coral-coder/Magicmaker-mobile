@@ -3,7 +3,6 @@ package com.magicmaker.android.ui
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
@@ -54,6 +53,8 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
         )
 
         LabPacketBuilderPanel(
+            loadedHex = hex,
+            loadTick = labLoadTick,
             onHexBuilt = { built ->
                 hex = built
                 app.store.saveLabHex(built)
@@ -343,159 +344,201 @@ private fun TransmissionSettingsSection(
     }
 }
 
+/**
+ * Guided, type-first packet builder. The user starts by choosing ONE [LabPacketType]; only that
+ * type's controls (its color slots + vibration) are then shown, so the screen is never cluttered by
+ * other packet types' options. Loading a received packet ([loadTick] bump) decodes it straight into
+ * these fields so its variables can be tweaked.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LabPacketBuilderPanel(
+    loadedHex: String,
+    loadTick: Int,
     onHexBuilt: (String) -> Unit,
     onTransmit: (String) -> Unit,
 ) {
+    var selectedType by remember { mutableStateOf<LabPacketBuilder.LabPacketType?>(null) }
+    var colors by remember { mutableStateOf(listOf<Int>()) }
     var vibEnabled by remember { mutableStateOf(true) }
     var vibPattern by remember { mutableIntStateOf(PacketBuilder.Vibration.TRIPLE) }
-    var dualC1 by remember { mutableStateOf(PacketBuilder.Color.YELLOW_ORANGE) }
-    var dualC2 by remember { mutableStateOf(PacketBuilder.Color.BLUE) }
-    var crossC1 by remember { mutableStateOf(PacketBuilder.Color.RED) }
-    var crossC2 by remember { mutableStateOf(PacketBuilder.Color.BLUE) }
-    var rainbow by remember {
-        mutableStateOf(
-            listOf(
-                PacketBuilder.Color.YELLOW_ORANGE,
-                PacketBuilder.Color.RED,
-                PacketBuilder.Color.GREEN,
-                PacketBuilder.Color.BLUE,
-                PacketBuilder.Color.PURPLE,
-            ),
-        )
+    var rawHex by remember { mutableStateOf("") }
+    var loadMsg by remember { mutableStateOf<String?>(null) }
+
+    fun applyDecoded(d: LabPacketBuilder.Decoded) {
+        selectedType = d.type
+        colors = if (d.colors.isNotEmpty()) d.colors else LabPacketBuilder.defaultColors(d.type)
+        vibEnabled = d.vibEnabled
+        vibPattern = d.vibPattern
+        rawHex = d.rawHex
     }
 
+    // A received packet was just loaded into the Lab — decode it into the fields for editing.
+    LaunchedEffect(loadTick) {
+        if (loadTick > 0) {
+            LabPacketBuilder.decode(loadedHex)?.let {
+                applyDecoded(it)
+                loadMsg = "Loaded ${it.type.label} from received packet"
+            }
+        }
+    }
+
+    fun selectType(type: LabPacketBuilder.LabPacketType) {
+        selectedType = type
+        colors = LabPacketBuilder.defaultColors(type)
+        if (type == LabPacketBuilder.LabPacketType.RAW && rawHex.isBlank()) {
+            rawHex = loadedHex
+        }
+        loadMsg = null
+    }
+
+    fun currentHex(): String =
+        LabPacketBuilder.build(selectedType!!, colors, vibEnabled, vibPattern, rawHex)
+
     Column(verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
+        val type = selectedType
+        if (type == null) {
+            // ---- Step 1: choose a packet type ------------------------------------------------
+            Text("STEP 1 · CHOOSE A PACKET TYPE", style = techLabel(), color = AppColors.CyanDim)
+            FlowRowTypeGrid(onSelect = { selectType(it) })
+            Spacer(Modifier.height(2.dp))
+            OutlinedButton(
+                onClick = {
+                    val decoded = LabPacketBuilder.decode(loadedHex)
+                    if (decoded != null) {
+                        applyDecoded(decoded)
+                        loadMsg = "Loaded ${decoded.type.label} from current hex"
+                    } else {
+                        loadMsg = "Nothing to load — hex field is empty"
+                    }
+                },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier.height(28.dp),
+            ) { Text("LOAD CURRENT HEX INTO BUILDER", style = techLabel(), color = AppColors.Cyan) }
+            loadMsg?.let { Text(it, style = techLabel(), color = AppColors.TextDim) }
+            return@Column
+        }
+
+        // ---- Step 2: configure the chosen type ----------------------------------------------
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
         ) {
-            Text("VIB", style = techLabel(), color = AppColors.TextDim)
-            Switch(vibEnabled, { vibEnabled = it }, modifier = Modifier.height(24.dp))
-            PaletteDropdown(
-                label = "PAT",
-                selectedId = vibPattern,
-                options = LabPacketBuilder.vibrationPatterns.map { it.id to it.label },
-                onSelect = { vibPattern = it },
-                modifier = Modifier.weight(1f),
-            )
             OutlinedButton(
-                onClick = { onTransmit(LabPacketBuilder.buildPing()) },
+                onClick = { selectedType = null; loadMsg = null },
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                 modifier = Modifier.height(28.dp),
-            ) { Text("WAKE", style = techLabel()) }
-        }
-
-        Text("PRESETS", style = techLabel(), color = AppColors.CyanDim)
-        Text("PRIMARY", style = techLabel(), color = AppColors.TextDim)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            LabPacketBuilder.primaryPresetColors.forEach { color ->
-                OutlinedButton(
-                    onClick = {
-                        val built = LabPacketBuilder.buildPresetById(color.id, vibEnabled, vibPattern)
-                        onTransmit(built)
-                    },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    modifier = Modifier.height(28.dp),
-                ) { Text(color.label.uppercase(), style = techLabel()) }
-            }
-        }
-        Text("FULL PALETTE (0x00–0x1F)", style = techLabel(), color = AppColors.TextDim)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            LabPacketBuilder.paletteColors.forEach { color ->
-                OutlinedButton(
-                    onClick = {
-                        val built = LabPacketBuilder.buildPresetById(color.id, vibEnabled, vibPattern)
-                        onTransmit(built)
-                    },
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-                    modifier = Modifier.height(28.dp),
-                ) {
-                    Text(
-                        color.label,
-                        style = techLabel(),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+            ) { Text("‹ TYPE", style = techLabel()) }
+            Column(Modifier.weight(1f)) {
+                Text(type.label.uppercase(), style = techHeader())
+                Text(type.blurb, style = techLabel(), color = AppColors.TextDim, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
 
-        BuilderCard("DUAL COLOR") {
-            Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
-                PaletteDropdown("IN", dualC1, paletteOptions(), onSelect = { dualC1 = it })
-                PaletteDropdown("OUT", dualC2, paletteOptions(), onSelect = { dualC2 = it })
-            }
-            BuilderSendButton("BUILD DUAL") {
-                onHexBuilt(LabPacketBuilder.buildDual(dualC1, dualC2, vibEnabled, vibPattern))
-            }
-        }
+        loadMsg?.let { Text(it, style = techLabel(), color = AppColors.Cyan) }
 
-        BuilderCard("CROSSFADE") {
-            Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
-                PaletteDropdown("A", crossC1, paletteOptions(), onSelect = { crossC1 = it })
-                PaletteDropdown("B", crossC2, paletteOptions(), onSelect = { crossC2 = it })
-            }
-            BuilderSendButton("BUILD XFADE") {
-                onHexBuilt(LabPacketBuilder.buildCrossfade(crossC1, crossC2, vibEnabled, vibPattern))
-            }
-        }
-
-        BuilderCard("RAINBOW ×5") {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                rainbow.forEachIndexed { index, colorId ->
-                    PaletteDropdown(
-                        label = "${index + 1}",
-                        selectedId = colorId,
-                        options = paletteOptions(),
-                        onSelect = { picked ->
-                            rainbow = rainbow.toMutableList().also { it[index] = picked }
-                        },
-                        modifier = Modifier.widthIn(min = 88.dp),
-                    )
-                }
-            }
-            BuilderSendButton("BUILD RAINBOW") {
-                onHexBuilt(
-                    LabPacketBuilder.buildRainbow(
-                        rainbow[0], rainbow[1], rainbow[2], rainbow[3], rainbow[4],
-                        vibEnabled, vibPattern,
-                    ),
+        when (type) {
+            LabPacketBuilder.LabPacketType.RAW -> {
+                OutlinedTextField(
+                    rawHex,
+                    { rawHex = it.uppercase() },
+                    label = { Text("RAW HEX", style = techLabel()) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = techLabel().copy(color = AppColors.CyanDim),
                 )
             }
+            LabPacketBuilder.LabPacketType.PING -> {
+                Text(
+                    "No options — this wakes nearby bands. Send it just before a command if a band isn't reacting.",
+                    style = techLabel(),
+                    color = AppColors.TextDim,
+                )
+            }
+            else -> {
+                if (type.colorSlots > 0) {
+                    Text(
+                        if (type.colorSlots == 1) "STEP 2 · PICK A COLOR" else "STEP 2 · PICK ${type.colorSlots} COLORS",
+                        style = techLabel(),
+                        color = AppColors.CyanDim,
+                    )
+                    ColorSlots(type, colors, onChange = { colors = it })
+                }
+                if (type.supportsVib) {
+                    Text("STEP 3 · VIBRATION", style = techLabel(), color = AppColors.CyanDim)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Switch(vibEnabled, { vibEnabled = it }, modifier = Modifier.height(24.dp))
+                        PaletteDropdown(
+                            label = "PATTERN",
+                            selectedId = vibPattern,
+                            options = LabPacketBuilder.vibrationPatterns.map { it.id to it.label },
+                            onSelect = { vibPattern = it },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
         }
 
+        // ---- Build / send actions ------------------------------------------------------------
         Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
-            BuilderCard("CIRCLE", modifier = Modifier.weight(1f)) {
-                BuilderSendButton("BUILD CIRCLE") {
-                    onHexBuilt(LabPacketBuilder.buildCircle(vibEnabled, vibPattern))
-                }
-            }
-            BuilderCard("FINALE", modifier = Modifier.weight(1f)) {
-                BuilderSendButton("RAINBOW FX") {
-                    onHexBuilt(LabPacketBuilder.buildRainbowFinale())
-                }
-            }
-            BuilderCard("VIB ONLY", modifier = Modifier.weight(1f)) {
-                BuilderSendButton("VIB BAND") {
-                    onTransmit(LabPacketBuilder.buildVibrate(vibEnabled, vibPattern))
-                }
-            }
+            Button(
+                onClick = { onTransmit(currentHex()) },
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                modifier = Modifier.height(32.dp),
+            ) { Text("SEND NOW", style = techLabel()) }
+            OutlinedButton(
+                onClick = { onHexBuilt(currentHex()) },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(32.dp),
+            ) { Text("BUILD → HEX", style = techLabel(), color = AppColors.Cyan) }
         }
+    }
+}
 
-        BuilderCard("SHOW FX") {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                LabPacketBuilder.showEffects.forEach { (label, hex) ->
-                    OutlinedButton(
-                        onClick = { onTransmit(hex) },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                        modifier = Modifier.height(28.dp),
-                    ) { Text(label.uppercase(), style = techLabel()) }
-                }
-            }
+/** The packet-type chooser — one chip per [LabPacketBuilder.LabPacketType]. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FlowRowTypeGrid(onSelect: (LabPacketBuilder.LabPacketType) -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        LabPacketBuilder.LabPacketType.entries.forEach { type ->
+            OutlinedButton(
+                onClick = { onSelect(type) },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) { Text(type.label.uppercase(), style = techLabel(), color = AppColors.Cyan) }
+        }
+    }
+}
+
+/** One palette dropdown per color slot the [type] carries; full palette available for each. */
+@Composable
+private fun ColorSlots(
+    type: LabPacketBuilder.LabPacketType,
+    colors: List<Int>,
+    onChange: (List<Int>) -> Unit,
+) {
+    val slotLabels: (Int) -> String = when (type) {
+        LabPacketBuilder.LabPacketType.DUAL -> { i -> if (i == 0) "INNER" else "OUTER" }
+        LabPacketBuilder.LabPacketType.CROSSFADE -> { i -> if (i == 0) "FROM" else "TO" }
+        else -> { i -> "${i + 1}" }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (i in 0 until type.colorSlots) {
+            PaletteDropdown(
+                label = slotLabels(i),
+                selectedId = colors.getOrElse(i) { 0 },
+                options = paletteOptions(),
+                onSelect = { picked -> onChange(colors.toMutableList().also { it[i] = picked }) },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -589,28 +632,6 @@ private fun PacketInspector(hex: String, onHexChange: (String) -> Unit) {
             )
         }
     }
-}
-
-@Composable
-private fun BuilderCard(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier
-            .fillMaxWidth()
-            .padding(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(title, style = techLabel(), color = AppColors.CyanDim)
-        content()
-    }
-}
-
-@Composable
-private fun BuilderSendButton(text: String, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-        modifier = Modifier.height(28.dp),
-    ) { Text(text, style = techLabel(), color = AppColors.Cyan) }
 }
 
 private fun paletteOptions(): List<Pair<Int, String>> =
