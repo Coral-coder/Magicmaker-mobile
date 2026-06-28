@@ -332,10 +332,13 @@ class MagicStore(context: Context) {
 
     fun getWakeupPreambleMs(): Int =
         prefs.getInt("wakeup_preamble_ms", TransmitTiming.DEFAULT_WAKEUP_PRELUDE_MS)
-            .coerceIn(200, 1500)
+            .coerceIn(TransmitTiming.MIN_WAKEUP_PRELUDE_MS, TransmitTiming.MAX_WAKEUP_PRELUDE_MS)
 
     fun saveWakeupPreambleMs(ms: Int) {
-        prefs.edit().putInt("wakeup_preamble_ms", ms.coerceIn(200, 1500)).apply()
+        prefs.edit().putInt(
+            "wakeup_preamble_ms",
+            ms.coerceIn(TransmitTiming.MIN_WAKEUP_PRELUDE_MS, TransmitTiming.MAX_WAKEUP_PRELUDE_MS),
+        ).apply()
     }
 
     fun getCommandBurstMs(): Int =

@@ -16,10 +16,18 @@ object MagicClassifier {
             return ClassifiedPacket(normalized, entry.key, MagicCategory.SHOW, "show_block", "", "SHOW:$normalized")
         }
 
-        if (normalized.contains("CC03") && !normalized.contains("E9") &&
-            !normalized.contains("CF9B") && !normalized.contains("CF0B")
-        ) {
-            val pingLabel = if (normalized == "8301CC03000100") "Interaction Ping (Fast Mode)" else "Interaction Ping"
+        // Anchored to the 8301CC03 prefix (not a loose substring) so band telemetry that
+        // merely contains "CC03" in its rolling payload isn't mislabeled as a ping. The two
+        // bytes after CC03 distinguish the ping types seen in the parks.
+        if (normalized.startsWith("8301CC03") && !normalized.contains("E9")) {
+            val param = if (normalized.length >= 14) normalized.substring(8, 14) else normalized.substring(8)
+            val pingLabel = when (param) {
+                "000000" -> "Signal Beacon"
+                "000100" -> "Wake Ping"
+                "234100" -> "Show Ping (2341)"
+                "203000" -> "Show Ping (2030)"
+                else -> "Interaction Ping"
+            }
             return ClassifiedPacket(normalized, pingLabel, MagicCategory.SHOW, "ping", "", "PING:$normalized")
         }
 

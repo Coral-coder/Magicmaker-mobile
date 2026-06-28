@@ -210,7 +210,7 @@ private fun TransmissionSettingsSection(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("WAKE PREAMBLE", style = techLabel())
+                        Text("WAKE SLICE", style = techLabel())
                         Text("${displayMs.toInt()}ms", style = techLabel(), color = AppColors.Cyan)
                     }
                 },
@@ -218,11 +218,11 @@ private fun TransmissionSettingsSection(
                     preambleMs = ms
                     store.saveWakeupPreambleMs(ms.toInt())
                 },
-                valueRange = 200f..1500f,
-                steps = 25,
+                valueRange = TransmitTiming.MIN_WAKEUP_PRELUDE_MS.toFloat()..TransmitTiming.MAX_WAKEUP_PRELUDE_MS.toFloat(),
+                steps = 28,
             )
             Text(
-                "Ping before band command · default ${TransmitTiming.DEFAULT_WAKEUP_PRELUDE_MS}ms",
+                "Each wake/command slice in the 1:1 interleave · default ${TransmitTiming.DEFAULT_WAKEUP_PRELUDE_MS}ms",
                 style = techLabel(),
                 color = AppColors.TextDim,
             )
@@ -247,7 +247,7 @@ private fun TransmissionSettingsSection(
                 steps = 18,
             )
             Text(
-                "On-air time for packet after preamble · default ${TransmitTiming.COMMAND_BURST_MS}ms · global",
+                "Total wake+command interleave window · default ${TransmitTiming.COMMAND_BURST_MS}ms · global",
                 style = techLabel(),
                 color = AppColors.TextDim,
             )

@@ -5,7 +5,7 @@ import com.magicmaker.android.ble.BleAdvertiser
 /**
  * Single transmit API — esp32_magicband timing for all MagicBand commands.
  *
- * - Band commands: always 520ms wakeup ping → 2000ms command
+ * - Band commands: wake-ping and command interleaved 1:1 over the command-burst window
  * - Standalone ping only: 2000ms (no double-ping)
  * - Starlight wand: configurable burst (default 500ms), no band wakeup
  */
@@ -60,11 +60,27 @@ class MagicTransmitter(
     }
 
     private fun sendBandCommand(hex: String, onComplete: () -> Unit) {
-        val prelude = wakeupPreludeMs().coerceIn(200, 1500)
-        val burst = commandBurstMs().coerceIn(TransmitTiming.MIN_COMMAND_BURST_MS, TransmitTiming.MAX_COMMAND_BURST_MS)
-        ble.burst(PacketBuilder.WAKEUP_PING, prelude) {
-            ble.burst(hex, burst, onComplete)
+        // Mimic the parks: alternate one wake-ping slice and one command slice (1:1) until the
+        // total window elapses, so the command keeps re-firing while the band is being woken.
+        val slice = wakeupPreludeMs().coerceIn(
+            TransmitTiming.MIN_WAKEUP_PRELUDE_MS,
+            TransmitTiming.MAX_WAKEUP_PRELUDE_MS,
+        )
+        val total = commandBurstMs().coerceIn(
+            TransmitTiming.MIN_COMMAND_BURST_MS,
+            TransmitTiming.MAX_COMMAND_BURST_MS,
+        )
+        val cycles = (total / (slice * 2)).coerceAtLeast(1)
+        fun cycle(i: Int) {
+            if (i >= cycles) {
+                onComplete()
+                return
+            }
+            ble.burst(PacketBuilder.WAKEUP_PING, slice) {
+                ble.burst(hex, slice) { cycle(i + 1) }
+            }
         }
+        cycle(0)
     }
 
     private fun isStandalonePing(hex: String): Boolean =
