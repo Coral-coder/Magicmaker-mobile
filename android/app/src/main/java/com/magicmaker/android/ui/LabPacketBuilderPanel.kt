@@ -376,7 +376,7 @@ private fun LabPacketBuilderPanel(
     // A received packet was just loaded into the Lab — decode it into the fields for editing.
     LaunchedEffect(loadTick) {
         if (loadTick > 0) {
-            LabPacketBuilder.decode(loadedHex)?.let {
+            runCatching { LabPacketBuilder.decode(loadedHex) }.getOrNull()?.let {
                 applyDecoded(it)
                 loadMsg = "Loaded ${it.type.label} from received packet"
             }
@@ -416,87 +416,86 @@ private fun LabPacketBuilderPanel(
                 modifier = Modifier.height(28.dp),
             ) { Text("LOAD CURRENT HEX INTO BUILDER", style = techLabel(), color = AppColors.Cyan) }
             loadMsg?.let { Text(it, style = techLabel(), color = AppColors.TextDim) }
-            return@Column
-        }
-
-        // ---- Step 2: configure the chosen type ----------------------------------------------
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
-        ) {
-            OutlinedButton(
-                onClick = { selectedType = null; loadMsg = null },
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                modifier = Modifier.height(28.dp),
-            ) { Text("‹ TYPE", style = techLabel()) }
-            Column(Modifier.weight(1f)) {
-                Text(type.label.uppercase(), style = techHeader())
-                Text(type.blurb, style = techLabel(), color = AppColors.TextDim, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-        }
-
-        loadMsg?.let { Text(it, style = techLabel(), color = AppColors.Cyan) }
-
-        when (type) {
-            LabPacketBuilder.LabPacketType.RAW -> {
-                OutlinedTextField(
-                    rawHex,
-                    { rawHex = it.uppercase() },
-                    label = { Text("RAW HEX", style = techLabel()) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    textStyle = techLabel().copy(color = AppColors.CyanDim),
-                )
-            }
-            LabPacketBuilder.LabPacketType.PING -> {
-                Text(
-                    "No options — this wakes nearby bands. Send it just before a command if a band isn't reacting.",
-                    style = techLabel(),
-                    color = AppColors.TextDim,
-                )
-            }
-            else -> {
-                if (type.colorSlots > 0) {
-                    Text(
-                        if (type.colorSlots == 1) "STEP 2 · PICK A COLOR" else "STEP 2 · PICK ${type.colorSlots} COLORS",
-                        style = techLabel(),
-                        color = AppColors.CyanDim,
-                    )
-                    ColorSlots(type, colors, onChange = { colors = it })
+        } else {
+            // ---- Step 2: configure the chosen type ------------------------------------------
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
+            ) {
+                OutlinedButton(
+                    onClick = { selectedType = null; loadMsg = null },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier.height(28.dp),
+                ) { Text("‹ TYPE", style = techLabel()) }
+                Column(Modifier.weight(1f)) {
+                    Text(type.label.uppercase(), style = techHeader())
+                    Text(type.blurb, style = techLabel(), color = AppColors.TextDim, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
-                if (type.supportsVib) {
-                    Text("STEP 3 · VIBRATION", style = techLabel(), color = AppColors.CyanDim)
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Switch(vibEnabled, { vibEnabled = it }, modifier = Modifier.height(24.dp))
-                        PaletteDropdown(
-                            label = "PATTERN",
-                            selectedId = vibPattern,
-                            options = LabPacketBuilder.vibrationPatterns.map { it.id to it.label },
-                            onSelect = { vibPattern = it },
-                            modifier = Modifier.weight(1f),
+            }
+
+            loadMsg?.let { Text(it, style = techLabel(), color = AppColors.Cyan) }
+
+            when (type) {
+                LabPacketBuilder.LabPacketType.RAW -> {
+                    OutlinedTextField(
+                        rawHex,
+                        { rawHex = it.uppercase() },
+                        label = { Text("RAW HEX", style = techLabel()) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        textStyle = techLabel().copy(color = AppColors.CyanDim),
+                    )
+                }
+                LabPacketBuilder.LabPacketType.PING -> {
+                    Text(
+                        "No options — this wakes nearby bands. Send it just before a command if a band isn't reacting.",
+                        style = techLabel(),
+                        color = AppColors.TextDim,
+                    )
+                }
+                else -> {
+                    if (type.colorSlots > 0) {
+                        Text(
+                            if (type.colorSlots == 1) "STEP 2 · PICK A COLOR" else "STEP 2 · PICK ${type.colorSlots} COLORS",
+                            style = techLabel(),
+                            color = AppColors.CyanDim,
                         )
+                        ColorSlots(type, colors, onChange = { colors = it })
+                    }
+                    if (type.supportsVib) {
+                        Text("STEP 3 · VIBRATION", style = techLabel(), color = AppColors.CyanDim)
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Switch(vibEnabled, { vibEnabled = it }, modifier = Modifier.height(24.dp))
+                            PaletteDropdown(
+                                label = "PATTERN",
+                                selectedId = vibPattern,
+                                options = LabPacketBuilder.vibrationPatterns.map { it.id to it.label },
+                                onSelect = { vibPattern = it },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        // ---- Build / send actions ------------------------------------------------------------
-        Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
-            Button(
-                onClick = { onTransmit(currentHex()) },
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                modifier = Modifier.height(32.dp),
-            ) { Text("SEND NOW", style = techLabel()) }
-            OutlinedButton(
-                onClick = { onHexBuilt(currentHex()) },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                modifier = Modifier.height(32.dp),
-            ) { Text("BUILD → HEX", style = techLabel(), color = AppColors.Cyan) }
+            // ---- Build / send actions ---------------------------------------------------------
+            Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
+                Button(
+                    onClick = { onTransmit(currentHex()) },
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp),
+                ) { Text("SEND NOW", style = techLabel()) }
+                OutlinedButton(
+                    onClick = { onHexBuilt(currentHex()) },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(32.dp),
+                ) { Text("BUILD → HEX", style = techLabel(), color = AppColors.Cyan) }
+            }
         }
     }
 }
