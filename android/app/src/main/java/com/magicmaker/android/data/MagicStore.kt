@@ -531,7 +531,9 @@ class MagicStore(context: Context) {
                 if (persistToSession) persistRecording(classified, rssi, it.reason, address, lat, lng, accuracy)
             }
         } else {
-            hearRawPacket(canonical, rssi).also {
+            // Telemetry from a MAC the user tagged as their own band is whitelisted (saved);
+            // every other guest band stays filtered out.
+            hearRawPacket(canonical, rssi, allowNoise = isBandAddress(address)).also {
                 if (persistToSession) {
                     persistRecording(
                         ClassifiedPacket(canonical, it.packet.label, MagicCategory.UNKNOWN, "raw", "", it.packet.simKey),
@@ -630,10 +632,10 @@ class MagicStore(context: Context) {
      * only against the exact same hex). Learned on first sight; repeats are O(1) no-ops. Saves
      * are coalesced and the count is capped so a packet flood can't stall the app.
      */
-    private fun hearRawPacket(hex: String, rssi: Int, label: String? = null): RecordEvent {
+    private fun hearRawPacket(hex: String, rssi: Int, label: String? = null, allowNoise: Boolean = false): RecordEvent {
         val canonical = HexUtils.canonicalHex(hex)
         val displayLabel = label ?: MagicClassifier.rawLabel(canonical)
-        if (MagicClassifier.isLibraryNoise(canonical)) {
+        if (!allowNoise && MagicClassifier.isLibraryNoise(canonical)) {
             return RecordEvent(rawPreview(canonical, displayLabel, rssi), false, "Band/ping (not saved)")
         }
         if (canonical in rawHexIndex) {
