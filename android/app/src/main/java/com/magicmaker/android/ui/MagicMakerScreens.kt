@@ -53,6 +53,7 @@ private enum class AppTab(val label: String) {
     Map("MAP"),
     Diagnostics("DIAG"),
     Lab("LAB"),
+    Settings("SETTINGS"),
 }
 
 private fun tabIcon(t: AppTab): ImageVector = when (t) {
@@ -65,6 +66,7 @@ private fun tabIcon(t: AppTab): ImageVector = when (t) {
     AppTab.Map -> Icons.Default.Place
     AppTab.Diagnostics -> Icons.Default.Insights
     AppTab.Lab -> Icons.Default.Science
+    AppTab.Settings -> Icons.Default.Settings
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -203,6 +205,7 @@ fun MagicMakerAppRoot() {
                     AppTab.Map -> MapTab(app, state.storeRevision)
                     AppTab.Diagnostics -> DiagnosticsTab(state)
                     AppTab.Lab -> LabTabScreen(app, LocalContext.current, state.storeRevision, state.labLoadTick)
+                    AppTab.Settings -> SettingsTabScreen(app, state.storeRevision)
                 }
             }
         }

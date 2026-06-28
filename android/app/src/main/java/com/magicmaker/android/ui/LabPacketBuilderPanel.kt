@@ -39,12 +39,6 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
     val myPresets = remember(storeRev) { app.store.customPresets }
 
     Column(Modifier.fillMaxSize()) {
-        TransmissionSettingsSection(
-            app.store,
-            storeRev = storeRev,
-            modifier = Modifier.padding(AppDimens.pad),
-        )
-        HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
         Column(
             Modifier
                 .weight(1f)
@@ -163,6 +157,27 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
             }
         }
         }
+    }
+}
+
+/** Dedicated Settings page — global transmission tuning lives here, not scattered in tabs. */
+@Composable
+fun SettingsTabScreen(app: MagicMakerApp, storeRev: Int = 0) {
+    val scroll = rememberScrollState()
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(scroll)
+            .padding(AppDimens.pad),
+        verticalArrangement = Arrangement.spacedBy(AppDimens.gap),
+    ) {
+        Text("SETTINGS", style = techHeader())
+        Text(
+            "Global transmission tuning — applies to every TX.",
+            style = techLabel(),
+            color = AppColors.TextDim,
+        )
+        TransmissionSettingsSection(app.store, storeRev = storeRev)
     }
 }
 
