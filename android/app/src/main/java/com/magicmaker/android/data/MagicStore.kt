@@ -352,6 +352,15 @@ class MagicStore(context: Context) {
         ).apply()
     }
 
+    /** TX mode: true = 1:1 wake/command interleave (lighter, good in-park); false = sustained
+     * wake stream then command stream (stronger wake). Default sustained. */
+    fun getTxInterleave(): Boolean = prefs.getBoolean("tx_interleave", false)
+
+    fun saveTxInterleave(on: Boolean) {
+        prefs.edit().putBoolean("tx_interleave", on).apply()
+        ServiceState.bumpStoreRevision()
+    }
+
     fun getStarlightBurstMs(): Int =
         prefs.getInt("starlight_burst_ms", TransmitTiming.STARLIGHT_BURST_MS)
             .coerceIn(TransmitTiming.MIN_STARLIGHT_BURST_MS, TransmitTiming.MAX_STARLIGHT_BURST_MS)

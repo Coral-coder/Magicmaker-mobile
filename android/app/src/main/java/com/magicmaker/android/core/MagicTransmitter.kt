@@ -14,6 +14,7 @@ class MagicTransmitter(
     private val wakeupPreludeMs: () -> Int = { TransmitTiming.DEFAULT_WAKEUP_PRELUDE_MS },
     private val commandBurstMs: () -> Int = { TransmitTiming.COMMAND_BURST_MS },
     private val starlightBurstMs: () -> Int = { TransmitTiming.STARLIGHT_BURST_MS },
+    private val interleaveMode: () -> Boolean = { false },
 ) {
     /** Set true to bail out of an in-flight interleave/sequence so a newer command can take over. */
     @Volatile
@@ -82,16 +83,39 @@ class MagicTransmitter(
     }
 
     private fun sendBandCommand(hex: String, onComplete: () -> Unit) {
-        // Mimic the parks: alternate one wake-ping slice and one command slice (1:1) until the
-        // total window elapses, so the command keeps re-firing while the band is being woken.
-        val slice = wakeupPreludeMs().coerceIn(
+        val wake = wakeupPreludeMs().coerceIn(
             TransmitTiming.MIN_WAKEUP_PRELUDE_MS,
             TransmitTiming.MAX_WAKEUP_PRELUDE_MS,
         )
-        val total = commandBurstMs().coerceIn(
+        val cmd = commandBurstMs().coerceIn(
             TransmitTiming.MIN_COMMAND_BURST_MS,
             TransmitTiming.MAX_COMMAND_BURST_MS,
         )
+        if (interleaveMode()) sendInterleaved(hex, wake, cmd, onComplete)
+        else sendSustained(hex, wake, cmd, onComplete)
+    }
+
+    /** Sustained (default): stream the wake continuously, then stream the command continuously —
+     * matches the parks (long wake, then the effect) and gives the band time to latch. Here the
+     * WAKE slider = wake stream length, the COMMAND slider = command stream length. */
+    private fun sendSustained(hex: String, wakeMs: Int, cmdMs: Int, onComplete: () -> Unit) {
+        if (cancelled) {
+            onComplete()
+            return
+        }
+        ble.burst(PacketBuilder.WAKEUP_PING, wakeMs) {
+            if (cancelled) {
+                onComplete()
+                return@burst
+            }
+            ble.burst(hex, cmdMs, onComplete)
+        }
+    }
+
+    /** Interleave: alternate one wake slice and one command slice (1:1) until the total window
+     * elapses. Lighter — good in-park where infrastructure is already waking the band. Here the
+     * WAKE slider = per-slice length, the COMMAND slider = total window. */
+    private fun sendInterleaved(hex: String, slice: Int, total: Int, onComplete: () -> Unit) {
         val cycles = (total / (slice * 2)).coerceAtLeast(1)
         fun cycle(i: Int) {
             if (cancelled || i >= cycles) {

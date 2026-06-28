@@ -177,11 +177,13 @@ private fun TransmissionSettingsSection(
     var preambleMs by remember { mutableFloatStateOf(store.getWakeupPreambleMs().toFloat()) }
     var burstMs by remember { mutableFloatStateOf(store.getCommandBurstMs().toFloat()) }
     var starlightMs by remember { mutableFloatStateOf(store.getStarlightBurstMs().toFloat()) }
+    var interleave by remember { mutableStateOf(store.getTxInterleave()) }
 
     LaunchedEffect(storeRev) {
         preambleMs = store.getWakeupPreambleMs().toFloat()
         burstMs = store.getCommandBurstMs().toFloat()
         starlightMs = store.getStarlightBurstMs().toFloat()
+        interleave = store.getTxInterleave()
     }
 
     LaunchedEffect(collapsed) { UiPrefs.saveLabTransmissionSettingsCollapsed(ctx, collapsed) }
@@ -202,6 +204,32 @@ private fun TransmissionSettingsSection(
             Text("TRANSMISSION SETTINGS", style = techHeader(), modifier = Modifier.weight(1f).padding(start = 4.dp))
         }
         if (!collapsed) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (interleave) "TX MODE: INTERLEAVE" else "TX MODE: SUSTAINED",
+                    style = techLabel(),
+                    color = AppColors.Cyan,
+                )
+                Switch(
+                    checked = interleave,
+                    onCheckedChange = { interleave = it; store.saveTxInterleave(it) },
+                    modifier = Modifier.height(24.dp),
+                )
+            }
+            Text(
+                if (interleave) {
+                    "Alternates wake/command slices — lighter, good in-park. WAKE=slice, COMMAND=total window."
+                } else {
+                    "Sustained wake stream, then command stream — strongest wake. WAKE=wake length, COMMAND=command length."
+                },
+                style = techLabel(),
+                color = AppColors.TextDim,
+            )
+            Spacer(Modifier.height(4.dp))
             SettingSlider(
                 committedValue = preambleMs,
                 label = { displayMs ->

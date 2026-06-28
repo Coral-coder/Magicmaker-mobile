@@ -431,6 +431,7 @@ class MagicMakerForegroundService : Service() {
             { store.getWakeupPreambleMs() },
             { store.getCommandBurstMs() },
             { store.getStarlightBurstMs() },
+            { store.getTxInterleave() },
         )
         bleScanner = BleScanner(
             onDisneyPacket = { hex, rssi, address -> onHeard(hex, rssi, address) },
