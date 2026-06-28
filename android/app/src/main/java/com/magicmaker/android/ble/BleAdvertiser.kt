@@ -8,7 +8,14 @@ import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Raw Disney manufacturer ADV bursts — timing/wakeup handled by [com.magicmaker.android.core.MagicTransmitter]. */
+/**
+ * Raw Disney manufacturer ADV bursts — timing/wakeup handled by
+ * [com.magicmaker.android.core.MagicTransmitter].
+ *
+ * Hardened so a burst doesn't silently vanish: if the radio is mid-settle it waits and
+ * retries instead of dropping, and a failed startAdvertising is retried (incl. the common
+ * ALREADY_STARTED race) before giving up. The goal is "a tap always goes on air."
+ */
 class BleAdvertiser(
     private val advertiser: BluetoothLeAdvertiser?,
     private val onStatus: (String) -> Unit,
@@ -45,11 +52,34 @@ class BleAdvertiser(
             onComplete()
             return
         }
+        attemptStart(manufacturerId, payload, durationMs, onComplete, tries = 0, busyWaits = 0)
+    }
+
+    private fun attemptStart(
+        manufacturerId: Int,
+        payload: ByteArray,
+        durationMs: Int,
+        onComplete: () -> Unit,
+        tries: Int,
+        busyWaits: Int,
+    ) {
+        // Wait (don't drop) if a previous burst is still settling.
         if (!busy.compareAndSet(false, true)) {
-            onStatus("Radio busy")
-            onComplete()
+            if (busyWaits >= MAX_BUSY_WAITS) {
+                onStatus("Radio busy — dropped")
+                onComplete()
+                return
+            }
+            handler.postDelayed(
+                { attemptStart(manufacturerId, payload, durationMs, onComplete, tries, busyWaits + 1) },
+                BUSY_WAIT_MS,
+            )
             return
         }
+
+        // Clean slate — clear any lingering advertise so we don't hit ALREADY_STARTED.
+        activeCallback?.let { runCatching { advertiser?.stopAdvertising(it) } }
+        activeCallback = null
 
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
@@ -70,12 +100,33 @@ class BleAdvertiser(
 
             override fun onStartFailure(errorCode: Int) {
                 busy.set(false)
-                onStatus("Advertise error $errorCode")
-                onComplete()
+                activeCallback = null
+                if (tries < MAX_START_RETRIES) {
+                    onStatus("Advertise retry ($errorCode)")
+                    handler.postDelayed(
+                        { attemptStart(manufacturerId, payload, durationMs, onComplete, tries + 1, 0) },
+                        START_RETRY_MS,
+                    )
+                } else {
+                    onStatus("Advertise error $errorCode")
+                    onComplete()
+                }
             }
         }
         activeCallback = cb
-        advertiser.startAdvertising(settings, data, cb)
+        runCatching { advertiser?.startAdvertising(settings, data, cb) }.onFailure {
+            busy.set(false)
+            activeCallback = null
+            if (tries < MAX_START_RETRIES) {
+                handler.postDelayed(
+                    { attemptStart(manufacturerId, payload, durationMs, onComplete, tries + 1, 0) },
+                    START_RETRY_MS,
+                )
+            } else {
+                onStatus("Advertise failed: ${it.message ?: "exception"}")
+                onComplete()
+            }
+        }
     }
 
     fun stopAll() {
@@ -89,5 +140,12 @@ class BleAdvertiser(
             busy.set(false)
             onComplete()
         }, com.magicmaker.android.core.TransmitTiming.RADIO_SETTLE_MS)
+    }
+
+    private companion object {
+        const val MAX_BUSY_WAITS = 12      // ~1.2s of waiting for the radio to free up
+        const val BUSY_WAIT_MS = 100L
+        const val MAX_START_RETRIES = 3
+        const val START_RETRY_MS = 180L
     }
 }
