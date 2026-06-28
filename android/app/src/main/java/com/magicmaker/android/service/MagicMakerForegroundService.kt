@@ -638,13 +638,18 @@ class MagicMakerForegroundService : Service() {
             pauseScanNow()
             pauseGattForManufacturerTx()
             publishStatus(status)
-            send {
-                resumeGattAfterManufacturerTx()
-                publishStatus(onCompleteStatus)
-                scheduleResumeScan()
-                afterComplete?.invoke()
-                finishRadioWork()
-            }
+            // stopScan() is async at the radio level — give it a beat to tear down before we
+            // advertise, otherwise the BLE stack drops/delays the advertise while a scan is
+            // still active ("doesn't send in time" when scanning).
+            mainHandler.postDelayed({
+                send {
+                    resumeGattAfterManufacturerTx()
+                    publishStatus(onCompleteStatus)
+                    scheduleResumeScan()
+                    afterComplete?.invoke()
+                    finishRadioWork()
+                }
+            }, TransmitTiming.RADIO_SETTLE_MS)
         }
     }
 
