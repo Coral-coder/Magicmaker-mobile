@@ -15,7 +15,25 @@ class MagicTransmitter(
     private val commandBurstMs: () -> Int = { TransmitTiming.COMMAND_BURST_MS },
     private val starlightBurstMs: () -> Int = { TransmitTiming.STARLIGHT_BURST_MS },
 ) {
+    /** Set true to bail out of an in-flight interleave/sequence so a newer command can take over. */
+    @Volatile
+    private var cancelled = false
+
+    /** Request the current transmission abort at its next slice boundary. */
+    fun cancel() {
+        cancelled = true
+    }
+
+    /** Re-arm before a fresh transmission (called by the service when a new radio job starts). */
+    fun clearCancel() {
+        cancelled = false
+    }
+
     fun ping(onComplete: () -> Unit = {}) {
+        if (cancelled) {
+            onComplete()
+            return
+        }
         ble.burst(PacketBuilder.WAKEUP_PING, TransmitTiming.PING_BURST_MS, onComplete)
     }
 
@@ -29,6 +47,10 @@ class MagicTransmitter(
 
     /** Any MagicBand packet (presets, lab hex, auto-response). */
     fun send(hex: String, onComplete: () -> Unit = {}) {
+        if (cancelled) {
+            onComplete()
+            return
+        }
         val canonical = HexUtils.canonicalHex(hex)
         when {
             isStarlight(canonical) -> {
@@ -50,7 +72,7 @@ class MagicTransmitter(
             return
         }
         fun sendAt(index: Int) {
-            if (index >= list.size) {
+            if (cancelled || index >= list.size) {
                 onComplete()
                 return
             }
@@ -72,11 +94,15 @@ class MagicTransmitter(
         )
         val cycles = (total / (slice * 2)).coerceAtLeast(1)
         fun cycle(i: Int) {
-            if (i >= cycles) {
+            if (cancelled || i >= cycles) {
                 onComplete()
                 return
             }
             ble.burst(PacketBuilder.WAKEUP_PING, slice) {
+                if (cancelled) {
+                    onComplete()
+                    return@burst
+                }
                 ble.burst(hex, slice) { cycle(i + 1) }
             }
         }

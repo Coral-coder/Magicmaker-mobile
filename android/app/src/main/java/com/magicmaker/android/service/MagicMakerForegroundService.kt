@@ -609,8 +609,14 @@ class MagicMakerForegroundService : Service() {
         gattServer?.resumeConnectableAdvertising()
     }
 
-    private fun enqueueRadioWork(work: () -> Unit) {
+    private fun enqueueRadioWork(preempt: Boolean = false, work: () -> Unit) {
         mainHandler.post {
+            if (preempt) {
+                // A new manual command supersedes anything pending/in-flight: drop the queued
+                // backlog and signal the running transmission to abort at its next slice.
+                txQueue.clear()
+                transmitter?.cancel()
+            }
             txQueue.addLast(work)
             drainRadioQueue()
         }
@@ -619,6 +625,7 @@ class MagicMakerForegroundService : Service() {
     private fun drainRadioQueue() {
         if (txRunning || txQueue.isEmpty()) return
         txRunning = true
+        transmitter?.clearCancel()
         txQueue.removeFirst()()
     }
 
@@ -633,8 +640,9 @@ class MagicMakerForegroundService : Service() {
         onCompleteStatus: String,
         send: (onDone: () -> Unit) -> Unit,
         afterComplete: (() -> Unit)? = null,
+        preempt: Boolean = false,
     ) {
-        enqueueRadioWork {
+        enqueueRadioWork(preempt) {
             pauseScanNow()
             pauseGattForManufacturerTx()
             publishStatus(status)
@@ -672,6 +680,8 @@ class MagicMakerForegroundService : Service() {
             send = { onDone ->
                 if (transmitter != null) transmitter?.send(txHex, onDone) else onDone()
             },
+            // A tap supersedes whatever is in flight or queued, so it goes out right away.
+            preempt = true,
         )
     }
 
