@@ -352,6 +352,15 @@ class MagicStore(context: Context) {
         ).apply()
     }
 
+    /** Broadcast strength 0..3 = ULTRA_LOW/LOW/MEDIUM/HIGH advertise TX power. Lower = shorter
+     * range (fewer nearby bands react). Default HIGH (3). */
+    fun getTxPowerLevel(): Int = prefs.getInt("tx_power_level", 3).coerceIn(0, 3)
+
+    fun saveTxPowerLevel(level: Int) {
+        prefs.edit().putInt("tx_power_level", level.coerceIn(0, 3)).apply()
+        ServiceState.bumpStoreRevision()
+    }
+
     /** TX mode: true = 1:1 wake/command interleave (lighter, good in-park); false = sustained
      * wake stream then command stream (stronger wake). Default sustained. */
     fun getTxInterleave(): Boolean = prefs.getBoolean("tx_interleave", false)

@@ -425,7 +425,11 @@ class MagicMakerForegroundService : Service() {
             .putBoolean(PREF_SERVICE_STARTED, true)
             .apply()
 
-        bleAdvertiser = BleAdvertiser(adapter.bluetoothLeAdvertiser) { msg -> publishStatus(msg) }
+        bleAdvertiser = BleAdvertiser(
+            adapter.bluetoothLeAdvertiser,
+            onStatus = { msg -> publishStatus(msg) },
+            txPowerLevel = { store.getTxPowerLevel() },
+        )
         transmitter = MagicTransmitter(
             bleAdvertiser!!,
             { store.getWakeupPreambleMs() },

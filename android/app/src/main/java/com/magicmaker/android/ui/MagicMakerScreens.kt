@@ -155,7 +155,7 @@ fun MagicMakerAppRoot() {
                     divider = { HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp) },
                 ) {
                     AppTab.entries.forEach { t ->
-                        Tab(
+                        LeadingIconTab(
                             selected = tab == t,
                             onClick = { tab = t },
                             selectedContentColor = AppColors.Cyan,

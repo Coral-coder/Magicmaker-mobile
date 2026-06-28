@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class BleAdvertiser(
     private val advertiser: BluetoothLeAdvertiser?,
     private val onStatus: (String) -> Unit,
+    private val txPowerLevel: () -> Int = { AdvertiseSettings.ADVERTISE_TX_POWER_HIGH },
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val busy = AtomicBoolean(false)
@@ -83,7 +84,12 @@ class BleAdvertiser(
 
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setTxPowerLevel(
+                txPowerLevel().coerceIn(
+                    AdvertiseSettings.ADVERTISE_TX_POWER_ULTRA_LOW,
+                    AdvertiseSettings.ADVERTISE_TX_POWER_HIGH,
+                ),
+            )
             .setConnectable(false)
             .setTimeout(0)
             .build()

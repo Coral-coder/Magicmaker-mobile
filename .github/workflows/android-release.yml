@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release, e.g. v1.0.1 (blank = build artifact only, no Release)"
+        description: "Base version, e.g. v1.1.0 (a -YYYYMMDD-HHMM stamp is appended). Blank = use .github/RELEASE_VERSION + stamp."
         required: false
         default: ""
   push:
@@ -56,15 +56,18 @@ jobs:
       - name: Resolve version
         id: ver
         run: |
+          # Build stamp (UTC) appended to the base so every build is uniquely versioned
+          # without hand-bumping a patch number. e.g. base "v1.1.0" -> "v1.1.0-20260628-1255".
+          STAMP="$(date -u +%Y%m%d-%H%M)"
           if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
             echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           elif [ -n "${{ inputs.version }}" ]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "version=${{ inputs.version }}-${STAMP}" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           elif [ -f .github/RELEASE_VERSION ]; then
-            V="$(tr -d ' \t\r\n' < .github/RELEASE_VERSION)"
-            echo "version=$V" >> "$GITHUB_OUTPUT"
+            BASE="$(tr -d ' \t\r\n' < .github/RELEASE_VERSION)"
+            echo "version=${BASE}-${STAMP}" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "version=0.0.0-dev${{ github.run_number }}" >> "$GITHUB_OUTPUT"

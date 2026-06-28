@@ -178,12 +178,14 @@ private fun TransmissionSettingsSection(
     var burstMs by remember { mutableFloatStateOf(store.getCommandBurstMs().toFloat()) }
     var starlightMs by remember { mutableFloatStateOf(store.getStarlightBurstMs().toFloat()) }
     var interleave by remember { mutableStateOf(store.getTxInterleave()) }
+    var txPower by remember { mutableIntStateOf(store.getTxPowerLevel()) }
 
     LaunchedEffect(storeRev) {
         preambleMs = store.getWakeupPreambleMs().toFloat()
         burstMs = store.getCommandBurstMs().toFloat()
         starlightMs = store.getStarlightBurstMs().toFloat()
         interleave = store.getTxInterleave()
+        txPower = store.getTxPowerLevel()
     }
 
     LaunchedEffect(collapsed) { UiPrefs.saveLabTransmissionSettingsCollapsed(ctx, collapsed) }
@@ -226,6 +228,24 @@ private fun TransmissionSettingsSection(
                 } else {
                     "Sustained wake stream, then command stream — strongest wake. WAKE=wake length, COMMAND=command length."
                 },
+                style = techLabel(),
+                color = AppColors.TextDim,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text("BROADCAST STRENGTH", style = techLabel(), color = AppColors.TextDim)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("MIN", "LOW", "MED", "MAX").forEachIndexed { idx, name ->
+                    OutlinedButton(
+                        onClick = { txPower = idx; store.saveTxPowerLevel(idx) },
+                        modifier = Modifier.weight(1f).height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                    ) {
+                        Text(name, style = techLabel(), color = if (txPower == idx) AppColors.Cyan else AppColors.TextDim)
+                    }
+                }
+            }
+            Text(
+                "Lower = shorter range, fewer nearby bands react · default MAX",
                 style = techLabel(),
                 color = AppColors.TextDim,
             )
