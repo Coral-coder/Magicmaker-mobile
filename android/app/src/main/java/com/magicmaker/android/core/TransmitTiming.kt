@@ -14,7 +14,7 @@ object TransmitTiming {
     const val MAX_COMMAND_BURST_MS = 12000
     const val PING_BURST_MS = 2000
     const val DEFAULT_WAKEUP_PRELUDE_MS = 520
-    const val MIN_WAKEUP_PRELUDE_MS = 200
+    const val MIN_WAKEUP_PRELUDE_MS = 100
     const val MAX_WAKEUP_PRELUDE_MS = 3000
     /** @deprecated use [DEFAULT_WAKEUP_PRELUDE_MS] or runtime store value */
     const val WAKEUP_PRELUDE_MS = DEFAULT_WAKEUP_PRELUDE_MS

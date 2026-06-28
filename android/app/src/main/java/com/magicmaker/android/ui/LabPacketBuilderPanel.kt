@@ -282,7 +282,7 @@ private fun TransmissionSettingsSection(
                     store.saveWakeupPreambleMs(ms.toInt())
                 },
                 valueRange = TransmitTiming.MIN_WAKEUP_PRELUDE_MS.toFloat()..TransmitTiming.MAX_WAKEUP_PRELUDE_MS.toFloat(),
-                steps = 28,
+                step = 50f,
             )
             Text(
                 "Each wake/command slice in the 1:1 interleave · default ${TransmitTiming.DEFAULT_WAKEUP_PRELUDE_MS}ms",
@@ -307,7 +307,7 @@ private fun TransmissionSettingsSection(
                     store.saveCommandBurstMs(ms.toInt())
                 },
                 valueRange = TransmitTiming.MIN_COMMAND_BURST_MS.toFloat()..TransmitTiming.MAX_COMMAND_BURST_MS.toFloat(),
-                steps = 18,
+                step = 50f,
             )
             Text(
                 "Total wake+command interleave window · default ${TransmitTiming.COMMAND_BURST_MS}ms · global",
