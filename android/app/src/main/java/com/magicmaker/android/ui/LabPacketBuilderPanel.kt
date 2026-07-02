@@ -27,6 +27,7 @@ import com.magicmaker.android.core.PacketBuilder
 import com.magicmaker.android.core.TransmitTiming
 import com.magicmaker.android.data.MagicStore
 import com.magicmaker.android.service.MagicMakerForegroundService
+import com.magicmaker.android.service.ServiceState
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
@@ -125,6 +126,9 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
             )
         }
 
+        HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
+        RandomLightShowSection(ctx)
+
         if (myPresets.isNotEmpty()) {
             HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
             Text("MY PRESETS (${myPresets.size})", style = techHeader())
@@ -157,6 +161,79 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
                 HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
             }
         }
+        }
+    }
+}
+
+/**
+ * Random light show — the service loops surprise packets (random type + colors, occasional
+ * buzz) at a configurable interval until stopped. Runs in the foreground service, so it keeps
+ * playing across tab switches and with the screen off.
+ */
+@Composable
+private fun RandomLightShowSection(ctx: Context) {
+    val svc by ServiceState.state.collectAsState()
+    var intervalMs by remember { mutableFloatStateOf(ServiceState.state.value.randomShowIntervalMs.toFloat()) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("RANDOM LIGHT SHOW", style = techHeader())
+        Text(
+            "Shoots a surprise packet — colors, duals, fades, rainbows, effects — on a loop until stopped.",
+            style = techLabel(),
+            color = AppColors.TextDim,
+        )
+        SettingSlider(
+            committedValue = intervalMs,
+            label = { displayMs ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("INTERVAL", style = techLabel())
+                    Text("${displayMs.toInt()}ms", style = techLabel(), color = AppColors.Cyan)
+                }
+            },
+            onCommit = { ms ->
+                intervalMs = ms
+                // Live-adjust the pace mid-show; otherwise just remembered for START.
+                if (svc.randomShowEnabled) {
+                    MagicMakerForegroundService.setRandomShow(ctx, true, ms.toLong())
+                }
+            },
+            valueRange = 500f..30_000f,
+            step = 250f,
+        )
+        Text(
+            "Pause between packets (each packet also plays for the command burst time).",
+            style = techLabel(),
+            color = AppColors.TextDim,
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(
+                onClick = {
+                    MagicMakerForegroundService.setRandomShow(
+                        ctx,
+                        enabled = !svc.randomShowEnabled,
+                        intervalMs = intervalMs.toLong(),
+                    )
+                },
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                modifier = Modifier.height(32.dp),
+            ) { Text(if (svc.randomShowEnabled) "STOP SHOW" else "START SHOW", style = techLabel()) }
+            if (svc.randomShowEnabled) {
+                Text(
+                    svc.randomShowLabel.ifBlank { "Rolling the dice…" }.uppercase(),
+                    style = techLabel(),
+                    color = AppColors.Cyan,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
