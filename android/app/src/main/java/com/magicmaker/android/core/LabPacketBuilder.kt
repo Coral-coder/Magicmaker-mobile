@@ -177,6 +177,50 @@ object LabPacketBuilder {
         }
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Random light show: each call composes one surprise packet — random type, random colors,
+    // occasional haptic accent — so a loop of these plays as a varied show rather than a strobe
+    // of the same effect.
+    // ---------------------------------------------------------------------------------------------
+
+    /** Palette ids the show can pick — everything except Off so the band never goes dark. */
+    private val showPaletteIds: List<Int> by lazy {
+        paletteColors.map { it.id }.filter { it != PacketBuilder.Color.OFF && it != PacketBuilder.Color.RANDOM }
+    }
+
+    /** Captured show effects minus the blackout packet, for the same reason. */
+    private val randomShowEffects: List<Pair<String, String>> by lazy {
+        showEffects.filter { it.first != "Show Off" }
+    }
+
+    /**
+     * One random light-show step, as label to hex. Weighted toward the colorful/animated types;
+     * vibration fires on roughly one packet in five so the buzz stays an accent, not a drone.
+     */
+    fun buildRandomShow(rng: kotlin.random.Random = kotlin.random.Random.Default): Pair<String, String> {
+        fun color() = showPaletteIds.random(rng)
+        fun name(id: Int) = StarlightColors.nameFor(id)
+        val vibOn = rng.nextInt(5) == 0
+        val vibPat = if (vibOn) rng.nextInt(1, 9) else 0
+        return when (rng.nextInt(16)) {
+            in 0..3 -> color().let { c -> "Show: ${name(c)}" to buildPresetById(c, vibOn, vibPat) }
+            in 4..6 -> {
+                val a = color()
+                val b = color()
+                "Show: Dual ${name(a)}/${name(b)}" to buildDual(a, b, vibOn, vibPat)
+            }
+            in 7..9 -> {
+                val a = color()
+                val b = color()
+                "Show: Fade ${name(a)}→${name(b)}" to buildCrossfade(a, b, vibOn, vibPat)
+            }
+            in 10..12 ->
+                "Show: Rainbow mix" to buildRainbow(color(), color(), color(), color(), color(), vibOn, vibPat)
+            13 -> "Show: Circle spin" to buildCircle(vibOn, vibPat)
+            else -> randomShowEffects.random(rng).let { (label, hex) -> "Show: $label" to hex }
+        }
+    }
+
     /** Recovered builder state from a captured/loaded packet. */
     data class Decoded(
         val type: LabPacketType,

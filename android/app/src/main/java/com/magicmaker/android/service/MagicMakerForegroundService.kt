@@ -54,6 +54,7 @@ class MagicMakerForegroundService : Service() {
         const val ACTION_SET_SCAN = "com.magicmaker.android.SET_SCAN"
         const val ACTION_SET_STARLIGHT_LOOP = "com.magicmaker.android.SET_STARLIGHT_LOOP"
         const val ACTION_SET_TX_LOOP = "com.magicmaker.android.SET_TX_LOOP"
+        const val ACTION_SET_RANDOM_SHOW = "com.magicmaker.android.SET_RANDOM_SHOW"
         const val ACTION_REFRESH_RELAY_CACHE = "com.magicmaker.android.REFRESH_RELAY_CACHE"
         const val ACTION_REPLAY = "com.magicmaker.android.REPLAY"
         const val ACTION_REPLAY_STOP = "com.magicmaker.android.REPLAY_STOP"
@@ -69,6 +70,8 @@ class MagicMakerForegroundService : Service() {
         const val EXTRA_TX_LOOP_ENABLED = "tx_loop_enabled"
         const val EXTRA_TX_LOOP_PACKET_ID = "tx_loop_packet_id"
         const val EXTRA_TX_LOOP_INTERVAL_MS = "tx_loop_interval_ms"
+        const val EXTRA_RANDOM_SHOW_ENABLED = "random_show_enabled"
+        const val EXTRA_RANDOM_SHOW_INTERVAL_MS = "random_show_interval_ms"
         const val EXTRA_REPLAY_PATH = "replay_path"
         const val EXTRA_REPLAY_CATEGORIES = "replay_categories"
         const val EXTRA_REPLAY_ADDRESS = "replay_address"
@@ -120,6 +123,17 @@ class MagicMakerForegroundService : Service() {
                 putExtra(EXTRA_TX_LOOP_ENABLED, enabled)
                 packetId?.let { putExtra(EXTRA_TX_LOOP_PACKET_ID, it) }
                 intervalMs?.let { putExtra(EXTRA_TX_LOOP_INTERVAL_MS, it) }
+            }
+        }
+
+        fun setRandomShow(
+            context: Context,
+            enabled: Boolean,
+            intervalMs: Long? = null,
+        ) {
+            launch(context, ACTION_SET_RANDOM_SHOW) {
+                putExtra(EXTRA_RANDOM_SHOW_ENABLED, enabled)
+                intervalMs?.let { putExtra(EXTRA_RANDOM_SHOW_INTERVAL_MS, it) }
             }
         }
 
@@ -209,6 +223,10 @@ class MagicMakerForegroundService : Service() {
     private var txLoopPacketId = -1L
     private var txLoopIntervalMs = 3000L
     private var txLoopRunnable: Runnable? = null
+    private var randomShowEnabled = false
+    private var randomShowIntervalMs = 3000L
+    private var randomShowLabel = ""
+    private var randomShowRunnable: Runnable? = null
     private var screenOn = true
     private var userWantsScan = true
     private var txRunning = false
@@ -354,6 +372,7 @@ class MagicMakerForegroundService : Service() {
                 savePrefs()
                 if (starlightLoopEnabled) {
                     stopTxLoop()
+                    stopRandomShow()
                     startStarlightLoop()
                 } else {
                     stopStarlightLoop()
@@ -376,11 +395,32 @@ class MagicMakerForegroundService : Service() {
                 savePrefs()
                 if (txLoopEnabled) {
                     stopStarlightLoop()
+                    stopRandomShow()
                     startTxLoop()
                 } else {
                     stopTxLoop()
                 }
                 publishTxLoopState()
+                return START_STICKY
+            }
+            ACTION_SET_RANDOM_SHOW -> {
+                if (!booted) boot()
+                if (intent.hasExtra(EXTRA_RANDOM_SHOW_ENABLED)) {
+                    randomShowEnabled = intent.getBooleanExtra(EXTRA_RANDOM_SHOW_ENABLED, false)
+                }
+                if (intent.hasExtra(EXTRA_RANDOM_SHOW_INTERVAL_MS)) {
+                    randomShowIntervalMs = intent.getLongExtra(EXTRA_RANDOM_SHOW_INTERVAL_MS, randomShowIntervalMs)
+                        .coerceIn(500L, 60_000L)
+                }
+                savePrefs()
+                if (randomShowEnabled) {
+                    stopStarlightLoop()
+                    stopTxLoop()
+                    startRandomShow()
+                } else {
+                    stopRandomShow()
+                }
+                publishRandomShowState()
                 return START_STICKY
             }
             ACTION_REFRESH_RELAY_CACHE -> {
@@ -463,6 +503,8 @@ class MagicMakerForegroundService : Service() {
                 txLoopPacketId = txLoopPacketId,
                 txLoopIntervalMs = txLoopIntervalMs,
                 txLoopLabel = txLoopLabel(),
+                randomShowEnabled = randomShowEnabled,
+                randomShowIntervalMs = randomShowIntervalMs,
                 wakeupPreambleMs = store.getWakeupPreambleMs(),
                 commandBurstMs = store.getCommandBurstMs(),
                 starlightBurstMs = store.getStarlightBurstMs(),
@@ -472,6 +514,7 @@ class MagicMakerForegroundService : Service() {
         startLocationUpdates()
         if (starlightLoopEnabled) startStarlightLoop()
         if (txLoopEnabled) startTxLoop()
+        if (randomShowEnabled) startRandomShow()
     }
 
     private fun txLoopHex(): String? {
@@ -676,6 +719,7 @@ class MagicMakerForegroundService : Service() {
         }
         val doneStatus = when {
             txLoopEnabled -> "TX loop"
+            randomShowEnabled -> "Random show"
             starlight && starlightLoopEnabled -> "Wand loop"
             else -> "Scanning"
         }
@@ -684,6 +728,11 @@ class MagicMakerForegroundService : Service() {
             onCompleteStatus = doneStatus,
             send = { onDone ->
                 if (transmitter != null) transmitter?.send(txHex, onDone) else onDone()
+            },
+            afterComplete = {
+                // The preempt below may have dropped a queued show burst — put the show back
+                // on the clock so a manual send never silently kills the loop.
+                if (randomShowEnabled) scheduleRandomShowBurst(immediate = false)
             },
             // A tap supersedes whatever is in flight or queued, so it goes out right away.
             preempt = true,
@@ -810,6 +859,58 @@ class MagicMakerForegroundService : Service() {
                 txLoopPacketId = txLoopPacketId,
                 txLoopIntervalMs = txLoopIntervalMs,
                 txLoopLabel = txLoopLabel(),
+            )
+        }
+    }
+
+    private fun startRandomShow() {
+        stopRandomShowSchedule()
+        randomShowEnabled = true
+        scheduleRandomShowBurst(immediate = true)
+    }
+
+    private fun stopRandomShow() {
+        randomShowEnabled = false
+        stopRandomShowSchedule()
+    }
+
+    private fun stopRandomShowSchedule() {
+        randomShowRunnable?.let { mainHandler.removeCallbacks(it) }
+        randomShowRunnable = null
+    }
+
+    /** Random light show: a fresh surprise packet every burst, until stopped. */
+    private fun scheduleRandomShowBurst(immediate: Boolean) {
+        stopRandomShowSchedule()
+        val task = Runnable {
+            if (!randomShowEnabled || !booted) return@Runnable
+            val (label, hex) = LabPacketBuilder.buildRandomShow()
+            randomShowLabel = label
+            runManufacturerTx(
+                status = "$label…",
+                onCompleteStatus = "Random show",
+                send = { onDone ->
+                    if (transmitter != null) transmitter?.send(hex, onDone) else onDone()
+                },
+                afterComplete = {
+                    publishRandomShowState()
+                    if (randomShowEnabled) {
+                        randomShowRunnable = Runnable { scheduleRandomShowBurst(immediate = true) }
+                        mainHandler.postDelayed(randomShowRunnable!!, randomShowIntervalMs)
+                    }
+                },
+            )
+        }
+        randomShowRunnable = task
+        if (immediate) mainHandler.post(task) else mainHandler.postDelayed(task, randomShowIntervalMs)
+    }
+
+    private fun publishRandomShowState() {
+        publishState {
+            it.copy(
+                randomShowEnabled = randomShowEnabled,
+                randomShowIntervalMs = randomShowIntervalMs,
+                randomShowLabel = randomShowLabel,
             )
         }
     }
@@ -997,6 +1098,7 @@ class MagicMakerForegroundService : Service() {
             savePrefs()
             if (starlightLoopEnabled) {
                 stopTxLoop()
+                stopRandomShow()
                 startStarlightLoop()
             } else {
                 stopStarlightLoop()
@@ -1013,6 +1115,7 @@ class MagicMakerForegroundService : Service() {
             savePrefs()
             if (txLoopEnabled) {
                 stopStarlightLoop()
+                stopRandomShow()
                 startTxLoop()
             } else {
                 stopTxLoop()
@@ -1210,6 +1313,7 @@ class MagicMakerForegroundService : Service() {
         txRunning = false
         stopStarlightLoop()
         stopTxLoop()
+        stopRandomShow()
         pauseScanNow()
         httpServer?.stop()
         gattServer?.stop()
@@ -1241,6 +1345,8 @@ class MagicMakerForegroundService : Service() {
         txLoopEnabled = p.getBoolean("tx_loop_enabled", false)
         txLoopPacketId = p.getLong("tx_loop_packet_id", -1L)
         txLoopIntervalMs = p.getLong("tx_loop_interval_ms", 3000L).coerceIn(500L, 60_000L)
+        randomShowEnabled = p.getBoolean("random_show_enabled", false)
+        randomShowIntervalMs = p.getLong("random_show_interval_ms", 3000L).coerceIn(500L, 60_000L)
     }
 
     private fun savePrefs() {
@@ -1255,6 +1361,8 @@ class MagicMakerForegroundService : Service() {
             .putBoolean("tx_loop_enabled", txLoopEnabled)
             .putLong("tx_loop_packet_id", txLoopPacketId)
             .putLong("tx_loop_interval_ms", txLoopIntervalMs)
+            .putBoolean("random_show_enabled", randomShowEnabled)
+            .putLong("random_show_interval_ms", randomShowIntervalMs)
             .apply()
     }
 
