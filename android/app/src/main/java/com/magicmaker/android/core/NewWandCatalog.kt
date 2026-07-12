@@ -10,7 +10,7 @@ package com.magicmaker.android.core
  * than persisted — it never bloats the user's saved library or the cloud dictionary.
  */
 object NewWandCatalog {
-    private const val PREFIX = "8301CF0B00C020224EAC7807866"
+    const val PREFIX = "8301CF0B00C020224EAC7807866"
     private const val RANGE_START = 0xE80
     private const val RANGE_END = 0xFFF
     /** Synthetic id base — well above real learned-packet ids so the two never collide. */

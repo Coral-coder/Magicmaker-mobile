@@ -1376,14 +1376,25 @@ private fun WandTab(
     }
 
     Column(Modifier.fillMaxSize()) {
-        StarlightWandView(
-            colors = learned,
-            displayColorIndex = wandDisplayColorIndex,
-            onTransmit = { transmitColor(it) },
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-        )
+        if (showNewWand) {
+            // New Wand is a long code range — a scrollable list (keyed by the last 2 bytes)
+            // is far more usable than the Starlight wand image.
+            NewWandList(
+                packets = learned,
+                selectedId = selectedId,
+                onSelect = { transmitColor(it) },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
+        } else {
+            StarlightWandView(
+                colors = learned,
+                displayColorIndex = wandDisplayColorIndex,
+                onTransmit = { transmitColor(it) },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+            )
+        }
         Column(Modifier.padding(AppDimens.pad), verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
                 listOf(false to "STARLIGHT", true to "NEW WAND").forEach { (isNew, name) ->
@@ -1467,6 +1478,52 @@ private fun WandTab(
                 clearLibConfirm = false
             },
         )
+    }
+}
+
+/** Scrollable New Wand code list, each row keyed by its last 2 bytes. Tap sends (or loops). */
+@Composable
+private fun NewWandList(
+    packets: List<MagicPacket>,
+    selectedId: Long,
+    onSelect: (MagicPacket) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Text(
+            "NEW WAND · ${packets.size} CODES · TAP TO SEND",
+            style = techLabel(),
+            color = AppColors.TextDim,
+            modifier = Modifier.padding(horizontal = AppDimens.pad, vertical = 4.dp),
+        )
+        HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = AppDimens.pad)) {
+            items(packets, key = { it.id }) { pkt ->
+                val isSel = pkt.id == selectedId
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(pkt) }
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        pkt.hex.uppercase().takeLast(4),
+                        style = techHeader(),
+                        color = if (isSel) AppColors.Cyan else AppColors.CyanDim,
+                    )
+                    Text(
+                        pkt.colors.uppercase(),
+                        style = techLabel(),
+                        color = if (isSel) AppColors.Cyan else AppColors.TextDim,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
+            }
+        }
     }
 }
 
