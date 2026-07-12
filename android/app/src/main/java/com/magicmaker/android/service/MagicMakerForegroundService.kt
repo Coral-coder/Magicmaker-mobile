@@ -693,7 +693,15 @@ class MagicMakerForegroundService : Service() {
         drainRadioQueue()
     }
 
-    /** Pause scan (+ GATT relay ADV when active), run one manufacturer burst, then restore. */
+    /**
+     * Run one manufacturer burst. We deliberately do NOT stop the BLE scan around a transmit:
+     * every stop/start counts toward Android's scan-start quota (~5 per 30s) and a transmit-heavy
+     * toy trips SCAN_FAILED_SCANNING_TOO_FREQUENTLY, which blocks scanning for ~30s — that's the
+     * "scanning stops after I transmit" bug. Android multiplexes advertise + scan on one radio, and
+     * the advertiser already busy-waits/retries for contention, so we advertise concurrently and
+     * leave the scan running. Only the connectable GATT relay ADV (a true advertise conflict) is
+     * paused for the burst.
+     */
     private fun runManufacturerTx(
         status: String,
         onCompleteStatus: String,
@@ -702,22 +710,26 @@ class MagicMakerForegroundService : Service() {
         preempt: Boolean = false,
     ) {
         enqueueRadioWork(preempt) {
-            pauseScanNow()
             pauseGattForManufacturerTx()
             publishStatus(status)
-            // stopScan() is async at the radio level — give it a beat to tear down before we
-            // advertise, otherwise the BLE stack drops/delays the advertise while a scan is
-            // still active ("doesn't send in time" when scanning).
+            // Small settle so the connectable GATT ADV slot frees before the manufacturer burst.
             mainHandler.postDelayed({
                 send {
                     resumeGattAfterManufacturerTx()
                     publishStatus(onCompleteStatus)
-                    scheduleResumeScan()
+                    // Scan was never stopped; make sure it's alive (no-op if already running)
+                    // without churning startScan — only restarts if the radio actually dropped it.
+                    ensureScanning()
                     afterComplete?.invoke()
                     finishRadioWork()
                 }
             }, TransmitTiming.RADIO_SETTLE_MS)
         }
+    }
+
+    /** Restart the scan only if it isn't currently running — avoids the startScan throttle. */
+    private fun ensureScanning() {
+        if (userWantsScan && bleScanner?.isScanning != true) startScanNow()
     }
 
     private fun queueSend(hex: String) {
