@@ -16,9 +16,13 @@ object NewWandCatalog {
     /** Synthetic id base — well above real learned-packet ids so the two never collide. */
     const val ID_BASE = 1_000_000L
 
-    /** Every code in the range, low-to-high, as ready-to-transmit packets. */
+    // Codes that don't actually exist on the wand and must be skipped (last-2-bytes 6F20..6F7F,
+    // i.e. the trailing-nibble value 0xF20..0xF7F).
+    private val EXCLUDED = 0xF20..0xF7F
+
+    /** Every real code in the range, low-to-high, as ready-to-transmit packets. */
     val packets: List<MagicPacket> by lazy {
-        (RANGE_START..RANGE_END).map { v ->
+        (RANGE_START..RANGE_END).filter { it !in EXCLUDED }.map { v ->
             val hex = PREFIX + "%03X".format(v)
             MagicPacket(
                 id = ID_BASE + (v - RANGE_START),
@@ -32,8 +36,8 @@ object NewWandCatalog {
         }
     }
 
-    fun byId(id: Long): MagicPacket? =
-        packets.getOrNull((id - ID_BASE).toInt())?.takeIf { it.id == id }
+    // ids are no longer contiguous (excluded range), so look up by id rather than index.
+    fun byId(id: Long): MagicPacket? = packets.firstOrNull { it.id == id }
 
     fun isNewWandId(id: Long): Boolean = id >= ID_BASE
 }

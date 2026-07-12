@@ -23,12 +23,18 @@ object PacketPatterns {
         PacketPattern("any_raw", "Any unclassified packet", MatchKind.TYPE_INFO, "raw"),
     )
 
+    /** Sentinel stored in a rule's response stack; resolved to a fresh random New Wand code
+     * every time the rule fires (see [resolveResponseHexes]) rather than fixed at rule creation. */
+    const val NEWWAND_RANDOM_TOKEN = "RANDOM_NEWWAND"
+
     val systemResponses = listOf(
         PacketPattern("resp_wakeup", "Wakeup ping", MatchKind.EXACT_HEX, PacketBuilder.WAKEUP_PING, PacketBuilder.WAKEUP_PING),
         PacketPattern("resp_vibrate", "Vibrate band", MatchKind.EXACT_HEX, PacketBuilder.vibrateBand(), PacketBuilder.vibrateBand()),
         PacketPattern("resp_rainbow", "Rainbow finale", MatchKind.EXACT_HEX,
             "8301CC03000100E100E90C000F0F5D465BF005323748B0",
             "8301CC03000100E100E90C000F0F5D465BF005323748B0"),
+        PacketPattern("resp_newwand_random", "New Wand: RANDOM code", MatchKind.EXACT_HEX,
+            NEWWAND_RANDOM_TOKEN, NEWWAND_RANDOM_TOKEN),
     )
 
     fun buildTriggerOptions(userPresets: List<MagicPacket>, learned: List<MagicPacket>) =
@@ -97,7 +103,11 @@ object PacketPatterns {
     }
 
     fun resolveResponseHexes(rule: AutoResponseRule, userPresets: List<MagicPacket>, learned: List<MagicPacket>): List<String> {
-        val stacked = rule.responseHexes.map { HexUtils.canonicalHex(it) }.filter { it.isNotEmpty() }
+        // Resolve the random-New-Wand sentinel to a fresh code per fire; canonicalize the rest.
+        val stacked = rule.responseHexes.mapNotNull { raw ->
+            if (raw == NEWWAND_RANDOM_TOKEN) NewWandCatalog.packets.randomOrNull()?.hex
+            else HexUtils.canonicalHex(raw).takeIf { it.isNotEmpty() }
+        }
         if (stacked.isNotEmpty()) return stacked
         if (rule.responsePatternId.startsWith("preset_r_")) {
             val id = rule.responsePatternId.removePrefix("preset_r_").toLongOrNull()
