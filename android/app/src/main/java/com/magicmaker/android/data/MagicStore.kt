@@ -322,8 +322,12 @@ class MagicStore(context: Context) {
     fun learnedStarlightPackets(): List<MagicPacket> =
         learnedColors.filter { it.typeInfo == "starlight" }.sortedBy { it.label }
 
+    /** The second, generated wand type (CF0B code range) — kept separate from Starlight. */
+    fun newWandPackets(): List<MagicPacket> = NewWandCatalog.packets
+
     fun findLearnedStarlight(id: Long): MagicPacket? =
-        learnedColors.firstOrNull { it.id == id && it.typeInfo == "starlight" }
+        if (NewWandCatalog.isNewWandId(id)) NewWandCatalog.byId(id)
+        else learnedColors.firstOrNull { it.id == id && it.typeInfo == "starlight" }
 
     fun findTransmitPacket(id: Long): MagicPacket? =
         allTransmitPackets().firstOrNull { it.id == id }

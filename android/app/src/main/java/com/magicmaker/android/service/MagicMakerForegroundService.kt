@@ -926,7 +926,16 @@ class MagicMakerForegroundService : Service() {
     }
 
     private fun onHeard(hex: String, rssi: Int, address: String = "") {
+        // Guard the whole pipeline: a throw here would otherwise kill the single executor
+        // thread, crashing the app AND silently stopping all further packet reception.
         executor.execute {
+            runCatching { handleHeard(hex, rssi, address) }
+                .onFailure { CrashLog.record(it, "onHeard") }
+        }
+    }
+
+    private fun handleHeard(hex: String, rssi: Int, address: String) {
+        run {
             val loc = lastLocation
             val event = store.processHeardPacket(
                 hex, rssi, recordSession, address,
@@ -959,9 +968,9 @@ class MagicMakerForegroundService : Service() {
                 ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
             }
 
-            if (!autoEnabled || classified == null) return@execute
-            if (now - lastAutoAt < 800) return@execute
-            val responseHexes = store.findAutoResponses(classified, hex) ?: return@execute
+            if (!autoEnabled || classified == null) return@run
+            if (now - lastAutoAt < 800) return@run
+            val responseHexes = store.findAutoResponses(classified, hex) ?: return@run
             lastAutoAt = now
             publishState { it.copy(autoResponsesSent = it.autoResponsesSent + 1, status = "Auto→${classified.label} (${responseHexes.size})") }
             mainHandler.post {

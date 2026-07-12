@@ -5,6 +5,7 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanRecord
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import com.magicmaker.android.core.CrashLog
 import com.magicmaker.android.core.HexUtils
 import com.magicmaker.android.relay.RelayProtocol
 
@@ -20,12 +21,14 @@ class BleScanner(
 
     fun buildCallback(): ScanCallback {
         return object : ScanCallback() {
+            // A malformed advertisement from ANY nearby device must never crash the toy or
+            // kill scanning — swallow per-result parse failures and keep listening.
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                handleResult(result)
+                runCatching { handleResult(result) }.onFailure { CrashLog.record(it, "onScanResult") }
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
-                results.forEach { handleResult(it) }
+                results.forEach { r -> runCatching { handleResult(r) }.onFailure { CrashLog.record(it, "onBatchScanResults") } }
             }
 
             override fun onScanFailed(errorCode: Int) {
