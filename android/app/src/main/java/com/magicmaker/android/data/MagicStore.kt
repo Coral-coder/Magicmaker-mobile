@@ -13,6 +13,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class ScanSessionFile(val path: String, val name: String)
 
@@ -267,8 +269,31 @@ class MagicStore(context: Context) {
         e.apply()
     }
 
-    @Synchronized
+    // Persisting the whole store is expensive (serialize every list + two disk writes). It used
+    // to run synchronously on whatever thread called save() — the main thread on UI edits (ANRs,
+    // and a crash if serialize/disk threw) and the packet executor on every learned packet
+    // (blocking the pipeline → dropped packets). Now save() just marks state dirty and a single
+    // background thread coalesces bursts into one write, off the caller's thread, crash-guarded.
+    private val saveExecutor = Executors.newSingleThreadExecutor()
+    private val saveScheduled = AtomicBoolean(false)
+
     fun save() {
+        if (saveScheduled.compareAndSet(false, true)) {
+            runCatching {
+                saveExecutor.execute {
+                    saveScheduled.set(false) // allow the next burst to coalesce a fresh write
+                    runCatching { saveNow() }.onFailure { CrashLog.record(it, "MagicStore.save") }
+                }
+            }.onFailure {
+                // Executor rejected (shutting down) — fall back to a guarded inline write.
+                saveScheduled.set(false)
+                runCatching { saveNow() }.onFailure { e -> CrashLog.record(e, "MagicStore.save inline") }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun saveNow() {
         val json = gson.toJson(buildState())
         storeFile.writeText(json)
         writeExternal(json)

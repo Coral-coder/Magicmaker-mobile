@@ -275,6 +275,17 @@ class MagicMakerForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Every UI action routes an intent through here; a throw in any handler would crash the
+        // whole app. Guard the dispatch so a bad command is logged and swallowed instead.
+        return try {
+            dispatchCommand(intent)
+        } catch (t: Throwable) {
+            CrashLog.record(t, "onStartCommand ${intent?.action}")
+            START_STICKY
+        }
+    }
+
+    private fun dispatchCommand(intent: Intent?): Int {
         when (intent?.action) {
             ACTION_STOP -> {
                 shutdown()

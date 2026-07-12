@@ -185,12 +185,16 @@ object ServiceState {
                     .sortedByDescending { a -> a.lastSeenMs }
                     .take(MAX_ADDRESSES)
             }
+            // NOTE: do NOT bump storeRevision here. This runs on every received packet, and
+            // storeRevision drives `remember(storeRev) { store.read() }` across every tab —
+            // bumping it per packet forced a full recomposition/store re-read storm near many
+            // bands, grinding the UI and starving the packet pipeline. The library data hasn't
+            // changed here; only the live feed has, which Compose observes directly.
             it.copy(
                 livePackets = (listOf(packet) + withoutDup).take(MAX_LIVE),
                 rawLivePackets = (listOf(packet) + it.rawLivePackets).take(MAX_LIVE),
                 seenAddresses = addresses,
                 sources = sourcesList,
-                storeRevision = it.storeRevision + 1,
             )
         }
     }
