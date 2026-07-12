@@ -935,53 +935,58 @@ class MagicMakerForegroundService : Service() {
     }
 
     private fun handleHeard(hex: String, rssi: Int, address: String) {
-        run {
-            val loc = lastLocation
-            val event = store.processHeardPacket(
+        val loc = lastLocation
+        val classified = runCatching { MagicClassifier.classify(HexUtils.canonicalHex(hex)) }.getOrNull()
+        val isBand = runCatching { store.isBandAddress(address) }.getOrDefault(false)
+        val now = System.currentTimeMillis()
+
+        // Update the visible scan feed FIRST and unconditionally. Library save, session
+        // persistence, and cloud sync below are throw-prone (disk full, IO, network); a
+        // failure there must never starve the scanner — that's the "only one packet" symptom.
+        ServiceState.appendLive(hex, classified?.label ?: "?", rssi, "Heard", address, isBand)
+
+        val event = runCatching {
+            store.processHeardPacket(
                 hex, rssi, recordSession, address,
                 lat = loc?.latitude ?: Double.NaN,
                 lng = loc?.longitude ?: Double.NaN,
                 accuracy = loc?.accuracy ?: -1f,
             )
-            val classified = MagicClassifier.classify(HexUtils.canonicalHex(hex))
-            val label = event?.packet?.label ?: classified?.label ?: "?"
-            val note = event?.reason ?: "Heard"
-            val now = System.currentTimeMillis()
-            val isBand = store.isBandAddress(address)
+        }.onFailure { CrashLog.record(it, "processHeardPacket") }.getOrNull()
 
-            ServiceState.appendLive(hex, label, rssi, note, address, isBand)
-            if (now - lastHeardUiAt > 250) {
-                lastHeardUiAt = now
-                val wandIdx = if (classified?.typeInfo == "starlight") {
+        if (now - lastHeardUiAt > 250) {
+            lastHeardUiAt = now
+            val wandIdx = if (classified?.typeInfo == "starlight") {
+                runCatching {
                     MagicClassifier.starlightLearnColorIndex(hex)
                         ?: MagicClassifier.starlightColorIndex(HexUtils.canonicalHex(hex))
-                } else null
-                publishState {
-                    it.copy(
-                        packetsHeard = it.packetsHeard + 1,
-                        lastHeardHex = hex,
-                        lastHeardLabel = label,
-                        wandDisplayColorIndex = wandIdx ?: it.wandDisplayColorIndex,
-                    )
-                }
-            } else {
-                ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
-            }
-
-            if (!autoEnabled || classified == null) return@run
-            if (now - lastAutoAt < 800) return@run
-            val responseHexes = store.findAutoResponses(classified, hex) ?: return@run
-            lastAutoAt = now
-            publishState { it.copy(autoResponsesSent = it.autoResponsesSent + 1, status = "Auto→${classified.label} (${responseHexes.size})") }
-            mainHandler.post {
-                runManufacturerTx(
-                    status = "Auto→${classified.label}",
-                    onCompleteStatus = "Scanning",
-                    send = { onDone ->
-                        if (transmitter != null) transmitter?.sendSequence(responseHexes, onDone) else onDone()
-                    },
+                }.getOrNull()
+            } else null
+            publishState {
+                it.copy(
+                    packetsHeard = it.packetsHeard + 1,
+                    lastHeardHex = hex,
+                    lastHeardLabel = event?.packet?.label ?: classified?.label ?: "?",
+                    wandDisplayColorIndex = wandIdx ?: it.wandDisplayColorIndex,
                 )
             }
+        } else {
+            ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
+        }
+
+        if (!autoEnabled || classified == null) return
+        if (now - lastAutoAt < 800) return
+        val responseHexes = runCatching { store.findAutoResponses(classified, hex) }.getOrNull() ?: return
+        lastAutoAt = now
+        publishState { it.copy(autoResponsesSent = it.autoResponsesSent + 1, status = "Auto→${classified.label} (${responseHexes.size})") }
+        mainHandler.post {
+            runManufacturerTx(
+                status = "Auto→${classified.label}",
+                onCompleteStatus = "Scanning",
+                send = { onDone ->
+                    if (transmitter != null) transmitter?.sendSequence(responseHexes, onDone) else onDone()
+                },
+            )
         }
     }
 
