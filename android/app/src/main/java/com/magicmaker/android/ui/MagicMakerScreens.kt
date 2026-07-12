@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -605,12 +606,44 @@ private fun LibraryFileSection(app: MagicMakerApp, state: ServiceState.UiState) 
 
 @Composable
 private fun DiagnosticsTab(state: ServiceState.UiState) {
+    val ctx = LocalContext.current
     var priorityCollapsed by remember { mutableStateOf(false) }
     var otherCollapsed by remember { mutableStateOf(true) }
+    var crashCollapsed by remember { mutableStateOf(true) }
+    var crashTick by remember { mutableIntStateOf(0) }
+    val crashLog = remember(crashTick) { CrashLog.recent(ctx) }
     val priority = remember(state.sources) { state.sources.filter { it.priority } }
     val other = remember(state.sources) { state.sources.filter { !it.priority } }
 
     Column(Modifier.fillMaxSize().padding(horizontal = AppDimens.pad)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (crashLog.isBlank()) "CRASH LOG · CLEAN" else "CRASH LOG · HAS ENTRIES",
+                Modifier
+                    .weight(1f)
+                    .clickable { crashCollapsed = !crashCollapsed },
+                style = techLabel(),
+                color = if (crashLog.isBlank()) AppColors.TextDim else AppColors.Amber,
+            )
+            if (crashLog.isNotBlank()) {
+                TextButton(
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    onClick = { CrashLog.clear(ctx); crashTick++ },
+                ) { Text("CLEAR", style = techLabel(), color = AppColors.Amber) }
+            }
+        }
+        if (!crashCollapsed && crashLog.isNotBlank()) {
+            Text(
+                crashLog.takeLast(4000),
+                style = techLabel(),
+                color = AppColors.TextDim,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState()),
+            )
+        }
+        HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
         Text("BROADCAST SOURCES · ${state.sources.size}", style = techHeader())
         Text("PRIORITY = SENT SHOW/ANIM/COLOR", style = techLabel(), color = AppColors.TextDim)
         HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
@@ -1301,7 +1334,12 @@ private fun WandTab(
 ) {
     val ctx = LocalContext.current
     val storeRev = storeRevision
-    val learned = remember(storeRev) { app.store.learnedStarlightPackets() }
+    // Two separate wand libraries: the learned Starlight colors, and the generated New Wand
+    // code range. A toggle picks which one drives the carousel + loop.
+    var showNewWand by remember { mutableStateOf(false) }
+    val learned = remember(storeRev, showNewWand) {
+        if (showNewWand) app.store.newWandPackets() else app.store.learnedStarlightPackets()
+    }
     var loopOn by remember(starlightLoopEnabled) { mutableStateOf(starlightLoopEnabled) }
     var selectedId by remember(starlightLoopPacketId, learned.size) {
         mutableLongStateOf(
@@ -1347,6 +1385,21 @@ private fun WandTab(
                 .fillMaxWidth(),
         )
         Column(Modifier.padding(AppDimens.pad), verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
+                listOf(false to "STARLIGHT", true to "NEW WAND").forEach { (isNew, name) ->
+                    OutlinedButton(
+                        onClick = { showNewWand = isNew },
+                        modifier = Modifier.weight(1f).height(30.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) {
+                        Text(
+                            name,
+                            style = techLabel(),
+                            color = if (showNewWand == isNew) AppColors.Cyan else AppColors.TextDim,
+                        )
+                    }
+                }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("LOOP", Modifier.weight(1f), style = techHeader())
                 Switch(
@@ -1388,7 +1441,8 @@ private fun WandTab(
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("LIB ${learned.size}", style = techLabel(), color = AppColors.TextDim)
-                if (learned.isNotEmpty()) {
+                // New Wand is a generated range — nothing to clear. Only Starlight is learned.
+                if (!showNewWand && learned.isNotEmpty()) {
                     TextButton(
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                         onClick = { clearLibConfirm = true },
