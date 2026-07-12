@@ -109,19 +109,35 @@ object ServiceState {
 
     private val listeners = mutableSetOf<(UiState) -> Unit>()
 
+    // ServiceState is shared across three threads — the main/UI thread, the service's
+    // single-thread packet executor, and BLE binder threads. Every read-modify-write of
+    // _state and every listener iteration MUST hold this lock, or concurrent updates race
+    // (lost packets → "only one shown") and listeners.forEach throws ConcurrentModification
+    // (→ crash, e.g. sending to the Lab while packets stream in). Listeners are invoked
+    // outside the lock (on a snapshot) so a listener that calls back into update can't deadlock.
+    private val lock = Any()
+
     fun update(transform: (UiState) -> UiState) {
-        val next = transform(_state.value)
-        _state.value = next
-        listeners.forEach { it(next) }
+        val next: UiState
+        val snapshot: List<(UiState) -> Unit>
+        synchronized(lock) {
+            next = transform(_state.value)
+            _state.value = next
+            snapshot = listeners.toList()
+        }
+        snapshot.forEach { it(next) }
     }
 
     fun addListener(listener: (UiState) -> Unit) {
-        listener(_state.value)
-        listeners.add(listener)
+        val current = synchronized(lock) {
+            listeners.add(listener)
+            _state.value
+        }
+        listener(current)
     }
 
     fun removeListener(listener: (UiState) -> Unit) {
-        listeners.remove(listener)
+        synchronized(lock) { listeners.remove(listener) }
     }
 
     fun appendLive(hex: String, label: String, rssi: Int, note: String, address: String = "", isBand: Boolean = false) {
@@ -142,15 +158,17 @@ object ServiceState {
             address = address,
             isBand = isBand,
         )
-        if (address.isNotEmpty()) {
-            val s = sourceStats.getOrPut(address) { MutSource(0, Int.MIN_VALUE, rssi, now, mutableSetOf()) }
-            s.count += 1
-            s.lastRssi = rssi
-            if (rssi > s.bestRssi) s.bestRssi = rssi
-            s.lastSeenMs = now
-            s.cats.add(packet.category.name)
+        val sourcesList = synchronized(lock) {
+            if (address.isNotEmpty()) {
+                val s = sourceStats.getOrPut(address) { MutSource(0, Int.MIN_VALUE, rssi, now, mutableSetOf()) }
+                s.count += 1
+                s.lastRssi = rssi
+                if (rssi > s.bestRssi) s.bestRssi = rssi
+                s.lastSeenMs = now
+                s.cats.add(packet.category.name)
+            }
+            buildSourcesList()
         }
-        val sourcesList = buildSourcesList()
         update {
             val withoutDup = it.livePackets.filter { p -> p.dedupeKey != dedupeKey }
             val addresses = if (address.isEmpty()) {
@@ -205,7 +223,7 @@ object ServiceState {
         ).take(MAX_SOURCES)
 
     fun clearLive() {
-        sourceStats.clear()
+        synchronized(lock) { sourceStats.clear() }
         update { it.copy(livePackets = emptyList(), rawLivePackets = emptyList(), sources = emptyList()) }
     }
 
