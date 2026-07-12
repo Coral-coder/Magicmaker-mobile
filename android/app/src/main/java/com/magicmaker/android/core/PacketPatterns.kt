@@ -16,6 +16,7 @@ object PacketPatterns {
         PacketPattern("ping_fast", "Interaction ping (fast mode)", MatchKind.EXACT_HEX, PacketBuilder.WAKEUP_PING, PacketBuilder.WAKEUP_PING),
         PacketPattern("ping_prefix", "Any CC03 ping", MatchKind.HEX_PREFIX, "8301CC03"),
         PacketPattern("starlight", "Any starlight wand (any color)", MatchKind.TYPE_INFO, "starlight", group = "Starlight wand"),
+        PacketPattern("newwand", "Any New Wand code (CF0B)", MatchKind.HEX_PREFIX, NewWandCatalog.PREFIX, group = "New wand"),
         PacketPattern("e905", "Any single color (E905)", MatchKind.TYPE_INFO, "single"),
         PacketPattern("e90c", "Any animation (E90C)", MatchKind.TYPE_INFO, "e90c"),
         PacketPattern("rainbow", "Taste the Rainbow", MatchKind.SIM_KEY, "A:RAINBOW", "8301CC03000100E100E90C000F0F5D465BF005323748B0"),
