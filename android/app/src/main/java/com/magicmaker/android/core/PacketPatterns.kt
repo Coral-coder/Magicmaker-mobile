@@ -35,7 +35,12 @@ object PacketPatterns {
         systemTriggers + userPresets.map { presetTrigger(it) } + learned.map { learnedTrigger(it) }
 
     fun buildResponseOptions(userPresets: List<MagicPacket>, learned: List<MagicPacket>) =
-        systemResponses + userPresets.map { presetResponse(it) } + learned.map { learnedResponse(it) }
+        systemResponses + userPresets.map { presetResponse(it) } + learned.map { learnedResponse(it) } +
+            NewWandCatalog.packets.map { newWandResponse(it) }
+
+    fun newWandResponse(packet: MagicPacket) = PacketPattern(
+        "newwand_r_${packet.id}", "New Wand ${packet.hex.takeLast(4)}", MatchKind.EXACT_HEX, packet.hex, packet.hex,
+    )
 
     fun presetTrigger(packet: MagicPacket) = PacketPattern(
         "preset_t_${packet.id}", packet.label, MatchKind.SIM_KEY, packet.simKey, packet.hex, packet.category.name,
@@ -101,6 +106,10 @@ object PacketPatterns {
         if (rule.responsePatternId.startsWith("learned_r_")) {
             val id = rule.responsePatternId.removePrefix("learned_r_").toLongOrNull()
             learned.firstOrNull { it.id == id }?.let { return listOf(it.hex) }
+        }
+        if (rule.responsePatternId.startsWith("newwand_r_")) {
+            val id = rule.responsePatternId.removePrefix("newwand_r_").toLongOrNull()
+            id?.let { NewWandCatalog.byId(it) }?.let { return listOf(it.hex) }
         }
         systemResponses.firstOrNull { it.id == rule.responsePatternId && it.defaultHex.isNotEmpty() }?.let {
             return listOf(it.defaultHex)
