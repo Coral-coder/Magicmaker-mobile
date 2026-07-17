@@ -17,6 +17,8 @@ final class MagicStore: ObservableObject {
     private let fileManager = FileManager.default
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    // Store writes run here, off the main thread, so a large save never janks the UI.
+    private static let saveQueue = DispatchQueue(label: "com.magicmaker.store.save", qos: .utility)
 
     private var documentsURL: URL {
         fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -97,8 +99,12 @@ final class MagicStore: ObservableObject {
             labHex: getLabHex(),
             labLabel: getLabLabel()
         )
-        if let data = try? encoder.encode(state) {
-            try? data.write(to: storeURL, options: .atomic)
+        // Encode the value-type snapshot here, then write on a background queue — the disk I/O
+        // is what stalls the main thread, and atomic writes coalesce fine when they overlap.
+        guard let data = try? encoder.encode(state) else { return }
+        let url = storeURL
+        Self.saveQueue.async {
+            try? data.write(to: url, options: .atomic)
         }
     }
 

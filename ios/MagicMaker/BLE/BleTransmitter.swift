@@ -36,7 +36,7 @@ final class BleTransmitter {
         switch relayBackend {
         case .androidWifi:
             return wifiRelay.lastStatus
-        case .androidBle:
+        case .androidBle, .esp32:
             return central.relayStatus
         }
     }
@@ -44,7 +44,7 @@ final class BleTransmitter {
     var androidRelayReady: Bool {
         relayBackend = RelayBackend.load()
         switch relayBackend {
-        case .androidBle:
+        case .androidBle, .esp32:
             return central.relayGatt.isReady
         case .androidWifi:
             return wifiRelay.lastStatus.contains("Connected")
@@ -89,17 +89,18 @@ final class BleTransmitter {
                 }
                 onComplete()
             }
-        case .androidBle:
+        case .androidBle, .esp32:
             if !central.relayGatt.isReady {
-                onStatus?("Waiting for MagicMaker-Android — tap Retry in Remote")
+                let target = relayBackend == .esp32 ? "MagicMaker-ESP32" : "MagicMaker-Android"
+                onStatus?("Waiting for \(target) — tap Retry in Remote")
                 central.reconnectRelay()
                 onComplete()
                 return
             }
-            // Android MagicTransmitter adds wakeup preamble for band packets.
+            // The relay (Android or ESP32 firmware) adds the wakeup preamble for band packets.
             central.transmitViaRelayGatt(hex: hex, durationMs: durationMs) { [weak self] success in
                 if !success {
-                    self?.onStatus?("Transmit failed — check Android relay")
+                    self?.onStatus?("Transmit failed — check relay")
                 }
                 onComplete()
             }

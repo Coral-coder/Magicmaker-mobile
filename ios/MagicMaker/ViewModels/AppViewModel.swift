@@ -115,6 +115,10 @@ final class AppViewModel: ObservableObject {
 
     var remoteLinkHint: String {
         switch relayBackend {
+        case .esp32:
+            if relayGattReady { return "" }
+            if ble.bleCentral.relayGatt.isLinkInProgress { return "Finishing ESP32 link…" }
+            return "Power on the ESP32 — tap Retry BLE."
         case .androidBle:
             if relayCommandReady { return "" }
             if relayGattReady || ble.bleCentral.relayGatt.isLinkInProgress {
@@ -375,7 +379,7 @@ final class AppViewModel: ObservableObject {
 
     var relayCommandReady: Bool {
         switch relayBackend {
-        case .androidBle:
+        case .androidBle, .esp32:
             return ble.bleCentral.relayGatt.isCommandReady
         case .androidWifi:
             return androidRemote?.running == true
@@ -384,7 +388,7 @@ final class AppViewModel: ObservableObject {
 
     var remoteLinkReady: Bool {
         switch relayBackend {
-        case .androidBle:
+        case .androidBle, .esp32:
             return relayCommandReady
         case .androidWifi:
             return androidRemote?.running == true

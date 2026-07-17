@@ -783,6 +783,10 @@ struct RemoteLinkView: View {
                 .keyboardType(.decimalPad)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+            } else if vm.relayBackend == .esp32 {
+                Text("Power on the MagicMaker ESP32. iPhone auto-connects and transmits through it while you keep scanning. No pairing needed.")
+                    .font(MMTheme.techLabel(9))
+                    .foregroundStyle(MMTheme.textDim)
             } else {
                 Text("Put Android in BLE GATT / iPhone mode. iPhone auto-connects to MagicMaker-Android.")
                     .font(MMTheme.techLabel(9))
@@ -834,7 +838,7 @@ struct RemoteLinkView: View {
 
     private var linkColor: Color {
         switch vm.relayBackend {
-        case .androidBle:
+        case .androidBle, .esp32:
             if vm.relayGattReady, vm.androidRemote?.relayLinked == true { return MMTheme.cyan }
             if vm.relayGattReady { return MMTheme.amber }
             return MMTheme.error
@@ -845,6 +849,8 @@ struct RemoteLinkView: View {
 
     private var linkLabel: String {
         switch vm.relayBackend {
+        case .esp32:
+            return vm.relayGattReady ? "ESP32 READY" : "ESP32 SEARCHING"
         case .androidBle:
             if vm.relayGattReady, vm.androidRemote?.relayLinked == true { return "GATT LINKED"
             }

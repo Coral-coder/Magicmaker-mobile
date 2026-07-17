@@ -14,6 +14,7 @@ final class AndroidRelayGattClient: NSObject {
     static let statusUUID = CBUUID(string: "A7830004-0000-1000-8000-00805F9B34FB")
     static let catalogUUID = CBUUID(string: "A7830005-0000-1000-8000-00805F9B34FB")
     static let deviceName = "MagicMaker-Android"
+    static let esp32Name = "MagicMaker-ESP32"
 
     var onStatus: ((String) -> Void)?
     var onCommandReady: (() -> Void)?
@@ -152,11 +153,25 @@ final class AndroidRelayGattClient: NSObject {
         peripheral.delegate = self
     }
 
+    // Match only the device the SELECTED backend targets, by name — the ESP32 and a standalone
+    // Android relay advertise the same service UUID, so with both running we must not cross the
+    // streams: ESP32 backend links only to MagicMaker-ESP32, Android BLE only to MagicMaker-Android.
+    private func nameMatchesBackend(_ name: String?) -> Bool {
+        switch RelayBackend.load() {
+        case .esp32:
+            return name?.hasPrefix(Self.esp32Name) == true
+        case .androidBle:
+            return name == Self.deviceName || name?.hasPrefix("MagicMaker-Android") == true
+        default:
+            return false
+        }
+    }
+
     func isRelayPeripheral(_ peripheral: CBPeripheral) -> Bool {
         guard RelayBackend.load().usesBleRelayLink else { return false }
         if let lockedRelayId, peripheral.identifier == lockedRelayId { return true }
         if let id = relay?.identifier, peripheral.identifier == id { return true }
-        return peripheral.name == Self.deviceName || peripheral.name?.hasPrefix("MagicMaker-Android") == true
+        return nameMatchesBackend(peripheral.name)
     }
 
     func isRelayAdvertisement(_ advertisementData: [String: Any]) -> Bool {
@@ -166,10 +181,15 @@ final class AndroidRelayGattClient: NSObject {
         let services = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
         let hasService = services.contains(where: { Self.uuidMatches($0, Self.serviceUUID) })
 
-        if hasService { return true }
-        if name == Self.deviceName { return true }
-        if name?.hasPrefix("MagicMaker-Android") == true { return true }
-        return false
+        // Name is authoritative when present (distinguishes ESP32 vs Android).
+        if let name, !name.isEmpty { return nameMatchesBackend(name) }
+        // Name not yet seen: ESP32 mode waits for the (reliable) scan-response name so it never
+        // grabs the Android relay by the shared service UUID. Android mode keeps its legacy
+        // service-UUID discovery.
+        switch RelayBackend.load() {
+        case .androidBle: return hasService
+        default: return false
+        }
     }
 
     func ensureLink(central: CBCentralManager) -> Bool {
