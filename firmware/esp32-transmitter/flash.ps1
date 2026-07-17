@@ -13,7 +13,7 @@
     ./flash.ps1 -Port COM5 -Fqbn esp32:esp32:esp32s3
 
   If PowerShell blocks the script, run this once in the same window:
-    Set-ExecutionPolicy -Scope Process -Bypass
+    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
 #>
 
 param(
@@ -31,12 +31,12 @@ $CliExe = Join-Path $Tools "arduino-cli.exe"
 
 function Say($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
-# 1. Get arduino-cli (portable, kept in a local .tools folder — nothing installed system-wide).
+# 1. Get arduino-cli (portable, kept in a local .tools folder - nothing installed system-wide).
 if (-not (Test-Path $CliExe)) {
     if (Get-Command arduino-cli -ErrorAction SilentlyContinue) {
         $CliExe = "arduino-cli"
     } else {
-        Say "Downloading arduino-cli (one-time)…"
+        Say "Downloading arduino-cli (one-time)..."
         New-Item -ItemType Directory -Force -Path $Tools | Out-Null
         $zip = Join-Path $Tools "arduino-cli.zip"
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -49,18 +49,18 @@ if (-not (Test-Path $CliExe)) {
 function Cli { & $CliExe @args; if ($LASTEXITCODE -ne 0) { throw "arduino-cli failed: $args" } }
 
 # 2. Board core + library (skips work if already present).
-Say "Updating board index…"
+Say "Updating board index..."
 Cli config init --overwrite | Out-Null
 Cli config set board_manager.additional_urls $Esp32IndexUrl
 Cli core update-index
-Say "Installing ESP32 core (first run takes a few minutes)…"
+Say "Installing ESP32 core (first run takes a few minutes)..."
 Cli core install esp32:esp32
-Say "Installing NimBLE-Arduino library…"
+Say "Installing NimBLE-Arduino library..."
 Cli lib install "NimBLE-Arduino"
 
 # 3. Pick the port if not given.
 if (-not $Port) {
-    Say "Detecting board…"
+    Say "Detecting board..."
     $list = & $CliExe board list
     $list | Write-Host
     $line = $list | Where-Object { $_ -match "^COM\d+" } | Select-Object -First 1
@@ -73,9 +73,9 @@ if (-not $Port) {
 }
 
 # 4. Compile + upload.
-Say "Compiling for $Fqbn…"
+Say "Compiling for $Fqbn..."
 Cli compile --fqbn $Fqbn "$SketchDir"
-Say "Flashing to $Port…"
+Say "Flashing to $Port..."
 Cli upload -p $Port --fqbn $Fqbn "$SketchDir"
 
-Say "Done. The ESP32 is now advertising as MagicMaker-ESP32 — pick the ESP32 backend in the app."
+Say "Done. The ESP32 is now advertising as MagicMaker-ESP32 - pick the ESP32 backend in the app."
