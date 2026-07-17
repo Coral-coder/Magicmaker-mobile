@@ -124,14 +124,21 @@ static bool isStandalonePing(const uint8_t* b, size_t len) {
 // ---- Advertising ---------------------------------------------------------------------
 static void startIdleAdvertising() {
   gAdv->stop();
+  // Primary ADV carries flags + the 128-bit service UUID (how the app discovers a relay).
   NimBLEAdvertisementData ad;
   ad.setFlags(0x06);
-  ad.setName(DEVICE_NAME);
-  ad.addServiceUUID(SERVICE_UUID);      // the app discovers the relay by this UUID
+  ad.addServiceUUID(SERVICE_UUID);
+  // The full name goes in the SCAN RESPONSE — a 128-bit UUID already nearly fills the 31-byte
+  // primary ADV, so putting the name there too would truncate it. The app needs the complete
+  // "MagicMaker-ESP32" name to tell this board apart from a standalone Android relay (which
+  // advertises the same service UUID).
+  NimBLEAdvertisementData scan;
+  scan.setName(DEVICE_NAME);
   gAdv->setAdvertisementData(ad);
+  gAdv->setScanResponseData(scan);
+  gAdv->setScanResponse(true);
   gAdv->setMinInterval(IDLE_ADV_MIN);
   gAdv->setMaxInterval(IDLE_ADV_MAX);
-  gAdv->setScanResponse(false);
   gAdv->start();
 }
 
