@@ -21,10 +21,14 @@ struct PacketPattern: Identifiable, Equatable {
 }
 
 enum PacketPatterns {
+    /// Sentinel response resolved to a FRESH random New Wand code every time a rule fires.
+    static let newWandRandomToken = "RANDOM_NEWWAND"
+
     static let systemTriggers: [PacketPattern] = [
         PacketPattern(id: "ping_fast", label: "Interaction ping (fast mode)", matchKind: .exactHex, matchValue: PresetCatalog.wakeupPing, defaultHex: PresetCatalog.wakeupPing),
         PacketPattern(id: "ping_prefix", label: "Any CC03 ping", matchKind: .hexPrefix, matchValue: "8301CC03"),
         PacketPattern(id: "starlight", label: "Any starlight wand (any color)", matchKind: .typeInfo, matchValue: "starlight", group: "Starlight wand"),
+        PacketPattern(id: "newwand", label: "Any New Wand code (CF0B)", matchKind: .hexPrefix, matchValue: NewWandCatalog.prefix, group: "New wand"),
         PacketPattern(id: "e905", label: "Any single color (E905)", matchKind: .typeInfo, matchValue: "single"),
         PacketPattern(id: "e90c", label: "Any animation (E90C)", matchKind: .typeInfo, matchValue: "e90c"),
         PacketPattern(id: "rainbow", label: "Taste the Rainbow", matchKind: .simKey, matchValue: "A:RAINBOW", defaultHex: "8301CC03000100E100E90C000F0F5D465BF005323748B0"),
@@ -35,6 +39,7 @@ enum PacketPatterns {
         PacketPattern(id: "resp_wakeup", label: "Wakeup ping", matchKind: .exactHex, matchValue: PresetCatalog.wakeupPing, defaultHex: PresetCatalog.wakeupPing),
         PacketPattern(id: "resp_vibrate", label: "Vibrate band", matchKind: .exactHex, matchValue: PresetCatalog.vibratePacket, defaultHex: PresetCatalog.vibratePacket),
         PacketPattern(id: "resp_rainbow", label: "Rainbow finale", matchKind: .exactHex, matchValue: "8301CC03000100E100E90C000F0F5D465BF005323748B0", defaultHex: "8301CC03000100E100E90C000F0F5D465BF005323748B0"),
+        PacketPattern(id: "resp_newwand_random", label: "New Wand: RANDOM code", matchKind: .exactHex, matchValue: "RANDOM_NEWWAND", defaultHex: "RANDOM_NEWWAND"),
     ]
 
     static func buildTriggerOptions(learned: [MagicPacket]) -> [PacketPattern] {
@@ -42,7 +47,11 @@ enum PacketPatterns {
     }
 
     static func buildResponseOptions(learned: [MagicPacket]) -> [PacketPattern] {
-        systemResponses + learned.map { learnedResponse($0) }
+        systemResponses + learned.map { learnedResponse($0) } + NewWandCatalog.packets.map { newWandResponse($0) }
+    }
+
+    static func newWandResponse(_ packet: MagicPacket) -> PacketPattern {
+        PacketPattern(id: "newwand_r_\(packet.id)", label: "New Wand " + String(packet.hex.suffix(4)), matchKind: .exactHex, matchValue: packet.hex, defaultHex: packet.hex)
     }
 
     static func learnedTrigger(_ packet: MagicPacket) -> PacketPattern {
@@ -89,7 +98,17 @@ enum PacketPatterns {
                 return packet.hex
             }
         }
+        if rule.responsePatternId.hasPrefix("newwand_r_"), let id = Int64(rule.responsePatternId.replacingOccurrences(of: "newwand_r_", with: "")) {
+            if let packet = NewWandCatalog.byId(id) {
+                return packet.hex
+            }
+        }
+        // The random-New-Wand sentinel resolves to a fresh code every fire (not fixed at rule creation).
+        if rule.responsePatternId == "resp_newwand_random" || rule.responseHex.trimmingCharacters(in: .whitespacesAndNewlines) == newWandRandomToken {
+            return NewWandCatalog.randomHex() ?? ""
+        }
         if let sys = systemResponses.first(where: { $0.id == rule.responsePatternId }), !sys.defaultHex.isEmpty {
+            if sys.defaultHex == newWandRandomToken { return NewWandCatalog.randomHex() ?? "" }
             return sys.defaultHex
         }
         return rule.responseHex.trimmingCharacters(in: .whitespacesAndNewlines)

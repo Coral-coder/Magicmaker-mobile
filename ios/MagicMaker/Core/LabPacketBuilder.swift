@@ -103,3 +103,36 @@ enum LabPacketBuilder {
         paletteColors.first(where: { $0.id == (id & 0x1F) })?.label ?? labLabel(id)
     }
 }
+
+/// Second wand type — the CF0B code range. Mirrors Android `NewWandCatalog.kt`.
+/// Generated on demand (not persisted), so it never bloats the saved library.
+enum NewWandCatalog {
+    static let prefix = "8301CF0B00C020224EAC7807866"
+    private static let rangeStart = 0xE80
+    private static let rangeEnd = 0xFFF
+    // These codes don't actually exist on the wand (last 2 bytes 6F20…6F7F).
+    private static let excluded = 0xF20...0xF7F
+    /// Synthetic id base, well above real learned-packet ids so the two never collide.
+    static let idBase: Int64 = 1_000_000
+
+    static let packets: [MagicPacket] = {
+        (rangeStart...rangeEnd).compactMap { v -> MagicPacket? in
+            if excluded.contains(v) { return nil }
+            let hex = prefix + String(format: "%03X", v)
+            let colorIdx = (Int(hex.suffix(2), radix: 16) ?? 0) & 0x1F
+            return MagicPacket(
+                id: idBase + Int64(v - rangeStart),
+                hex: hex,
+                label: "New Wand " + String(format: "%03X", v),
+                category: .color,
+                typeInfo: "newwand",
+                colors: PresetCatalog.starlightColorNames[colorIdx] ?? "Color",
+                simKey: "NEWWAND:\(hex)"
+            )
+        }
+    }()
+
+    static func byId(_ id: Int64) -> MagicPacket? { packets.first(where: { $0.id == id }) }
+    static func isNewWandId(_ id: Int64) -> Bool { id >= idBase }
+    static func randomHex() -> String? { packets.randomElement()?.hex }
+}
