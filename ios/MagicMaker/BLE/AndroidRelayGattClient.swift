@@ -14,6 +14,7 @@ final class AndroidRelayGattClient: NSObject {
     static let statusUUID = CBUUID(string: "A7830004-0000-1000-8000-00805F9B34FB")
     static let catalogUUID = CBUUID(string: "A7830005-0000-1000-8000-00805F9B34FB")
     static let deviceName = "MagicMaker-Android"
+    static let esp32Name = "MagicMaker-ESP32"
 
     var onStatus: ((String) -> Void)?
     var onCommandReady: (() -> Void)?
@@ -156,7 +157,9 @@ final class AndroidRelayGattClient: NSObject {
         guard RelayBackend.load().usesBleRelayLink else { return false }
         if let lockedRelayId, peripheral.identifier == lockedRelayId { return true }
         if let id = relay?.identifier, peripheral.identifier == id { return true }
-        return peripheral.name == Self.deviceName || peripheral.name?.hasPrefix("MagicMaker-Android") == true
+        return peripheral.name == Self.deviceName
+            || peripheral.name?.hasPrefix("MagicMaker-Android") == true
+            || peripheral.name?.hasPrefix("MagicMaker-ESP32") == true
     }
 
     func isRelayAdvertisement(_ advertisementData: [String: Any]) -> Bool {
@@ -169,6 +172,7 @@ final class AndroidRelayGattClient: NSObject {
         if hasService { return true }
         if name == Self.deviceName { return true }
         if name?.hasPrefix("MagicMaker-Android") == true { return true }
+        if name?.hasPrefix("MagicMaker-ESP32") == true { return true }
         return false
     }
 

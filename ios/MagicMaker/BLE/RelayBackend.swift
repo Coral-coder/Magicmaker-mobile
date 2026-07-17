@@ -2,23 +2,27 @@ import Foundation
 
 enum RelayBackend: String, CaseIterable, Identifiable {
     case androidBle
+    case esp32
     case androidWifi
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .androidBle: return "BLE GATT"
+        case .androidBle: return "Android BLE"
+        case .esp32: return "ESP32"
         case .androidWifi: return "WiFi Hotspot"
         }
     }
 
-    var usesBleRelayLink: Bool { self == .androidBle }
+    // Both BLE backends link over the same relay GATT service; the ESP32 firmware
+    // implements the same contract, so the transmit path is identical.
+    var usesBleRelayLink: Bool { self == .androidBle || self == .esp32 }
     var usesWifiRelay: Bool { self == .androidWifi }
 
     static func load() -> RelayBackend {
         let raw = UserDefaults.standard.string(forKey: "relay_backend") ?? RelayBackend.androidBle.rawValue
-        if raw == "androidLocal" || raw == "esp32" { return .androidBle }
+        if raw == "androidLocal" { return .androidBle }
         return RelayBackend(rawValue: raw) ?? .androidBle
     }
 

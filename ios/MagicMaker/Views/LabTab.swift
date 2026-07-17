@@ -107,6 +107,12 @@ struct LabTab: View {
         VStack(alignment: .leading, spacing: 8) {
             Group {
                 switch vm.relayBackend {
+                case .esp32:
+                    Text("ESP32 transmitter")
+                        .font(.caption.weight(.semibold))
+                    Text("1. Power on the MagicMaker ESP32 (USB or battery).")
+                    Text("2. iPhone auto-connects — no pairing needed.")
+                    Text("3. iPhone keeps scanning; the ESP32 does the transmitting.")
                 case .androidBle:
                     Text("Android BLE GATT relay")
                         .font(.caption.weight(.semibold))

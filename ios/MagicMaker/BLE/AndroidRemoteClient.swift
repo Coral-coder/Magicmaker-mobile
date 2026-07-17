@@ -90,7 +90,7 @@ final class AndroidRemoteClient {
             wifi.fetchRemoteStatus { status in
                 onComplete(status)
             }
-        case .androidBle:
+        case .androidBle, .esp32:
             guard let central else {
                 onComplete(nil)
                 return
@@ -118,7 +118,7 @@ final class AndroidRemoteClient {
                     onComplete(Self.pairingFromStatus(json))
                 }
             }.resume()
-        case .androidBle:
+        case .androidBle, .esp32:
             guard let central else {
                 onComplete(nil)
                 return
@@ -166,7 +166,7 @@ final class AndroidRemoteClient {
             wifi.sendControl(body) { ok in
                 onComplete(ok)
             }
-        case .androidBle:
+        case .androidBle, .esp32:
             guard let central else {
                 onComplete(false)
                 return
@@ -191,7 +191,7 @@ final class AndroidRemoteClient {
                     onComplete(Self.parseLivePackets(data: data, response: response, error: error))
                 }
             }.resume()
-        case .androidBle:
+        case .androidBle, .esp32:
             guard let central else {
                 onComplete([])
                 return
@@ -223,7 +223,7 @@ final class AndroidRemoteClient {
         case .androidWifi:
             onDiagnostic?("wifi /catalog")
             fetchCatalogViaHttp(onDiagnostic: onDiagnostic, onComplete: onComplete)
-        case .androidBle:
+        case .androidBle, .esp32:
             guard let central else {
                 onDiagnostic?("BLE not linked")
                 onComplete(nil)
