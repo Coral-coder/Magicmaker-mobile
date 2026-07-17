@@ -46,17 +46,18 @@ if (-not (Test-Path $CliExe)) {
     }
 }
 
-function Cli { & $CliExe @args; if ($LASTEXITCODE -ne 0) { throw "arduino-cli failed: $args" } }
+# NOTE: don't name this 'Cli' - that's a built-in alias for Clear-Item and would shadow it.
+function Acli { & $CliExe @args; if ($LASTEXITCODE -ne 0) { throw "arduino-cli failed: $args" } }
 
 # 2. Board core + library (skips work if already present).
 Say "Updating board index..."
-Cli config init --overwrite | Out-Null
-Cli config set board_manager.additional_urls $Esp32IndexUrl
-Cli core update-index
+Acli config init --overwrite | Out-Null
+Acli config set board_manager.additional_urls $Esp32IndexUrl
+Acli core update-index
 Say "Installing ESP32 core (first run takes a few minutes)..."
-Cli core install esp32:esp32
+Acli core install esp32:esp32
 Say "Installing NimBLE-Arduino library..."
-Cli lib install "NimBLE-Arduino"
+Acli lib install "NimBLE-Arduino"
 
 # 3. Pick the port if not given.
 if (-not $Port) {
@@ -74,8 +75,8 @@ if (-not $Port) {
 
 # 4. Compile + upload.
 Say "Compiling for $Fqbn..."
-Cli compile --fqbn $Fqbn "$SketchDir"
+Acli compile --fqbn $Fqbn "$SketchDir"
 Say "Flashing to $Port..."
-Cli upload -p $Port --fqbn $Fqbn "$SketchDir"
+Acli upload -p $Port --fqbn $Fqbn "$SketchDir"
 
 Say "Done. The ESP32 is now advertising as MagicMaker-ESP32 - pick the ESP32 backend in the app."
