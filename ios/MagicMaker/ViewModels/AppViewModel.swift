@@ -26,6 +26,13 @@ final class AppViewModel: ObservableObject {
     @Published var androidLabHex = ""
     private var lastCatalogRevision = -1
 
+    // Random light show — foreground-only (iOS has no background transmit service): a timer
+    // fires a fresh random packet through the current transmit backend until stopped.
+    @Published var randomShowRunning = false
+    @Published var randomShowLabel = ""
+    @Published var randomShowIntervalSec: Double = 3.0
+    private var randomShowTimer: Timer?
+
     private var _store: MagicStore?
     var store: MagicStore {
         if let _store { return _store }
@@ -328,6 +335,39 @@ final class AppViewModel: ObservableObject {
             return
         }
         ble.play(hex: c.hex, label: label, typeInfo: c.typeInfo, category: c.category)
+    }
+
+    // MARK: - Random light show (foreground)
+
+    func startRandomShow() {
+        stopRandomShowTimer()
+        randomShowRunning = true
+        fireRandomShow()
+        let interval = max(0.5, randomShowIntervalSec)
+        randomShowTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.fireRandomShow() }
+        }
+    }
+
+    func stopRandomShow() {
+        randomShowRunning = false
+        stopRandomShowTimer()
+    }
+
+    func setRandomShowInterval(_ seconds: Double) {
+        randomShowIntervalSec = seconds
+        if randomShowRunning { startRandomShow() } // re-arm at the new pace
+    }
+
+    private func stopRandomShowTimer() {
+        randomShowTimer?.invalidate()
+        randomShowTimer = nil
+    }
+
+    private func fireRandomShow() {
+        let show = LabPacketBuilder.buildRandomShow()
+        randomShowLabel = show.label
+        playHex(show.hex, label: show.label)
     }
 
     func loadIntoLab(hex: String, label: String = "") {

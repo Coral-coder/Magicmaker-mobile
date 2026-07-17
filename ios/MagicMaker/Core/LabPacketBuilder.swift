@@ -102,6 +102,35 @@ enum LabPacketBuilder {
     static func paletteLabel(_ id: Int) -> String {
         paletteColors.first(where: { $0.id == (id & 0x1F) })?.label ?? labLabel(id)
     }
+
+    /// One random light-show step, as (label, hex). Mirrors Android `buildRandomShow`.
+    /// Weighted toward colorful/animated types; a haptic accent fires ~1 in 5. Never picks Off.
+    static func buildRandomShow() -> (label: String, hex: String) {
+        let ids = paletteColors.map { $0.id }.filter { $0 != 0x1D && $0 != 0x1F } // no Off / Random
+        func color() -> Int { ids.randomElement() ?? 0x00 }
+        func name(_ id: Int) -> String { PresetCatalog.starlightColorNames[id & 0x1F] ?? "Color" }
+        let vibOn = Int.random(in: 0..<5) == 0
+        let vibPat = vibOn ? Int.random(in: 1..<9) : 0
+        switch Int.random(in: 0..<16) {
+        case 0...3:
+            let c = color(); return ("Show: \(name(c))", buildPreset(colorId: c, vibEnabled: vibOn, vibPattern: vibPat))
+        case 4...6:
+            let a = color(); let b = color()
+            return ("Show: Dual \(name(a))/\(name(b))", buildDual(a, b, vibEnabled: vibOn, vibPattern: vibPat))
+        case 7...9:
+            let a = color(); let b = color()
+            return ("Show: Fade \(name(a))→\(name(b))", buildCrossfade(a, b, vibEnabled: vibOn, vibPattern: vibPat))
+        case 10...12:
+            return ("Show: Rainbow mix", buildRainbow(color(), color(), color(), color(), color(), vibEnabled: vibOn, vibPattern: vibPat))
+        case 13:
+            return ("Show: Circle spin", buildCircle(vibEnabled: vibOn, vibPattern: vibPat))
+        default:
+            if let fx = showEffects.filter({ $0.0 != "Show Off" }).randomElement() {
+                return ("Show: \(fx.0)", fx.1)
+            }
+            let c = color(); return ("Show: \(name(c))", buildPreset(colorId: c, vibEnabled: vibOn, vibPattern: vibPat))
+        }
+    }
 }
 
 /// Second wand type — the CF0B code range. Mirrors Android `NewWandCatalog.kt`.

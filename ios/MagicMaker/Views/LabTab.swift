@@ -47,6 +47,11 @@ struct LabTab: View {
                 Button("Vibrate band") { vm.vibrateAndroid() }
                     .buttonStyle(.bordered)
                     .disabled(!vm.remoteLinkReady)
+
+                Divider()
+                randomShowCard
+                Divider()
+                newWandCard
             }
             .padding(12)
         }
@@ -133,5 +138,69 @@ struct LabTab: View {
         .padding(10)
         .background(.quaternary.opacity(0.35))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var randomShowCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Random light show")
+                .font(.caption.weight(.semibold))
+            Text("Fires a surprise packet on a loop until stopped (runs while this screen is open).")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            HStack {
+                Text("Interval").font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Text(String(format: "%.1fs", vm.randomShowIntervalSec)).font(.caption2)
+            }
+            Slider(
+                value: Binding(get: { vm.randomShowIntervalSec }, set: { vm.setRandomShowInterval($0) }),
+                in: 0.5...30, step: 0.5
+            )
+            Button(vm.randomShowRunning ? "Stop show" : "Start show") {
+                if vm.randomShowRunning { vm.stopRandomShow() } else { vm.startRandomShow() }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(vm.randomShowRunning ? .red : .accentColor)
+            .disabled(!vm.remoteLinkReady)
+            if vm.randomShowRunning, !vm.randomShowLabel.isEmpty {
+                Text(vm.randomShowLabel.uppercased())
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var newWandCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("New Wand codes (\(NewWandCatalog.packets.count))")
+                .font(.caption.weight(.semibold))
+            Text("Tap a code (by last 2 bytes) to transmit through the current backend.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(NewWandCatalog.packets) { pkt in
+                        Button {
+                            vm.playHex(pkt.hex, label: pkt.label)
+                        } label: {
+                            HStack {
+                                Text(String(pkt.hex.suffix(4)))
+                                    .font(.caption.monospaced())
+                                Spacer()
+                                Text(pkt.colors)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                    }
+                }
+            }
+            .frame(height: 240)
+            .disabled(!vm.remoteLinkReady)
+        }
     }
 }
