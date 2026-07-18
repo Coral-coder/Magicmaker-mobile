@@ -425,6 +425,9 @@ struct RemoteWandView: View {
     @EnvironmentObject var vm: AppViewModel
     @EnvironmentObject var remoteUI: RemoteUIState
     @State private var showNewWand = false
+    @State private var editQuick = false
+    @State private var quickLabel = ""
+    @State private var quickHex = ""
 
     // New Wand (CF0B) codes are generated locally — they aren't sent over the relay catalog.
     private static let newWandColors: [AndroidRemotePreset] = NewWandCatalog.packets.map {
@@ -471,6 +474,28 @@ struct RemoteWandView: View {
             HStack(spacing: 6) {
                 wandModeButton("STARLIGHT", isNew: false)
                 wandModeButton("NEW WAND", isNew: true)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+
+            // Programmable quick button (defaults to the New Wand "Off" code). Tap sends it;
+            // press-and-hold to reprogram its label + code. Visible on both wand screens.
+            Button {
+                vm.transmitWandQuick()
+            } label: {
+                Text(vm.wandQuickLabel.uppercased())
+                    .font(MMTheme.techLabel(11))
+                    .foregroundStyle(MMTheme.textPrimary)
+                    .frame(maxWidth: .infinity, minHeight: 30)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .disabled(!vm.remoteLinkReady)
+            .onLongPressGesture {
+                quickLabel = vm.wandQuickLabel
+                quickHex = vm.wandQuickHex
+                editQuick = true
             }
             .padding(.horizontal, 12)
             .padding(.top, 6)
@@ -563,6 +588,16 @@ struct RemoteWandView: View {
         }
         .scrollDisabled(remoteUI.sliderDragging)
         .background(MMTheme.navy)
+        .alert("Quick button", isPresented: $editQuick) {
+            TextField("Label", text: $quickLabel)
+            TextField("Hex (8301…)", text: $quickHex)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.characters)
+            Button("Save") { vm.setWandQuick(label: quickLabel, hex: quickHex) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Tap sends this code; long-press to change it.")
+        }
     }
 }
 
