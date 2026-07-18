@@ -213,13 +213,21 @@ fun StarlightWandView(
                         modifier = Modifier.menuAnchor().height(44.dp).fillMaxWidth(),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
                     ) {
-                        Text(
-                            label.uppercase(),
-                            style = techLabel(),
-                            color = AppColors.TextPrimary,
-                            maxLines = 1,
-                            modifier = Modifier.weight(1f),
-                        )
+                        // Name on top, the actual code below, so you see exactly which one is armed.
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                label.uppercase(),
+                                style = techLabel(),
+                                color = AppColors.TextPrimary,
+                                maxLines = 1,
+                            )
+                            Text(
+                                selected?.hex?.uppercase() ?: "",
+                                style = techLabel(),
+                                color = AppColors.TextDim,
+                                maxLines = 1,
+                            )
+                        }
                         Text("▾", style = techLabel(), color = AppColors.TextDim)
                     }
                     ExposedDropdownMenu(
@@ -233,7 +241,7 @@ fun StarlightWandView(
                                     Text(
                                         StarlightColors.nameFor(
                                             MagicClassifier.starlightColorIndex(packet.hex),
-                                        ).uppercase(),
+                                        ).uppercase() + "  ·  " + packet.hex.uppercase(),
                                         style = techLabel(),
                                     )
                                 },
