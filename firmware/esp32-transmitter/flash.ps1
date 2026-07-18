@@ -1,15 +1,16 @@
 <#
   Flash the MagicMaker ESP32 transmitter firmware from Windows.
 
-  It bootstraps everything: downloads a portable arduino-cli if you don't have one,
-  installs the ESP32 board core + NimBLE-Arduino library, compiles the sketch, and
-  uploads it to your board. Run it from this folder (it flashes the .ino next to it).
+  NO compiling. No Arduino toolchain. This downloads the PREBUILT firmware that
+  GitHub Actions already compiled (magicmaker-esp32.bin), auto-detects your
+  ESP32's COM port, and flashes it with esptool. That's it.
 
   USAGE (PowerShell, in this folder):
-    ./flash.ps1                 # auto-detect the ESP32's COM port
-    ./flash.ps1 -ListPorts      # just list COM ports and exit
-    ./flash.ps1 -Port COM5      # force a port
-    ./flash.ps1 -Fqbn esp32:esp32:esp32s3   # for an S3/C3 board
+    ./flash.ps1                       # download latest firmware + auto-detect port + flash
+    ./flash.ps1 -ListPorts            # just list COM ports and exit
+    ./flash.ps1 -Port COM5            # force a port (skip auto-detect)
+    ./flash.ps1 -Bin .\my.bin         # flash a local .bin instead of downloading
+    ./flash.ps1 -Baud 460800          # slower upload speed if 921600 is flaky
 
   If PowerShell blocks the script, run this once in the same window:
     Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
@@ -17,15 +18,15 @@
 
 param(
     [string]$Port = "",
-    [string]$Fqbn = "esp32:esp32:esp32",
-    [string]$SketchDir = $PSScriptRoot,
+    [string]$Bin = "",
+    [int]$Baud = 921600,
     [switch]$ListPorts
 )
 
 $ErrorActionPreference = "Stop"
-$Esp32IndexUrl = "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
-$Tools = Join-Path $PSScriptRoot ".tools"
-$CliExe = Join-Path $Tools "arduino-cli.exe"
+$Tools     = Join-Path $PSScriptRoot ".tools"
+$EsptoolVer = "v4.8.1"
+$BinUrl    = "https://github.com/Coral-coder/Magicmaker-mobile/releases/download/esp32-firmware/magicmaker-esp32.bin"
 
 function Say($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
@@ -72,45 +73,63 @@ if ($ListPorts) {
     return
 }
 
-# 1. Get arduino-cli (portable, kept in a local .tools folder - nothing installed system-wide).
-if (-not (Test-Path $CliExe)) {
-    if (Get-Command arduino-cli -ErrorAction SilentlyContinue) {
-        $CliExe = "arduino-cli"
-    } else {
-        Say "Downloading arduino-cli (one-time)..."
-        New-Item -ItemType Directory -Force -Path $Tools | Out-Null
-        $zip = Join-Path $Tools "arduino-cli.zip"
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri "https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Windows_64bit.zip" -OutFile $zip
-        Expand-Archive -Path $zip -DestinationPath $Tools -Force
-        Remove-Item $zip
+# Find esptool: an already-downloaded portable exe, one on PATH, python -m esptool, or
+# download the standalone Windows build (no Python needed). Returns {Exe, Pre}.
+function Get-Esptool {
+    $local = Get-ChildItem -Path $Tools -Recurse -Filter esptool.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($local) { return [pscustomobject]@{ Exe = $local.FullName; Pre = @() } }
+    if (Get-Command esptool.exe -ErrorAction SilentlyContinue) { return [pscustomobject]@{ Exe = "esptool.exe"; Pre = @() } }
+    if (Get-Command esptool    -ErrorAction SilentlyContinue) { return [pscustomobject]@{ Exe = "esptool";     Pre = @() } }
+    foreach ($py in @("python", "py")) {
+        if (Get-Command $py -ErrorAction SilentlyContinue) {
+            try { & $py -m esptool version *> $null; if ($LASTEXITCODE -eq 0) { return [pscustomobject]@{ Exe = $py; Pre = @("-m", "esptool") } } } catch {}
+        }
     }
+    Say "Downloading esptool $EsptoolVer (one-time)..."
+    New-Item -ItemType Directory -Force -Path $Tools | Out-Null
+    $zip = Join-Path $Tools "esptool.zip"
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri "https://github.com/espressif/esptool/releases/download/$EsptoolVer/esptool-$EsptoolVer-win64.zip" -OutFile $zip
+    Expand-Archive -Path $zip -DestinationPath $Tools -Force
+    Remove-Item $zip
+    $local = Get-ChildItem -Path $Tools -Recurse -Filter esptool.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $local) { throw "esptool.exe not found after download." }
+    return [pscustomobject]@{ Exe = $local.FullName; Pre = @() }
 }
 
-# NOTE: don't name this 'Cli' - that's a built-in alias for Clear-Item and would shadow it.
-function Acli { & $CliExe @args; if ($LASTEXITCODE -ne 0) { throw "arduino-cli failed: $args" } }
-
-# 2. Detect the board FIRST, so we fail fast with a helpful message before the long installs.
+# 1. Detect the board FIRST so we fail fast with a helpful message.
 if (-not $Port) { $Port = Find-Esp32Port }
 Say "Using port $Port (override with -Port COMx if wrong)"
 
-# 3. Board core + library. Pinned to a known-good pair: the firmware targets the NimBLE 1.x
-#    API, and NimBLE 1.4.x pairs with esp32 core 2.0.x. (NimBLE 2.x + core 3.x changed the API.)
-$Esp32CoreVersion = "2.0.17"
-$NimBleVersion    = "1.4.3"
-Say "Updating board index..."
-Acli config init --overwrite | Out-Null
-Acli config set board_manager.additional_urls $Esp32IndexUrl
-Acli core update-index
-Say "Installing ESP32 core $Esp32CoreVersion (first run downloads it - a few minutes)..."
-Acli core install "esp32:esp32@$Esp32CoreVersion"
-Say "Installing NimBLE-Arduino $NimBleVersion..."
-Acli lib install "NimBLE-Arduino@$NimBleVersion"
+# 2. Get the firmware .bin. Use a local one if given; otherwise download the latest prebuilt.
+if ($Bin) {
+    if (-not (Test-Path $Bin)) { throw "Firmware file not found: $Bin" }
+    Say "Using local firmware $Bin"
+} else {
+    New-Item -ItemType Directory -Force -Path $Tools | Out-Null
+    $Bin = Join-Path $Tools "magicmaker-esp32.bin"
+    Say "Downloading latest prebuilt firmware..."
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $BinUrl -OutFile $Bin
+    Say "Downloaded $([math]::Round((Get-Item $Bin).Length/1KB)) KB"
+}
 
-# 4. Compile + upload.
-Say "Compiling for $Fqbn..."
-Acli compile --fqbn $Fqbn "$SketchDir"
-Say "Flashing to $Port..."
-Acli upload -p $Port --fqbn $Fqbn "$SketchDir"
+# 3. Flash. The .bin is a single merged image built to sit at flash offset 0x0.
+$t = Get-Esptool
+$flashArgs = $t.Pre + @(
+    "--chip", "esp32", "--port", $Port, "--baud", "$Baud",
+    "--before", "default_reset", "--after", "hard_reset",
+    "write_flash", "0x0", $Bin
+)
+Say "Flashing to $Port at $Baud baud..."
+& $t.Exe @flashArgs
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "Flashing failed. Common fixes:" -ForegroundColor Yellow
+    Write-Host "  * Hold the BOOT button while it says 'Connecting...', release after it starts." -ForegroundColor Yellow
+    Write-Host "  * Try a slower speed: ./flash.ps1 -Baud 460800" -ForegroundColor Yellow
+    Write-Host "  * Close any serial monitor / Arduino IDE that may hold the port." -ForegroundColor Yellow
+    throw "esptool exited with code $LASTEXITCODE."
+}
 
 Say "Done. The ESP32 is now advertising as MagicMaker-ESP32 - pick the ESP32 backend in the app."

@@ -40,6 +40,8 @@ static const uint32_t DEFAULT_CMD_MS  = 4000;   // command stream length (defaul
 static const uint32_t MIN_CMD_MS      = 300;
 static const uint32_t MAX_CMD_MS      = 12000;
 static const char*    WAKEUP_PING_HEX = "8301CC03000100";
+// The app's "Vibrate" command carries no hex (the receiver knows the packet), so we hold it here.
+static const char*    VIBRATE_HEX     = "8301CC03000100E100E90C000F0F5D465BF005323748B0";
 
 // Advertising intervals (units of 0.625 ms). Short during a burst for reliable waking;
 // relaxed while idle-connectable to save power.
@@ -212,6 +214,39 @@ static void serviceTransmit() {
   }
 }
 
+// Queue a packet for broadcast (newest wins). Shared by the TX char and the COMMAND char.
+static void queueTransmit(const char* hex, size_t hexLen, uint32_t cmdMs) {
+  uint8_t bytes[31];
+  size_t len = hexToBytes(hex, hexLen, bytes, sizeof(bytes));
+  if (len < 2) return;
+  portENTER_CRITICAL(&gPendingMux);
+  memcpy(gPendingBytes, bytes, len);
+  gPendingLen = len;
+  gPendingCmdMs = cmdMs;
+  gHasPending = true;
+  portEXIT_CRITICAL(&gPendingMux);
+}
+
+// Minimal extractor for {"key":"value"} — copies value into out. Returns its length (0 if absent).
+// We avoid a JSON library to keep the firmware tiny; the app emits compact JSON with no spaces.
+static size_t jsonStringValue(const std::string& json, const char* key, char* out, size_t maxOut) {
+  std::string pat = std::string("\"") + key + "\"";
+  size_t k = json.find(pat);
+  if (k == std::string::npos) return 0;
+  size_t colon = json.find(':', k + pat.size());
+  if (colon == std::string::npos) return 0;
+  size_t q1 = json.find('"', colon + 1);
+  if (q1 == std::string::npos) return 0;
+  size_t q2 = json.find('"', q1 + 1);
+  if (q2 == std::string::npos) return 0;
+  size_t n = q2 - q1 - 1;
+  if (maxOut == 0) return 0;
+  if (n >= maxOut) n = maxOut - 1;
+  memcpy(out, json.c_str() + q1 + 1, n);
+  out[n] = '\0';
+  return n;
+}
+
 // ---- GATT callbacks ------------------------------------------------------------------
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* s, ble_gap_conn_desc* desc) override {
@@ -229,26 +264,32 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
 class TransmitCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c) override {
+    // Lab "Transmit" writes raw "{hex}|{durationMs}" here.
     std::string v = c->getValue();
     int pipe = (int)v.rfind('|');
     if (pipe <= 0) return;
-    std::string hex = v.substr(0, pipe);
     uint32_t dur = (uint32_t)strtoul(v.c_str() + pipe + 1, nullptr, 10);
-    uint8_t bytes[31];
-    size_t len = hexToBytes(hex.c_str(), hex.size(), bytes, sizeof(bytes));
-    if (len < 2) return;
-    portENTER_CRITICAL(&gPendingMux);
-    memcpy(gPendingBytes, bytes, len); gPendingLen = len; gPendingCmdMs = dur;
-    gHasPending = true;
-    portEXIT_CRITICAL(&gPendingMux);
+    queueTransmit(v.c_str(), (size_t)pipe, dur);
   }
 };
 
 class CommandCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c) override {
+    std::string v = c->getValue();
+
+    // The Remote / TX / wand tabs don't use the raw TX char — they transmit by sending
+    // {"action":"transmit","hex":"8301..."} (and "vibrate") to THIS command char. The
+    // Android relay acts on those; the ESP32 must too, or those tabs silently do nothing.
+    if (v.find("\"action\":\"transmit\"") != std::string::npos) {
+      char hex[96];
+      size_t n = jsonStringValue(v, "hex", hex, sizeof(hex));
+      if (n >= 4) queueTransmit(hex, n, DEFAULT_CMD_MS);
+    } else if (v.find("\"action\":\"vibrate\"") != std::string::npos) {
+      queueTransmit(VIBRATE_HEX, strlen(VIBRATE_HEX), DEFAULT_CMD_MS);
+    }
+
     // We don't host a library — acknowledge every command so the app's link handshake and
     // catalog sync succeed with an empty set. The phone keeps its own library.
-    std::string v = c->getValue();
     if (v.find("catalog") != std::string::npos || v.find("sync") != std::string::npos) {
       gLastCommandReply = "{\"ok\":true,\"items\":[]}";
     } else {
