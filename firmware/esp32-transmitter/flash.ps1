@@ -10,7 +10,11 @@
     ./flash.ps1 -ListPorts            # just list COM ports and exit
     ./flash.ps1 -Port COM5            # force a port (skip auto-detect)
     ./flash.ps1 -Bin .\my.bin         # flash a local .bin instead of downloading
+    ./flash.ps1 -Token ghp_xxx        # auto-download from this PRIVATE repo with a GitHub token
     ./flash.ps1 -Baud 460800          # slower upload speed if 921600 is flaky
+
+  This repo is private, so the anonymous auto-download won't work. Either download
+  magicmaker-esp32.bin in your browser and use -Bin, or pass a -Token (repo read scope).
 
   If PowerShell blocks the script, run this once in the same window:
     Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
@@ -20,6 +24,7 @@ param(
     [string]$Port = "",
     [string]$Bin = "",
     [int]$Baud = 921600,
+    [string]$Token = $env:GITHUB_TOKEN,   # needed to auto-download from a PRIVATE repo
     [switch]$ListPorts
 )
 
@@ -110,8 +115,39 @@ if ($Bin) {
     $Bin = Join-Path $Tools "magicmaker-esp32.bin"
     Say "Downloading latest prebuilt firmware..."
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri $BinUrl -OutFile $Bin
-    Say "Downloaded $([math]::Round((Get-Item $Bin).Length/1KB)) KB"
+    # This repo is PRIVATE, so an anonymous download returns GitHub's HTML login page, not the
+    # .bin. With a token we fetch via the API asset endpoint (Accept: octet-stream) which auth's.
+    try {
+        if ($Token) {
+            $headers = @{ Authorization = "Bearer $Token"; Accept = "application/octet-stream"; "User-Agent" = "magicmaker-flash" }
+            $api = "https://api.github.com/repos/Coral-coder/Magicmaker-mobile/releases/tags/esp32-firmware"
+            $rel = Invoke-RestMethod -Uri $api -Headers @{ Authorization = "Bearer $Token"; "User-Agent" = "magicmaker-flash"; Accept = "application/vnd.github+json" }
+            $asset = $rel.assets | Where-Object { $_.name -eq "magicmaker-esp32.bin" } | Select-Object -First 1
+            if (-not $asset) { throw "Release asset magicmaker-esp32.bin not found." }
+            Invoke-WebRequest -Uri $asset.url -Headers $headers -OutFile $Bin
+        } else {
+            Invoke-WebRequest -Uri $BinUrl -OutFile $Bin -Headers @{ "User-Agent" = "magicmaker-flash" }
+        }
+    } catch {
+        throw "Download failed: $($_.Exception.Message)"
+    }
+
+    # A real ESP32 image is ~600 KB and never starts with '<' (that's an HTML error/login page).
+    $size = (Get-Item $Bin).Length
+    $head = [System.IO.File]::ReadAllBytes($Bin)[0]
+    if ($size -lt 100KB -or $head -eq 0x3C) {
+        Remove-Item $Bin -Force -ErrorAction SilentlyContinue
+        Write-Host ""
+        Write-Host "The download wasn't firmware - this repo is private, so an anonymous fetch gets" -ForegroundColor Yellow
+        Write-Host "GitHub's login page instead of the .bin. Do ONE of these:" -ForegroundColor Yellow
+        Write-Host "  1) In your browser (logged into GitHub) download the file, then flash it:" -ForegroundColor Yellow
+        Write-Host "       $BinUrl" -ForegroundColor Yellow
+        Write-Host "       .\flash.ps1 -Bin .\magicmaker-esp32.bin" -ForegroundColor Yellow
+        Write-Host "  2) Or pass a GitHub token (repo read scope):" -ForegroundColor Yellow
+        Write-Host "       .\flash.ps1 -Token ghp_xxx" -ForegroundColor Yellow
+        throw "Firmware download invalid (got $([math]::Round($size/1KB)) KB, not a valid image)."
+    }
+    Say "Downloaded $([math]::Round($size/1KB)) KB"
 }
 
 # 3. Flash. The .bin is a single merged image built to sit at flash offset 0x0.
