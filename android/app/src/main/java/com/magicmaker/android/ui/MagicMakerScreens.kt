@@ -1953,7 +1953,8 @@ private fun RelayTab(state: ServiceState.UiState, bleGranted: Boolean, wifiGrant
     Column(Modifier.padding(AppDimens.pad), verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
         Text("RELAY / REMOTE", style = techHeader())
         Text(
-            "GATT remote is always on while the service runs. WiFi hotspot is optional.",
+            "STANDALONE keeps this phone off the air as a relay (no BLE GATT advertising) so an " +
+                "iPhone can target the ESP32. Pick BLE GATT or WiFi only when relaying for an iPhone.",
             style = techLabel(),
             color = AppColors.TextDim,
         )
@@ -1980,7 +1981,12 @@ private fun RelayTab(state: ServiceState.UiState, bleGranted: Boolean, wifiGrant
             )
         }
         when (state.relayMode) {
-            RelayControlMode.STANDALONE, RelayControlMode.BLE_GATT -> GattRelayPanel(state, bleGranted)
+            RelayControlMode.STANDALONE -> Text(
+                "Standalone: transmitting directly, not advertising as an iPhone relay.",
+                style = techLabel(),
+                color = AppColors.TextDim,
+            )
+            RelayControlMode.BLE_GATT -> GattRelayPanel(state, bleGranted)
             RelayControlMode.WIFI_HOTSPOT -> {
                 if (!wifiGranted) {
                     Text("NEARBY DEVICES permission required for WiFi hotspot.", style = techLabel(), color = AppColors.Amber)

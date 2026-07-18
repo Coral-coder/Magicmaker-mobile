@@ -1021,7 +1021,13 @@ class MagicMakerForegroundService : Service() {
         hotspotManager?.stopHotspot()
 
         val handlers = relayCommandHandlers()
-        startGattRelay(handlers)
+        // Only advertise the relay GATT server when the user actually picked BLE_GATT relay.
+        // In STANDALONE (or WiFi) we must NOT advertise the A7830001 service, or an iPhone aimed
+        // at the ESP32 will grab this phone instead. Standalone transmit uses BleAdvertiser and
+        // is unaffected (gattServer stays null, and all gattServer?. call sites are null-safe).
+        if (relayMode == RelayControlMode.BLE_GATT) {
+            startGattRelay(handlers)
+        }
 
         when (relayMode) {
             RelayControlMode.STANDALONE, RelayControlMode.BLE_GATT -> publishState {
