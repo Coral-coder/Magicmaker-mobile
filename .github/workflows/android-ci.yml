@@ -40,11 +40,12 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
+      # The point of this workflow is the compile check above. The debug APK is only a
+      # convenience download, and uploading it on every push/PR fills GitHub's artifact
+      # storage quota. So only upload it on a manual run (workflow_dispatch), and even then
+      # never fail the check if storage is full. The real APK lives on the release page.
       - name: Upload debug APK
-        if: success()
-        # Non-fatal: the debug APK is a convenience download, not the deliverable (the
-        # release page carries the real APK). Don't fail the check when GitHub's artifact
-        # storage quota is hit; keep retention short so we stop filling it.
+        if: success() && github.event_name == 'workflow_dispatch'
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
