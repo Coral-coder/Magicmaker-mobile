@@ -127,7 +127,7 @@ static void startIdleAdvertising() {
   // Primary ADV carries flags + the 128-bit service UUID (how the app discovers a relay).
   NimBLEAdvertisementData ad;
   ad.setFlags(0x06);
-  ad.addServiceUUID(SERVICE_UUID);
+  ad.setCompleteServices(NimBLEUUID(SERVICE_UUID)); // NimBLEAdvertisementData uses this, not addServiceUUID
   // The full name goes in the SCAN RESPONSE — a 128-bit UUID already nearly fills the 31-byte
   // primary ADV, so putting the name there too would truncate it. The app needs the complete
   // "MagicMaker-ESP32" name to tell this board apart from a standalone Android relay (which
