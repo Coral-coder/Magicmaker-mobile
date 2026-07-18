@@ -67,7 +67,23 @@ jobs:
           name: ESP32 firmware (latest)
           body: |
             Prebuilt MagicMaker ESP32 transmitter firmware.
-            Flash with: ./flash.ps1 -Bin magicmaker-esp32.bin
+            Flash with: ./flash.ps1   (uses the .bin committed in firmware/esp32-transmitter/)
             (a single image flashed at offset 0x0 on a 4MB ESP32).
           files: magicmaker-esp32.bin
           fail_on_unmatched_files: true
+
+      # Also commit the built .bin into the repo so a plain `git pull` delivers the firmware
+      # and flash.ps1 can flash it with no download (the repo is private). A .bin path doesn't
+      # match this workflow's .ino/workflow triggers, so this push won't loop.
+      - name: Commit prebuilt bin into the repo
+        run: |
+          cp magicmaker-esp32.bin firmware/esp32-transmitter/magicmaker-esp32.bin
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add firmware/esp32-transmitter/magicmaker-esp32.bin
+          if git diff --cached --quiet; then
+            echo "prebuilt bin unchanged"
+          else
+            git commit -m "ci: update prebuilt magicmaker-esp32.bin [skip ci]"
+            git push origin HEAD:main
+          fi

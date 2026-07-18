@@ -106,10 +106,16 @@ function Get-Esptool {
 if (-not $Port) { $Port = Find-Esp32Port }
 Say "Using port $Port (override with -Port COMx if wrong)"
 
-# 2. Get the firmware .bin. Use a local one if given; otherwise download the latest prebuilt.
+# 2. Get the firmware .bin.
+#    Priority: -Bin you pass  ->  the prebuilt bin committed next to this script (CI keeps it
+#    fresh, so a plain `git pull` gives you the latest)  ->  download as a last resort.
+$RepoBin = Join-Path $PSScriptRoot "magicmaker-esp32.bin"
 if ($Bin) {
     if (-not (Test-Path $Bin)) { throw "Firmware file not found: $Bin" }
     Say "Using local firmware $Bin"
+} elseif (Test-Path $RepoBin) {
+    $Bin = $RepoBin
+    Say "Using prebuilt firmware from the repo ($([math]::Round((Get-Item $Bin).Length/1KB)) KB) - git pull keeps it current"
 } else {
     New-Item -ItemType Directory -Force -Path $Tools | Out-Null
     $Bin = Join-Path $Tools "magicmaker-esp32.bin"
