@@ -433,8 +433,28 @@ struct RemoteWandView: View {
             typeInfo: $0.typeInfo, colors: $0.colors, userRecorded: false, wandVerified: false
         )
     }
-    private var wandColors: [AndroidRemotePreset] {
-        showNewWand ? Self.newWandColors : (vm.androidCatalog?.wandColors ?? [])
+    // New Wand codes share this signature; used to keep them OUT of the Starlight list.
+    private static let newWandSignature = "CF0B00C020224EAC7807866"
+    private static func isNewWandHex(_ hex: String) -> Bool {
+        hex.uppercased().contains(newWandSignature)
+    }
+
+    // Starlight list: drop any New Wand codes that leaked in, and collapse serial-only
+    // duplicates so each color appears once (not many variations of the same color).
+    private var starlightColors: [AndroidRemotePreset] {
+        var seen = Set<Int>()
+        var out: [AndroidRemotePreset] = []
+        for p in (vm.androidCatalog?.wandColors ?? []) {
+            if Self.isNewWandHex(p.hex) { continue }
+            let idx = MagicClassifier.starlightColorIndex(p.hex) & 0x1F
+            if seen.insert(idx).inserted { out.append(p) }
+        }
+        return out
+    }
+
+    private func transmit(_ color: AndroidRemotePreset) {
+        remoteUI.selectedWandId = color.id
+        vm.transmitAndroidWandColor(color, intervalMs: Int(remoteUI.wandIntervalSec * 1000))
     }
 
     private func wandModeButton(_ title: String, isNew: Bool) -> some View {
@@ -455,19 +475,22 @@ struct RemoteWandView: View {
             .padding(.horizontal, 12)
             .padding(.top, 6)
 
-            StarlightWandView(
-                colors: wandColors,
-                displayColorIndex: vm.wandDisplayColorIndex,
-                sendEnabled: vm.remoteLinkReady && !wandColors.isEmpty,
-                onTransmit: { color in
-                    remoteUI.selectedWandId = color.id
-                    vm.transmitAndroidWandColor(
-                        color,
-                        intervalMs: Int(remoteUI.wandIntervalSec * 1000)
-                    )
-                }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if showNewWand {
+                NewWandList(
+                    colors: Self.newWandColors,
+                    enabled: vm.remoteLinkReady,
+                    onTransmit: { transmit($0) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                StarlightWandView(
+                    colors: starlightColors,
+                    displayColorIndex: vm.wandDisplayColorIndex,
+                    sendEnabled: vm.remoteLinkReady && !starlightColors.isEmpty,
+                    onTransmit: { transmit($0) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Toggle(isOn: Binding(
@@ -540,6 +563,75 @@ struct RemoteWandView: View {
         }
         .scrollDisabled(remoteUI.sliderDragging)
         .background(MMTheme.navy)
+    }
+}
+
+// Scrollable, renamable list of New Wand codes. Tap a row to send it; press-and-hold to rename
+// it (the color variations are otherwise hard to tell apart). Names persist on the device.
+private struct NewWandList: View {
+    @EnvironmentObject var vm: AppViewModel
+    let colors: [AndroidRemotePreset]
+    let enabled: Bool
+    let onTransmit: (AndroidRemotePreset) -> Void
+
+    @State private var renameTarget: AndroidRemotePreset?
+    @State private var renameText: String = ""
+
+    var body: some View {
+        List {
+            ForEach(colors) { preset in
+                Button {
+                    onTransmit(preset)
+                } label: {
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(starlightGlowColor(MagicClassifier.starlightColorIndex(preset.hex)))
+                            .frame(width: 14, height: 14)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(vm.newWandDisplayName(for: preset))
+                                .font(MMTheme.techLabel(12))
+                                .foregroundStyle(MMTheme.textPrimary)
+                            Text(preset.hex.uppercased())
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(MMTheme.textDim)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!enabled)
+                .listRowBackground(MMTheme.panel)
+                .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                .contextMenu {
+                    Button("Rename") { beginRename(preset) }
+                }
+                .onLongPressGesture { beginRename(preset) }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(MMTheme.navy)
+        .alert("Rename code", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let t = renameTarget { vm.setNewWandName(hex: t.hex, name: renameText) }
+                renameTarget = nil
+            }
+            Button("Cancel", role: .cancel) { renameTarget = nil }
+        } message: {
+            Text(renameTarget?.hex.uppercased() ?? "")
+        }
+    }
+
+    private func beginRename(_ preset: AndroidRemotePreset) {
+        renameText = vm.newWandDisplayName(for: preset)
+        renameTarget = preset
     }
 }
 

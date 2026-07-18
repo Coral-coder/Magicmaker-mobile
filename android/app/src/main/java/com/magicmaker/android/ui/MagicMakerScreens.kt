@@ -2,6 +2,11 @@ package com.magicmaker.android.ui
 
 import android.Manifest
 import android.content.Context
+import android.content.SharedPreferences
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import com.magicmaker.android.core.MagicClassifier
+import org.json.JSONObject
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -1337,8 +1342,20 @@ private fun WandTab(
     // Two separate wand libraries: the learned Starlight colors, and the generated New Wand
     // code range. A toggle picks which one drives the carousel + loop.
     var showNewWand by remember { mutableStateOf(false) }
+    val prefs = remember { ctx.getSharedPreferences("magicmaker", Context.MODE_PRIVATE) }
+    var newWandNames by remember { mutableStateOf(loadNewWandNames(prefs)) }
+    var renameTarget by remember { mutableStateOf<MagicPacket?>(null) }
+    var renameText by remember { mutableStateOf("") }
     val learned = remember(storeRev, showNewWand) {
-        if (showNewWand) app.store.newWandPackets() else app.store.learnedStarlightPackets()
+        if (showNewWand) {
+            app.store.newWandPackets()
+        } else {
+            // Starlight: drop any New Wand codes and collapse serial-only duplicates so each
+            // color appears once instead of many near-identical variations.
+            app.store.learnedStarlightPackets()
+                .filterNot { isNewWandHex(it.hex) }
+                .distinctBy { MagicClassifier.starlightColorIndex(it.hex) and 0x1F }
+        }
     }
     var loopOn by remember(starlightLoopEnabled) { mutableStateOf(starlightLoopEnabled) }
     var selectedId by remember(starlightLoopPacketId, learned.size) {
@@ -1382,7 +1399,12 @@ private fun WandTab(
             NewWandList(
                 packets = learned,
                 selectedId = selectedId,
+                names = newWandNames,
                 onSelect = { transmitColor(it) },
+                onLongPress = { pkt ->
+                    renameText = newWandNames[pkt.hex.uppercase()] ?: pkt.colors
+                    renameTarget = pkt
+                },
                 modifier = Modifier.weight(1f).fillMaxWidth(),
             )
         } else {
@@ -1479,19 +1501,74 @@ private fun WandTab(
             },
         )
     }
+
+    renameTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("RENAME CODE", style = techHeader()) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(target.hex.uppercase(), style = techLabel(), color = AppColors.TextDim)
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        singleLine = true,
+                        placeholder = { Text("Name", style = techLabel()) },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    newWandNames = saveNewWandName(prefs, target.hex, renameText)
+                    renameTarget = null
+                }) { Text("SAVE", style = techLabel(), color = AppColors.Cyan) }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) {
+                    Text("CANCEL", style = techLabel(), color = AppColors.TextDim)
+                }
+            },
+        )
+    }
 }
 
-/** Scrollable New Wand code list, each row keyed by its last 2 bytes. Tap sends (or loops). */
+// New Wand codes share this signature — used to keep them out of the Starlight list.
+private const val NEW_WAND_SIGNATURE = "CF0B00C020224EAC7807866"
+private fun isNewWandHex(hex: String) = hex.uppercase().contains(NEW_WAND_SIGNATURE)
+
+private fun loadNewWandNames(prefs: SharedPreferences): Map<String, String> {
+    val raw = prefs.getString("newwand_names", null) ?: return emptyMap()
+    return runCatching {
+        val o = JSONObject(raw)
+        buildMap { o.keys().forEach { k -> put(k, o.getString(k)) } }
+    }.getOrDefault(emptyMap())
+}
+
+private fun saveNewWandName(prefs: SharedPreferences, hex: String, name: String): Map<String, String> {
+    val current = loadNewWandNames(prefs).toMutableMap()
+    val key = hex.uppercase()
+    val trimmed = name.trim()
+    if (trimmed.isEmpty()) current.remove(key) else current[key] = trimmed
+    val o = JSONObject()
+    current.forEach { (k, v) -> o.put(k, v) }
+    prefs.edit().putString("newwand_names", o.toString()).apply()
+    return current
+}
+
+/** Scrollable New Wand code list, each row keyed by its last 2 bytes. Tap sends; long-press renames. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NewWandList(
     packets: List<MagicPacket>,
     selectedId: Long,
+    names: Map<String, String>,
     onSelect: (MagicPacket) -> Unit,
+    onLongPress: (MagicPacket) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
         Text(
-            "NEW WAND · ${packets.size} CODES · TAP TO SEND",
+            "NEW WAND · ${packets.size} CODES · TAP SENDS · HOLD RENAMES",
             style = techLabel(),
             color = AppColors.TextDim,
             modifier = Modifier.padding(horizontal = AppDimens.pad, vertical = 4.dp),
@@ -1500,10 +1577,14 @@ private fun NewWandList(
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = AppDimens.pad)) {
             items(packets, key = { it.id }) { pkt ->
                 val isSel = pkt.id == selectedId
+                val custom = names[pkt.hex.uppercase()]
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable { onSelect(pkt) }
+                        .combinedClickable(
+                            onClick = { onSelect(pkt) },
+                            onLongClick = { onLongPress(pkt) },
+                        )
                         .padding(vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
@@ -1514,7 +1595,7 @@ private fun NewWandList(
                         color = if (isSel) AppColors.Cyan else AppColors.CyanDim,
                     )
                     Text(
-                        pkt.colors.uppercase(),
+                        (custom ?: pkt.colors).uppercase(),
                         style = techLabel(),
                         color = if (isSel) AppColors.Cyan else AppColors.TextDim,
                         maxLines = 1,

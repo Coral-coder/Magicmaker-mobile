@@ -5,7 +5,7 @@ private let wandAspect: CGFloat = 600.0 / 750.0
 private let upperGlowFraction: CGFloat = 0.94
 private let starlightOrange = Color(red: 1, green: 0.6, blue: 0)
 
-private func starlightGlowColor(_ index: Int) -> Color {
+func starlightGlowColor(_ index: Int) -> Color {
     let i = index & 0x1F
     switch i {
     case 0x00, 0x16, 0x17, 0x18: return Color(red: 0, green: 0.9, blue: 1)
