@@ -94,15 +94,18 @@ function Acli { & $CliExe @args; if ($LASTEXITCODE -ne 0) { throw "arduino-cli f
 if (-not $Port) { $Port = Find-Esp32Port }
 Say "Using port $Port (override with -Port COMx if wrong)"
 
-# 3. Board core + library (skips work if already present).
+# 3. Board core + library. Pinned to a known-good pair: the firmware targets the NimBLE 1.x
+#    API, and NimBLE 1.4.x pairs with esp32 core 2.0.x. (NimBLE 2.x + core 3.x changed the API.)
+$Esp32CoreVersion = "2.0.17"
+$NimBleVersion    = "1.4.3"
 Say "Updating board index..."
 Acli config init --overwrite | Out-Null
 Acli config set board_manager.additional_urls $Esp32IndexUrl
 Acli core update-index
-Say "Installing ESP32 core (first run takes a few minutes)..."
-Acli core install esp32:esp32
-Say "Installing NimBLE-Arduino library..."
-Acli lib install "NimBLE-Arduino"
+Say "Installing ESP32 core $Esp32CoreVersion (first run downloads it - a few minutes)..."
+Acli core install "esp32:esp32@$Esp32CoreVersion"
+Say "Installing NimBLE-Arduino $NimBleVersion..."
+Acli lib install "NimBLE-Arduino@$NimBleVersion"
 
 # 4. Compile + upload.
 Say "Compiling for $Fqbn..."
