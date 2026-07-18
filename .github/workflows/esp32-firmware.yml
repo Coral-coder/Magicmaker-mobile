@@ -1,0 +1,72 @@
+name: ESP32 Firmware
+
+# Builds the ESP32 transmitter sketch on GitHub's runners (which have full network
+# access, unlike a sandbox) and publishes a single flashable magicmaker-esp32.bin as a
+# GitHub Release. Download that .bin and flash it with flash.ps1 -Bin — no local Arduino
+# toolchain needed.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/esp32-transmitter/**.ino"
+      - ".github/workflows/esp32-firmware.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ESP32_CORE: "2.0.17"
+      NIMBLE_VER: "1.4.3"
+      FQBN: "esp32:esp32:esp32"
+      SKETCH: "firmware/esp32-transmitter"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/bin" sh
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Install ESP32 core + NimBLE
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config set board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install "esp32:esp32@${ESP32_CORE}"
+          arduino-cli lib install "NimBLE-Arduino@${NIMBLE_VER}"
+
+      - name: Compile
+        run: |
+          arduino-cli compile --fqbn "$FQBN" --output-dir build --log-level warn "$SKETCH"
+          echo "--- build outputs ---"
+          ls -la build
+
+      - name: Merge into one flashable image (flash at 0x0)
+        run: |
+          python3 -m pip install --quiet esptool
+          APP=$(ls build/*.ino.bin | head -1)
+          BOOT=$(ls build/*.bootloader.bin | head -1)
+          PART=$(ls build/*.partitions.bin | head -1)
+          BOOT0=$(find "$HOME/.arduino15/packages/esp32" -name boot_app0.bin | head -1)
+          echo "app=$APP boot=$BOOT part=$PART boot0=$BOOT0"
+          python3 -m esptool --chip esp32 merge_bin -o magicmaker-esp32.bin \
+            --flash_mode dio --flash_freq 40m --flash_size 4MB \
+            0x1000 "$BOOT" 0x8000 "$PART" 0xe000 "$BOOT0" 0x10000 "$APP"
+          ls -la magicmaker-esp32.bin
+
+      - name: Publish firmware release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: esp32-firmware
+          name: ESP32 firmware (latest)
+          body: |
+            Prebuilt MagicMaker ESP32 transmitter firmware.
+            Flash with: ./flash.ps1 -Bin magicmaker-esp32.bin
+            (a single image flashed at offset 0x0 on a 4MB ESP32).
+          files: magicmaker-esp32.bin
+          fail_on_unmatched_files: true
