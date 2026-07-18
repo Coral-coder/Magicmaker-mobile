@@ -75,8 +75,35 @@ final class AppViewModel: ObservableObject {
     init() {}
 
     /// Deferred from init so CoreBluetooth, file I/O, and remote refresh run after UIKit finishes launching.
+    // MARK: - New Wand custom names
+    // The generated New Wand codes are near-identical color variations, so let the user name
+    // them. Names are keyed by the (uppercased) hex and persisted on the device.
+    @Published private(set) var newWandNames: [String: String] = [:]
+    private let newWandNamesKey = "newwand_names_v1"
+
+    func newWandDisplayName(for preset: AndroidRemotePreset) -> String {
+        if let n = newWandNames[preset.hex.uppercased()], !n.isEmpty { return n }
+        return preset.label
+    }
+
+    func setNewWandName(hex: String, name: String) {
+        let key = hex.uppercased()
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            newWandNames.removeValue(forKey: key)
+        } else {
+            newWandNames[key] = trimmed
+        }
+        UserDefaults.standard.set(newWandNames, forKey: newWandNamesKey)
+    }
+
+    private func loadNewWandNames() {
+        newWandNames = (UserDefaults.standard.dictionary(forKey: newWandNamesKey) as? [String: String]) ?? [:]
+    }
+
     func bootstrapAfterLaunch() {
         _ = ble
+        loadNewWandNames()
         loadCachedCatalog()          // reuse the saved library so we don't re-pull it every launch
         ble.activateBluetooth()
         refreshRelayStatus()
