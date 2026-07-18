@@ -4,7 +4,11 @@ import android.Manifest
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import com.magicmaker.android.core.HexUtils
 import com.magicmaker.android.core.MagicClassifier
 import org.json.JSONObject
 import android.content.Intent
@@ -1327,6 +1331,7 @@ private fun RenameDialog(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WandTab(
     app: MagicMakerApp,
@@ -1346,6 +1351,9 @@ private fun WandTab(
     var newWandNames by remember { mutableStateOf(loadNewWandNames(prefs)) }
     var renameTarget by remember { mutableStateOf<MagicPacket?>(null) }
     var renameText by remember { mutableStateOf("") }
+    var quickLabel by remember { mutableStateOf(prefs.getString("wand_quick_label", "OFF") ?: "OFF") }
+    var quickHex by remember { mutableStateOf(prefs.getString("wand_quick_hex", DEFAULT_WAND_QUICK_HEX) ?: DEFAULT_WAND_QUICK_HEX) }
+    var editQuick by remember { mutableStateOf(false) }
     val learned = remember(storeRev, showNewWand) {
         if (showNewWand) {
             app.store.newWandPackets()
@@ -1432,6 +1440,22 @@ private fun WandTab(
                         )
                     }
                 }
+            }
+            // Programmable quick button (defaults to the New Wand "Off" code). Tap sends it;
+            // long-press reprograms its label + code. Shown for both wand modes.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(0.5.dp, AppColors.PanelLine, RoundedCornerShape(6.dp))
+                    .combinedClickable(
+                        onClick = { MagicMakerForegroundService.transmit(ctx, quickHex) },
+                        onLongClick = { editQuick = true },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(quickLabel.uppercase(), style = techLabel(), color = AppColors.TextPrimary)
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("LOOP", Modifier.weight(1f), style = techHeader())
@@ -1530,10 +1554,56 @@ private fun WandTab(
             },
         )
     }
+
+    if (editQuick) {
+        var lbl by remember { mutableStateOf(quickLabel) }
+        var hx by remember { mutableStateOf(quickHex) }
+        AlertDialog(
+            onDismissRequest = { editQuick = false },
+            title = { Text("QUICK BUTTON", style = techHeader()) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(
+                        value = lbl,
+                        onValueChange = { lbl = it },
+                        singleLine = true,
+                        placeholder = { Text("Label", style = techLabel()) },
+                    )
+                    OutlinedTextField(
+                        value = hx,
+                        onValueChange = { hx = it },
+                        singleLine = true,
+                        placeholder = { Text("Hex (8301...)", style = techLabel()) },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val newLabel = lbl.trim().ifEmpty { "OFF" }
+                    val newHex = HexUtils.canonicalHex(hx)
+                    prefs.edit()
+                        .putString("wand_quick_label", newLabel)
+                        .putString("wand_quick_hex", newHex)
+                        .apply()
+                    quickLabel = newLabel
+                    quickHex = newHex
+                    editQuick = false
+                }) { Text("SAVE", style = techLabel(), color = AppColors.Cyan) }
+            },
+            dismissButton = {
+                TextButton(onClick = { editQuick = false }) {
+                    Text("CANCEL", style = techLabel(), color = AppColors.TextDim)
+                }
+            },
+        )
+    }
 }
 
 // New Wand codes share this signature — used to keep them out of the Starlight list.
 private const val NEW_WAND_SIGNATURE = "CF0B00C020224EAC7807866"
+
+// Default for the programmable wand quick button: the New Wand "Off" code (tail 6F1D).
+private const val DEFAULT_WAND_QUICK_HEX = "8301CF0B00C020224EAC7807866F1D"
 private fun isNewWandHex(hex: String) = hex.uppercase().contains(NEW_WAND_SIGNATURE)
 
 private fun loadNewWandNames(prefs: SharedPreferences): Map<String, String> {

@@ -101,6 +101,23 @@ final class AppViewModel: ObservableObject {
         newWandNames = (UserDefaults.standard.dictionary(forKey: newWandNamesKey) as? [String: String]) ?? [:]
     }
 
+    // MARK: - Wand quick button (defaults to the New Wand "Off" code 6F1D; reprogrammable)
+    static let defaultWandQuickHex = "8301CF0B00C020224EAC7807866F1D"
+    @Published private(set) var wandQuickLabel = UserDefaults.standard.string(forKey: "wand_quick_label") ?? "OFF"
+    @Published private(set) var wandQuickHex = UserDefaults.standard.string(forKey: "wand_quick_hex") ?? AppViewModel.defaultWandQuickHex
+
+    func setWandQuick(label: String, hex: String) {
+        let l = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        wandQuickLabel = l.isEmpty ? "OFF" : l
+        wandQuickHex = HexUtils.canonicalHex(hex)
+        UserDefaults.standard.set(wandQuickLabel, forKey: "wand_quick_label")
+        UserDefaults.standard.set(wandQuickHex, forKey: "wand_quick_hex")
+    }
+
+    func transmitWandQuick() {
+        transmitAndroidHex(wandQuickHex)
+    }
+
     func bootstrapAfterLaunch() {
         _ = ble
         loadNewWandNames()
