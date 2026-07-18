@@ -424,13 +424,41 @@ struct RemoteTxView: View {
 struct RemoteWandView: View {
     @EnvironmentObject var vm: AppViewModel
     @EnvironmentObject var remoteUI: RemoteUIState
+    @State private var showNewWand = false
+
+    // New Wand (CF0B) codes are generated locally — they aren't sent over the relay catalog.
+    private static let newWandColors: [AndroidRemotePreset] = NewWandCatalog.packets.map {
+        AndroidRemotePreset(
+            id: $0.id, hex: $0.hex, label: $0.label, category: "COLOR",
+            typeInfo: $0.typeInfo, colors: $0.colors, userRecorded: false, wandVerified: false
+        )
+    }
+    private var wandColors: [AndroidRemotePreset] {
+        showNewWand ? Self.newWandColors : (vm.androidCatalog?.wandColors ?? [])
+    }
+
+    private func wandModeButton(_ title: String, isNew: Bool) -> some View {
+        Button(title) { showNewWand = isNew }
+            .font(MMTheme.techLabel(11))
+            .foregroundStyle(showNewWand == isNew ? MMTheme.navy : MMTheme.textDim)
+            .frame(maxWidth: .infinity, minHeight: 30)
+            .background(showNewWand == isNew ? MMTheme.cyan : Color.white.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                wandModeButton("STARLIGHT", isNew: false)
+                wandModeButton("NEW WAND", isNew: true)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+
             StarlightWandView(
-                colors: vm.androidCatalog?.wandColors ?? [],
+                colors: wandColors,
                 displayColorIndex: vm.wandDisplayColorIndex,
-                sendEnabled: vm.remoteLinkReady && !(vm.androidCatalog?.wandColors.isEmpty ?? true),
+                sendEnabled: vm.remoteLinkReady && !wandColors.isEmpty,
                 onTransmit: { color in
                     remoteUI.selectedWandId = color.id
                     vm.transmitAndroidWandColor(

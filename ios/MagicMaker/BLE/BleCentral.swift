@@ -119,6 +119,13 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
         guard let central = activateIfNeeded(), central.state == .poweredOn else { return }
         guard RelayBackend.load().usesBleRelayLink else { return }
         if relayGatt.isCommandReady { return }
+        // The link wedged (dropped, or connected but never finished discovery) and never recovered.
+        // Force a clean retry so we reconnect on our own instead of needing an app restart.
+        if relayGatt.isLinkStuck {
+            relayGatt.resetForRetry(central: central)
+            startRelayDiscovery()
+            return
+        }
         if relayGatt.ensureLink(central: central) { return }
         if relayGatt.isLinkInProgress || relayGatt.isReady { return }
         if isScanning {

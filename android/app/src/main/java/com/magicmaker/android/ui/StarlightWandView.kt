@@ -4,23 +4,28 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Text
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -84,6 +89,7 @@ private fun starlightGlowColor(index: Int): Color {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StarlightWandView(
     colors: List<MagicPacket>,
@@ -190,36 +196,74 @@ fun StarlightWandView(
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
         } else {
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center,
+            // Dropdown to pick the color/command + Send button to the right — no tapping through.
+            var expanded by remember { mutableStateOf(false) }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = it },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    OutlinedButton(
+                        onClick = { expanded = true },
+                        modifier = Modifier.menuAnchor().height(44.dp).fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) {
+                        Text(
+                            label.uppercase(),
+                            style = techLabel(),
+                            color = AppColors.TextPrimary,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("▾", style = techLabel(), color = AppColors.TextDim)
+                    }
+                    ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        modifier = Modifier.background(AppColors.Panel),
+                    ) {
+                        colors.forEachIndexed { idx, packet ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        StarlightColors.nameFor(
+                                            MagicClassifier.starlightColorIndex(packet.hex),
+                                        ).uppercase(),
+                                        style = techLabel(),
+                                    )
+                                },
+                                onClick = {
+                                    selectedIndex = idx
+                                    glowColorIndex = MagicClassifier.starlightColorIndex(packet.hex)
+                                    expanded = false
+                                },
+                            )
+                        }
+                    }
+                }
                 Button(
                     onClick = {
-                        val packet = selected ?: return@Button
+                        val packet = colors.getOrNull(selectedIndex) ?: return@Button
                         runTransmitPulse()
                         onTransmit(packet)
                     },
                     enabled = sendEnabled && selected != null,
-                    modifier = Modifier
-                        .fillMaxWidth(0.25f)
-                        .height(44.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppColors.Cyan,
-                    contentColor = AppColors.Navy,
-                    disabledContainerColor = AppColors.PanelLine,
-                    disabledContentColor = AppColors.TextDim,
-                ),
-            ) {
-                Text(label.uppercase(), style = techHeader())
+                    modifier = Modifier.height(44.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppColors.Cyan,
+                        contentColor = AppColors.Navy,
+                        disabledContainerColor = AppColors.PanelLine,
+                        disabledContentColor = AppColors.TextDim,
+                    ),
+                ) {
+                    Text("SEND", style = techHeader())
+                }
             }
-            }
-            Text(
-                text = "TAP WAND · CYCLE COLOR",
-                style = techLabel(),
-                color = AppColors.TextDim,
-                modifier = Modifier.padding(top = 4.dp),
-            )
         }
     }
 }
