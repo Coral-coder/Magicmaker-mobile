@@ -61,6 +61,8 @@ struct StarlightWandView: View {
         return colors[selectedIndex]
     }
 
+    private var selectedHex: String { selectedPreset?.hex.uppercased() ?? "" }
+
     var body: some View {
         VStack(spacing: 10) {
             GeometryReader { geo in
@@ -114,12 +116,20 @@ struct StarlightWandView: View {
                 HStack(spacing: 8) {
                     Menu {
                         ForEach(Array(colors.enumerated()), id: \.offset) { idx, preset in
-                            Button(colorName(preset)) { select(idx) }
+                            // Show the name AND the code so you can tell exactly which one you're sending.
+                            Button("\(colorName(preset))  ·  \(preset.hex.uppercased())") { select(idx) }
                         }
                     } label: {
                         HStack(spacing: 6) {
                             Circle().fill(glow).frame(width: 12, height: 12)
-                            Text(label).font(MMTheme.techLabel(12)).foregroundStyle(.white)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(label).font(MMTheme.techLabel(11)).foregroundStyle(.white)
+                                Text(selectedHex)
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(MMTheme.textDim)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
                             Spacer(minLength: 4)
                             Image(systemName: "chevron.up.chevron.down")
                                 .font(.caption2)
