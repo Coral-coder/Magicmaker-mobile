@@ -77,12 +77,14 @@ final class AppViewModel: ObservableObject {
     /// Deferred from init so CoreBluetooth, file I/O, and remote refresh run after UIKit finishes launching.
     func bootstrapAfterLaunch() {
         _ = ble
+        loadCachedCatalog()          // reuse the saved library so we don't re-pull it every launch
         ble.activateBluetooth()
         refreshRelayStatus()
         refreshAndroidRemote()
         if isBackupLogging, backupLogFileName == nil {
             backupLogFileName = ISCanBackupLogger.shared.startSession()
         }
+        setLocalListening(true)      // scan by default on launch (no need to tap the Scan button)
     }
 
     var telemetryLine: String {
@@ -435,6 +437,9 @@ final class AppViewModel: ObservableObject {
     }
 
     func refreshAndroidCatalog() {
+        // The ESP32 hosts no catalog, so never try to pull one over it — that would just fail and
+        // spin. Rely on the persisted cache (synced once from Android) instead.
+        guard relayBackend != .esp32 else { return }
         guard relayCommandReady || relayCatalogReady else { return }
         guard !catalogFetchInFlight else { return }
         guard Date() >= catalogSyncCooldownUntil else { return }
@@ -504,7 +509,45 @@ final class AppViewModel: ObservableObject {
         if androidLabHex.isEmpty {
             androidLabHex = "8301CC03000100"
         }
+        persistCatalog(catalog, revision: lastCatalogRevision)
         statusMessage = "Android library synced (\(catalog.transmitPresets.count) TX, \(catalog.wandColors.count) wand, \(catalog.autoRules.count) auto)"
+    }
+
+    // MARK: - Catalog persistence
+    //
+    // Save the synced library (known presets + wand colors, NOT raw/unknown) to disk so the
+    // phone doesn't re-pull it over BLE every launch. This is what makes an ESP32-only setup
+    // usable: the ESP32 has no catalog, so we sync once from Android, then reuse the cache.
+
+    private let catalogCacheKey = "android_catalog_cache_v2"
+
+    private func persistCatalog(_ catalog: AndroidRemoteCatalog, revision: Int) {
+        var trimmed = catalog
+        // Keep only known packets — drop raw/unknown so the saved library stays clean.
+        trimmed.transmitPresets = catalog.transmitPresets.filter { !isRawOrUnknown($0) }
+        trimmed.wandColors = catalog.wandColors.filter { !isRawOrUnknown($0) }
+        let payload = CachedCatalog(catalog: trimmed, revision: revision)
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        UserDefaults.standard.set(data, forKey: catalogCacheKey)
+    }
+
+    private func loadCachedCatalog() {
+        guard androidCatalog == nil,
+              let data = UserDefaults.standard.data(forKey: catalogCacheKey),
+              let payload = try? JSONDecoder().decode(CachedCatalog.self, from: data),
+              !payload.catalog.transmitPresets.isEmpty || !payload.catalog.wandColors.isEmpty
+        else { return }
+        androidCatalog = payload.catalog
+        lastCatalogRevision = payload.revision
+    }
+
+    private func isRawOrUnknown(_ p: AndroidRemotePreset) -> Bool {
+        p.category.uppercased() == "UNKNOWN" || p.typeInfo.lowercased() == "raw"
+    }
+
+    private struct CachedCatalog: Codable {
+        let catalog: AndroidRemoteCatalog
+        let revision: Int
     }
 
     func refreshAndroidAutoFromRemote() {

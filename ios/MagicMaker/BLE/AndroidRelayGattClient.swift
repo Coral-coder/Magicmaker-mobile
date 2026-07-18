@@ -34,6 +34,16 @@ final class AndroidRelayGattClient: NSObject {
     private var lockedRelayId: UUID?
     private weak var activeCentral: CBCentralManager?
     private var broadcastingUntil: Date?
+    // When we last made forward progress (started a connect, linked, or dropped). Used to detect a
+    // link that got wedged (e.g. connected but never finished char discovery) so a periodic caller
+    // can force a clean retry instead of the user having to kill and reopen the app.
+    private var lastProgressAt = Date()
+    private func markProgress() { lastProgressAt = Date() }
+
+    /// Not usable, and no forward progress for a while — safe to tear down and rediscover.
+    var isLinkStuck: Bool {
+        !isCommandReady && Date().timeIntervalSince(lastProgressAt) > 10
+    }
 
     private let connectOptions: [String: Any] = [
         CBConnectPeripheralOptionNotifyOnConnectionKey: true,
@@ -80,6 +90,7 @@ final class AndroidRelayGattClient: NSObject {
         linkTimeout?.invalidate()
         linkTimeout = nil
         connectInProgress = false
+        markProgress()
         clearGattState()
         pendingCompletion = nil
         pendingHex = nil
@@ -123,6 +134,7 @@ final class AndroidRelayGattClient: NSObject {
     }
 
     func handleDisconnect() {
+        markProgress()
         if isBroadcasting {
             txCharacteristic = nil
             connectInProgress = false
@@ -273,6 +285,7 @@ final class AndroidRelayGattClient: NSObject {
 
     func onCentralDidDisconnect(_ peripheral: CBPeripheral) {
         guard isRelayPeripheral(peripheral) else { return }
+        markProgress()
         if isBroadcasting {
             txCharacteristic = nil
             relay = nil
@@ -606,6 +619,7 @@ final class AndroidRelayGattClient: NSObject {
         relay = peripheral
         lockedRelayId = peripheral.identifier
         peripheral.delegate = self
+        markProgress()
         scanCoordinator?.pauseScanForRelayConnect()
         armLinkTimeout()
         onStatus?("Found MagicMaker-Android — connecting…")
@@ -689,6 +703,7 @@ final class AndroidRelayGattClient: NSObject {
         linkTimeout?.invalidate()
         linkTimeout = nil
         connectInProgress = false
+        markProgress()
         onStatus?("Android relay ready")
         scanCoordinator?.resumeScanAfterRelayConnect(restartDisneyScan: false)
     }

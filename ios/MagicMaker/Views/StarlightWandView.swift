@@ -109,23 +109,36 @@ struct StarlightWandView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)
             } else {
-                GeometryReader { buttonGeo in
-                    HStack {
-                        Spacer(minLength: 0)
-                        MMPrimaryButton(title: label, enabled: sendEnabled) {
-                            guard let preset = selectedPreset else { return }
-                            runTransmitPulse()
-                            onTransmit(preset)
+                // Dropdown to pick the color/command + a Send button to the right — no tapping
+                // through every color to reach the one you want.
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(Array(colors.enumerated()), id: \.offset) { idx, preset in
+                            Button(colorName(preset)) { select(idx) }
                         }
-                        .frame(width: buttonGeo.size.width * 0.25)
-                        Spacer(minLength: 0)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Circle().fill(glow).frame(width: 12, height: 12)
+                            Text(label).font(MMTheme.techLabel(12)).foregroundStyle(.white)
+                            Spacer(minLength: 4)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
+                                .foregroundStyle(MMTheme.textDim)
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.08)))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.15)))
                     }
-                }
-                .frame(height: 36)
 
-                Text("TAP WAND · CYCLE COLOR")
-                    .font(MMTheme.techLabel(9))
-                    .foregroundStyle(MMTheme.textDim)
+                    MMPrimaryButton(title: "SEND", enabled: sendEnabled) {
+                        guard let preset = selectedPreset else { return }
+                        runTransmitPulse()
+                        onTransmit(preset)
+                    }
+                    .frame(width: 96)
+                }
+                .padding(.horizontal, 12)
             }
         }
         .padding(.bottom, 8)
@@ -144,6 +157,18 @@ struct StarlightWandView: View {
         guard !colors.isEmpty else { return }
         selectedIndex = (selectedIndex + 1) % colors.count
         glowColorIndex = MagicClassifier.starlightColorIndex(colors[selectedIndex].hex)
+    }
+
+    private func select(_ idx: Int) {
+        guard idx >= 0, idx < colors.count else { return }
+        selectedIndex = idx
+        glowColorIndex = MagicClassifier.starlightColorIndex(colors[idx].hex)
+    }
+
+    private func colorName(_ preset: AndroidRemotePreset) -> String {
+        let idx = MagicClassifier.starlightColorIndex(preset.hex) & 0x1F
+        if let name = PresetCatalog.starlightColorNames[idx] { return name }
+        return preset.label.isEmpty ? String(format: "Color %02X", idx) : preset.label
     }
 
     private func syncHeardColor(_ index: Int) {

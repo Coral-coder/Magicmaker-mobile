@@ -1,6 +1,6 @@
 import Foundation
 
-struct AndroidRemotePreset: Identifiable, Equatable {
+struct AndroidRemotePreset: Identifiable, Equatable, Codable {
     let id: Int64
     let hex: String
     let label: String
@@ -37,7 +37,7 @@ struct AndroidRemotePreset: Identifiable, Equatable {
     }
 }
 
-struct AndroidRemoteAutoRule: Identifiable, Equatable {
+struct AndroidRemoteAutoRule: Identifiable, Equatable, Codable {
     let id: Int64
     let name: String
     let triggerPatternId: String
@@ -64,7 +64,7 @@ struct AndroidRemoteAutoRule: Identifiable, Equatable {
     }
 }
 
-struct AndroidRemoteCatalog: Equatable {
+struct AndroidRemoteCatalog: Equatable, Codable {
     var wakeupPreambleMs = 520
     var commandBurstMs = 2000
     var starlightBurstMs = 500
