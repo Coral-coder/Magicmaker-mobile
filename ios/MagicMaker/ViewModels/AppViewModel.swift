@@ -13,6 +13,11 @@ final class AppViewModel: ObservableObject {
     @Published var isBackupLogging = UserDefaults.standard.object(forKey: "backup_logging_enabled") as? Bool ?? true
     @Published var backupLogFileName: String?
     @Published var iscanAutoEnabled = false
+    // Scan filter: keep only real show-control packets (pings / E?00E9 effects / starlight /
+    // show blocks) and drop MagicBand + device noise. Toggle off to see every raw Disney packet.
+    @Published var iscanShowControlOnly = UserDefaults.standard.object(forKey: "iscan_show_control_only") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(iscanShowControlOnly, forKey: "iscan_show_control_only") }
+    }
     @Published var activeSessionName: String?
     @Published private(set) var isCatalogSyncInFlight = false
     @Published private(set) var catalogSyncDiagnostic = ""
@@ -178,6 +183,9 @@ final class AppViewModel: ObservableObject {
     }
 
     private func handlePacket(hex: String, rssi: Int) {
+        // Drop MagicBand/device noise up front: unless the user opted into raw, only real
+        // show-control packets (those the classifier structurally recognizes) get through.
+        if iscanShowControlOnly, MagicClassifier.classify(hex) == nil { return }
         if isLocalListening {
             appendLocalLivePacket(hex: hex, rssi: rssi)
             if isBackupLogging {

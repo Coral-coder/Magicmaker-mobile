@@ -16,13 +16,16 @@ enum MagicClassifier {
             return ClassifiedPacket(hex: normalized, label: entry.key, category: .show, typeInfo: "show_block", colors: "", simKey: "SHOW:\(normalized)")
         }
 
-        if normalized.contains("CC03"), !normalized.contains("E9"), !normalized.contains("CF9B"), !normalized.contains("CF0B") {
+        if normalized.hasPrefix("8301CC03") {
             let pingLabel = normalized == "8301CC03000100" ? "Interaction Ping (Fast Mode)" : "Interaction Ping"
             return ClassifiedPacket(hex: normalized, label: pingLabel, category: .show, typeInfo: "ping", colors: "", simKey: "PING:\(normalized)")
         }
 
-        guard let idx = normalized.range(of: "E9")?.lowerBound else { return nil }
-        let pos = normalized.distance(from: normalized.startIndex, to: idx)
+        // Effect/show commands carry an E?00E9xx prelude (a channel byte, then 00, then the E9
+        // function code). Requiring this structure rejects MagicBand/device telemetry that merely
+        // contains a stray "E9" byte — the source of most bogus "unknown" and misclassified packets.
+        guard let prelude = normalized.range(of: "E[0-9A-F]00E9", options: .regularExpression) else { return nil }
+        let pos = normalized.distance(from: normalized.startIndex, to: prelude.upperBound) - 2
         let funcCode = String(normalized[normalized.index(normalized.startIndex, offsetBy: pos)..<normalized.index(normalized.startIndex, offsetBy: min(pos + 4, normalized.count))])
 
         let label: String
@@ -73,7 +76,13 @@ enum MagicClassifier {
             colors = ""
             simKey = "S:\(funcCode)"
         default:
-            return nil
+            // Real E?00E9 structure but an E9 subtype we don't have a name for yet (e.g. E914).
+            // Keep it as show control instead of dropping it to "unknown" — this is exactly the
+            // kind of packet we want to capture, not lose in the noise.
+            label = "Show Control: \(funcCode)"
+            typeInfo = funcCode.lowercased()
+            colors = ""
+            simKey = "S:\(funcCode)"
         }
 
         let category = categorize(normalized, label: label, typeInfo: typeInfo)

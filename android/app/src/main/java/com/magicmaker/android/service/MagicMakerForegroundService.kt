@@ -960,6 +960,12 @@ class MagicMakerForegroundService : Service() {
     private fun handleHeard(hex: String, rssi: Int, address: String) {
         val loc = lastLocation
         val classified = runCatching { MagicClassifier.classify(HexUtils.canonicalHex(hex)) }.getOrNull()
+        // Show-control filter: drop MagicBand/device noise (no live entry, no record) unless the
+        // user turned the filter off to hunt raw. Real show-control packets classify (non-null).
+        if (store.getShowControlOnly() && classified == null) {
+            ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
+            return
+        }
         val isBand = runCatching { store.isBandAddress(address) }.getOrDefault(false)
         val now = System.currentTimeMillis()
 

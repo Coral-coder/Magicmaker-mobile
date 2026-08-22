@@ -399,6 +399,15 @@ class MagicStore(context: Context) {
         ServiceState.bumpStoreRevision()
     }
 
+    /** Scan filter: true = only surface real show-control packets (pings / E?00E9 effects /
+     * starlight / show blocks), dropping MagicBand + device noise. Default on. */
+    fun getShowControlOnly(): Boolean = prefs.getBoolean("show_control_only", true)
+
+    fun saveShowControlOnly(on: Boolean) {
+        prefs.edit().putBoolean("show_control_only", on).apply()
+        ServiceState.bumpStoreRevision()
+    }
+
     fun getStarlightBurstMs(): Int =
         prefs.getInt("starlight_burst_ms", TransmitTiming.STARLIGHT_BURST_MS)
             .coerceIn(TransmitTiming.MIN_STARLIGHT_BURST_MS, TransmitTiming.MAX_STARLIGHT_BURST_MS)

@@ -31,8 +31,12 @@ object MagicClassifier {
             return ClassifiedPacket(normalized, pingLabel, MagicCategory.SHOW, "ping", "", "PING:$normalized")
         }
 
-        val pos = normalized.indexOf("E9")
-        if (pos < 0) return classifyEffectFamily(normalized)
+        // Real effect/show commands carry an E?00E9xx prelude (channel byte, 00, then the E9
+        // function). Requiring that structure stops band telemetry that merely contains a stray
+        // "E9" from being misread as a color/effect. Non-E9 Ex families fall through as before.
+        val prelude = Regex("E[0-9A-F]00E9").find(normalized)
+            ?: return classifyEffectFamily(normalized)
+        val pos = prelude.range.last - 1
         val funcCode = normalized.substring(pos, minOf(pos + 4, normalized.length))
 
         val label: String
@@ -112,7 +116,14 @@ object MagicClassifier {
                 colors = ""
                 simKey = "S:$funcCode"
             }
-            else -> return classifyEffectFamily(normalized)
+            else -> {
+                // Real E?00E9 structure but an E9 subtype we don't name yet (e.g. E914) — keep it
+                // as show control instead of dropping/genericizing; this is what we want to catch.
+                label = "Show Control: $funcCode"
+                typeInfo = funcCode.lowercase()
+                colors = ""
+                simKey = "S:$funcCode"
+            }
         }
 
         val category = categorize(normalized, label, typeInfo)
