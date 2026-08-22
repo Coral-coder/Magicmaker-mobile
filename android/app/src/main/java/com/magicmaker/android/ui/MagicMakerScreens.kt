@@ -963,6 +963,7 @@ private fun ScanTab(state: ServiceState.UiState, onLoadInLab: (String, String) -
     val app = ctx.applicationContext as MagicMakerApp
     var recording by remember(state.recordSessionActive) { mutableStateOf(state.recordSessionActive) }
     var viewMode by remember { mutableStateOf(ScanViewMode.GROUPED) }
+    var showCtrlOnly by remember { mutableStateOf(app.store.getShowControlOnly()) }
     var visibleSections by remember { mutableStateOf(LivePacketSection.entries.toSet()) }
     var collapsed by remember { mutableStateOf(UiPrefs.loadCollapsedScan(ctx)) }
     var promoteTarget by remember { mutableStateOf<ServiceState.LivePacket?>(null) }
@@ -1075,6 +1076,16 @@ private fun ScanTab(state: ServiceState.UiState, onLoadInLab: (String, String) -
                         modifier = Modifier.height(28.dp),
                     )
                 }
+                // Filter MagicBand/device noise out of the scan (default on); flip to see all raw.
+                FilterChip(
+                    selected = showCtrlOnly,
+                    onClick = {
+                        showCtrlOnly = !showCtrlOnly
+                        app.store.saveShowControlOnly(showCtrlOnly)
+                    },
+                    label = { Text(if (showCtrlOnly) "SHOW-CTRL" else "ALL RAW", style = techLabel()) },
+                    modifier = Modifier.height(28.dp),
+                )
             }
             SectionFilterDropdown(visibleSections) { section ->
                 visibleSections = if (section in visibleSections) visibleSections - section else visibleSections + section

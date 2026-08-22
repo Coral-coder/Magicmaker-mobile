@@ -1411,6 +1411,13 @@ struct ISCanView: View {
                 }
             }
 
+            Toggle(isOn: $vm.iscanShowControlOnly) {
+                Text("SHOW-CONTROL ONLY (HIDE BAND NOISE)")
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(MMTheme.textPrimary)
+            }
+            .tint(MMTheme.cyan)
+
             Toggle(isOn: Binding(
                 get: { vm.iscanAutoEnabled },
                 set: { vm.setIscanAuto($0) }
