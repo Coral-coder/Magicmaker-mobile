@@ -558,34 +558,6 @@ class MagicStore(context: Context) {
         return removed
     }
 
-    /** An effect-family entry the old classifier saved (EA/EF/E4/E5…) that never drives a band. */
-    private fun isEffectFamilyJunk(p: MagicPacket): Boolean {
-        if (MagicClassifier.isShowControl(p.hex)) return false
-        val t = MagicClassifier.classify(p.hex)?.typeInfo ?: return false
-        return t.startsWith("fx_") || t == "effect"
-    }
-
-    /** How many misclassified "effect/animation" beacon packets are sitting in the library. */
-    fun effectFamilyJunkCount(): Int =
-        (learnedColors + learnedLibrary + learnedRaw).count { isEffectFamilyJunk(it) }
-
-    /** Manual bulk cleanup: remove the misclassified effect-family beacon packets ("Animation
-     * (style ..)", "Color Cue", etc.) that don't actually control a band. Returns count removed. */
-    @Synchronized
-    fun clearMisclassifiedEffects(): Int {
-        val before = learnedColors.size + learnedLibrary.size + learnedRaw.size
-        learnedColors = learnedColors.filterNot { isEffectFamilyJunk(it) }
-        learnedLibrary = learnedLibrary.filterNot { isEffectFamilyJunk(it) }
-        learnedRaw = learnedRaw.filterNot { isEffectFamilyJunk(it) }
-        val removed = before - (learnedColors.size + learnedLibrary.size + learnedRaw.size)
-        if (removed > 0) {
-            rebuildRawIndex()
-            save()
-            ServiceState.bumpStoreRevision()
-        }
-        return removed
-    }
-
     @Synchronized
     fun addBandAddress(address: String) {
         val a = normalizeAddress(address)
