@@ -310,6 +310,22 @@ object MagicClassifier {
         return classify(h)?.typeInfo == "ping"
     }
 
+    private val effectFamilyPrelude = Regex("E[0-9A-F]00E9")
+
+    /**
+     * Strict "is this a real, band/wand-controllable show-control packet" test: interaction pings,
+     * E?00E9 effect commands, Starlight/New Wand, and known show blocks. Deliberately EXCLUDES the
+     * classifyEffectFamily beacon families (EA/EF/E4/E5…) — those are stationary park infrastructure
+     * beacons that never animate a band, so treating them as show control just clutters the library.
+     */
+    fun isShowControl(hexRaw: String): Boolean {
+        val h = HexUtils.canonicalHex(hexRaw)
+        if (h.startsWith("8301CC03")) return true
+        if (h.contains("CF9B") || h.contains("CF0B")) return true
+        if (effectFamilyPrelude.containsMatchIn(h)) return true
+        return showHexes.contains(h)
+    }
+
     fun libraryDedupeKey(classified: ClassifiedPacket): String = when (classified.typeInfo) {
         "starlight", "single", "dual", "show_block" -> classified.simKey
         "ping" -> "FUNC:ping"

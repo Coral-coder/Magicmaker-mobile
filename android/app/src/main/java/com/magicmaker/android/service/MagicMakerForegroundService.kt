@@ -960,9 +960,11 @@ class MagicMakerForegroundService : Service() {
     private fun handleHeard(hex: String, rssi: Int, address: String) {
         val loc = lastLocation
         val classified = runCatching { MagicClassifier.classify(HexUtils.canonicalHex(hex)) }.getOrNull()
-        // Show-control filter: drop MagicBand/device noise (no live entry, no record) unless the
-        // user turned the filter off to hunt raw. Real show-control packets classify (non-null).
-        if (store.getShowControlOnly() && classified == null) {
+        // Show-control filter: drop MagicBand/device noise + stationary beacon families (no live
+        // entry, no record) unless the user turned the filter off to hunt raw. Uses the strict
+        // show-control test, not merely "classifies", so EA/EF/E4 beacons (which classify as
+        // decorative 'animations' but never drive a band) don't clutter the library.
+        if (store.getShowControlOnly() && !MagicClassifier.isShowControl(hex)) {
             ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
             return
         }
