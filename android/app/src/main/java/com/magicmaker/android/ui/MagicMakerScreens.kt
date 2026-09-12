@@ -441,9 +441,11 @@ private fun BandConfigSection(app: MagicMakerApp, state: ServiceState.UiState) {
     val storeRev = state.storeRevision
     val bandAddrs = remember(storeRev) { app.store.bandAddresses() }
     val savedBands = remember(storeRev) { app.store.savedBandCount() }
+    val fxJunk = remember(storeRev) { app.store.effectFamilyJunkCount() }
     var manual by remember { mutableStateOf("") }
     var collapsed by remember { mutableStateOf(UiPrefs.isBandMenuCollapsed(ctx)) }
     var confirmDeleteBands by remember { mutableStateOf(false) }
+    var confirmClearFx by remember { mutableStateOf(false) }
 
     Surface(color = AppColors.Cyan.copy(alpha = 0.06f), shape = RectangleShape) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -501,6 +503,19 @@ private fun BandConfigSection(app: MagicMakerApp, state: ServiceState.UiState) {
                     ) { Text("DELETE ALL", style = techLabel(), color = MaterialTheme.colorScheme.error) }
                 }
             }
+            if (fxJunk > 0) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("NON-WORKING FX/ANIM: $fxJunk", style = techLabel(), color = AppColors.TextDim)
+                    TextButton(
+                        onClick = { confirmClearFx = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) { Text("DELETE ALL", style = techLabel(), color = MaterialTheme.colorScheme.error) }
+                }
+            }
             if (state.seenAddresses.isNotEmpty()) {
                 Text("HEARD (TAP TO TAG):", style = techLabel(), color = AppColors.TextDim)
                 state.seenAddresses.take(8).forEach { seen ->
@@ -548,6 +563,31 @@ private fun BandConfigSection(app: MagicMakerApp, state: ServiceState.UiState) {
             },
             dismissButton = {
                 TextButton(onClick = { confirmDeleteBands = false }) { Text("CANCEL", style = techLabel()) }
+            },
+        )
+    }
+
+    if (confirmClearFx) {
+        AlertDialog(
+            onDismissRequest = { confirmClearFx = false },
+            title = { Text("Delete non-working FX/animations?", style = techLabel()) },
+            text = {
+                Text(
+                    "Removes all $fxJunk misclassified beacon packets (\"Animation (style ..)\", " +
+                        "\"Color Cue\", etc.) that don't actually control a band. Real colors, " +
+                        "starlight, pings and effects are untouched. Removed in one pass.",
+                    style = techLabel(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val n = app.store.clearMisclassifiedEffects()
+                    confirmClearFx = false
+                    Toast.makeText(ctx, "Deleted $n non-working packets", Toast.LENGTH_SHORT).show()
+                }) { Text("DELETE", style = techLabel(), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClearFx = false }) { Text("CANCEL", style = techLabel()) }
             },
         )
     }
