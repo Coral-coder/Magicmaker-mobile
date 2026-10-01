@@ -98,6 +98,10 @@ object PacketPatterns {
                 return classified.simKey.equals(it.simKey, ignoreCase = true)
             }
         }
+        // System triggers are the common case. Check the 7-element list before falling back to
+        // buildTriggerOptions(), which allocates a PacketPattern for EVERY library packet —
+        // previously done once per rule per received packet.
+        systemTriggers.firstOrNull { it.id == triggerId }?.let { return matches(it, classified, rawHex) }
         val pattern = buildTriggerOptions(userPresets, learned).firstOrNull { it.id == triggerId } ?: return false
         return matches(pattern, classified, rawHex)
     }

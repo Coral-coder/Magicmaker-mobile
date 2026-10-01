@@ -20,7 +20,7 @@ data class ScanSessionFile(val path: String, val name: String)
 
 class MagicStore(context: Context) {
     private val appContext = context.applicationContext
-    private val gson: Gson = GsonBuilder().setPrettyPrinting().create()
+    private val gson: Gson = GsonBuilder().create()
     private val prefs = appContext.getSharedPreferences(PREFS_MAIN, Context.MODE_PRIVATE)
 
     // Where NEW capture logs are written. Prefer the user-accessible SD location
@@ -889,16 +889,20 @@ class MagicStore(context: Context) {
     private fun updateLearnedColor(packet: MagicPacket, verified: Boolean) {
         val idx = learnedColors.indexOfFirst { it.typeInfo == "starlight" && it.simKey == packet.simKey }
         if (idx >= 0) {
-            learnedColors = learnedColors.toMutableList().also {
-                it[idx] = it[idx].copy(
-                    hex = packet.hex,
-                    label = packet.label,
-                    colors = packet.colors,
-                    wandVerified = verified || it[idx].wandVerified,
-                )
+            val existing = learnedColors[idx]
+            val updated = existing.copy(
+                hex = packet.hex,
+                label = packet.label,
+                colors = packet.colors,
+                wandVerified = verified || existing.wandVerified,
+            )
+            // A wand broadcasts the same packet continuously; without this guard every repeat
+            // rewrote the entire library to internal storage AND the SD card.
+            if (updated != existing) {
+                learnedColors = learnedColors.toMutableList().also { it[idx] = updated }
+                save()
+                ServiceState.bumpStoreRevision()
             }
-            save()
-            ServiceState.bumpStoreRevision()
         }
     }
 
@@ -929,11 +933,13 @@ class MagicStore(context: Context) {
             lng = lng,
             accuracy = accuracy,
         )
-        recordings = listOf(rec) + recordings
+        // The CSV session log is the durable record, so the in-memory list only feeds the UI:
+        // cap it, and do NOT save() here. An uncapped list plus a full-library JSON rewrite per
+        // packet is an O(n^2) write storm that ANRs a long session.
+        recordings = (listOf(rec) + recordings).take(MAX_RECORDINGS)
         appendToSession(rec)                 // full chronological log (replay source)
         if (band) appendToBandSession(rec)   // band-only log
         accumulateUnique(rec)                // dedup tally, written at session end
-        save()
     }
 
     /** Adds/updates the per-session unique tally used to generate the deduped export. */
@@ -1209,6 +1215,8 @@ class MagicStore(context: Context) {
     companion object {
         /** Safety cap on auto-learned raw packets so a relentless flood can't OOM/ANR the app. */
         private const val MAX_RAW_LIBRARY = 20000
+        /** In-memory only (the CSV log is the durable record) — keeps saves bounded. */
+        private const val MAX_RECORDINGS = 500
         private const val SESSION_HEADER =
             "timestamp_ms,hex,rssi,label,category,type_info,colors,note,source_address,is_band,lat,lng,accuracy\n"
         private const val PREFS_MAIN = "magicmaker"

@@ -39,6 +39,9 @@ class RelayGattServer(
     private var catalogBuffer: ByteArray = ByteArray(0)
     private var commandResponseBuffer: ByteArray = ByteArray(0)
     private var running = false
+
+    /** No connected central means nothing can read STATUS/CATALOG — skip rebuilding them. */
+    @Volatile private var clientConnected = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
     fun start() {
@@ -56,11 +59,15 @@ class RelayGattServer(
             override fun onConnectionStateChange(device: BluetoothDevice?, status: Int, newState: Int) {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
+                        clientConnected = true
                         refreshCatalogBuffer()
                         refreshStatusCharacteristic()
                         onStatus("iPhone linked via BLE GATT")
                     }
-                    BluetoothProfile.STATE_DISCONNECTED -> onStatus("BLE GATT idle")
+                    BluetoothProfile.STATE_DISCONNECTED -> {
+                        clientConnected = false
+                        onStatus("BLE GATT idle")
+                    }
                 }
             }
 
@@ -169,6 +176,10 @@ class RelayGattServer(
     }
 
     fun refreshCatalogBuffer() {
+        // Serializing the whole catalog to JSON is not cheap, and publishState() calls this on
+        // every status change. With no iPhone attached nothing can read the buffer, so skip it;
+        // the connect handler rebuilds it as soon as one does.
+        if (!clientConnected) return
         // Don't clobber a chunk response mirrored on CATALOG while iPhone is mid-sync.
         if (commandResponseBuffer.isNotEmpty() && commandResponseBufferContainsChunk()) return
         val json = commandHandlers.catalogJson().put("ok", true)
@@ -310,5 +321,6 @@ class RelayGattServer(
         statusCharacteristic = null
         catalogCharacteristic = null
         running = false
+        clientConnected = false
     }
 }
