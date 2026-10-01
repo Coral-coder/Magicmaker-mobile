@@ -76,9 +76,23 @@ After the `8301` company ID, the payload is a chain of **type-length-value** rec
 Records run back to back until the advertisement ends. A record may have **length 0**, in
 which case it is a bare marker with no payload.
 
-This was validated against 32 distinct real packets drawn from the capture. **32 of 32
-parse cleanly** — every chain consumes the payload exactly, with no leftover bytes and no
-overrun. That is not something a wrong framing hypothesis does.
+Two independent checks, both clean:
+
+- **32 of 32** distinct real packets drawn from the park capture parse exactly.
+- **11 of 11** packets the app itself can transmit parse exactly — every `PacketBuilder`
+  output, the ping, both park-captured show blocks, and the New Wand code.
+
+Every chain consumes its payload with no leftover bytes and no overrun. That is not
+something a wrong framing hypothesis does.
+
+The second check is reproducible right now: `tools/tlv_validate.py` parses the built-ins
+and exits non-zero if any fail. Point it at a capture CSV to re-run the first:
+
+```
+tools/tlv_validate.py                  # the app's own transmit packets
+tools/tlv_validate.py capture.csv      # every distinct 8301... packet in a capture
+tools/tlv_validate.py --hex 8301E100E905006F0EF5B0
+```
 
 ### 2.1 Worked examples
 
@@ -129,6 +143,32 @@ positives and the misses (`E914` was being dropped) we have been chasing.
 
 **A real TLV walker replaces every substring heuristic in `MagicClassifier`, and is both
 faster and correct.** It is the single highest-value change still outstanding.
+
+### 2.3 An inconsistency in our own packets
+
+**Observed, significance unknown.**
+
+Running the validator over the built-ins turns up a split that does not follow function:
+
+| Built-in | Channel marker |
+|---|---|
+| Crossfade R/B, Lightning, Vibrate (rainbow FX) | has `E1 00` |
+| all single colours, Dual, 5-LED Rainbow, Circle, Ping | none |
+
+The split follows *origin*. The three that carry a marker are park-captured. The rest are
+ported from the `esp32_magicband` project, which builds `8301 E9 05 …` directly with no
+channel record.
+
+What makes this worth noting: **every effect packet in the park capture carries a channel
+marker.** Not one of the 55 omits it.
+
+That is a plausible reason some effects do not fire, and it would apply to six presets at
+once. It is *not* established — those presets may be entirely correct for addressing a
+MagicBand directly, which is a different target from park show control, and we have no
+evidence either way. Do not "fix" them on this basis.
+
+It is cheap to settle in the field: send Circle, then send Circle with `E100` spliced in
+after the `8301`. If the second works and the first does not, that is the answer.
 
 ---
 
