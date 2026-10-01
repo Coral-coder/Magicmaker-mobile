@@ -52,6 +52,13 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default package list includes the long-deprecated 'tools' package,
+          # which Google has now removed from the SDK repository — sdkmanager exits 1 with
+          # "Failed to find package 'tools'" and the job dies before Gradle ever runs.
+          # The runner image already ships platform-tools and the platforms we need
+          # (compileSdk 34), so install nothing extra.
+          packages: ''
 
       - name: Resolve version
         id: ver
