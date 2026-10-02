@@ -103,6 +103,7 @@ object ServiceState {
     private const val MAX_LIVE = 120
     private const val MAX_ADDRESSES = 80
     private const val MAX_SOURCES = 300
+    private const val MAX_SOURCE_STATS = 500
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -167,7 +168,7 @@ object ServiceState {
                 s.lastSeenMs = now
                 s.cats.add(packet.category.name)
             }
-            buildSourcesList()
+            sourcesThrottled(now)
         }
         update {
             val withoutDup = it.livePackets.filter { p -> p.dedupeKey != dedupeKey }
@@ -208,6 +209,28 @@ object ServiceState {
     )
     private val sourceStats = LinkedHashMap<String, MutSource>()
     private val priorityCats = setOf("SHOW", "ANIMATION", "COLOR")
+    private var cachedSources: List<SourceStat> = emptyList()
+    private var lastSourcesBuildMs = 0L
+
+    /** The Sources panel doesn't need per-packet freshness, and rebuilding it per advert is a
+     *  sort + allocation storm. Rebuild at most ~2Hz; reuse the last list in between. */
+    private fun sourcesThrottled(now: Long): List<SourceStat> {
+        if (cachedSources.isNotEmpty() && now - lastSourcesBuildMs < 500) return cachedSources
+        lastSourcesBuildMs = now
+        trimSourceStats()
+        cachedSources = buildSourcesList()
+        return cachedSources
+    }
+
+    /** Rotating private addresses mean this map grows without bound in a crowd (only the
+     *  OUTPUT was capped before) — evict the stalest entries. */
+    private fun trimSourceStats() {
+        val over = sourceStats.size - MAX_SOURCE_STATS
+        if (over <= 0) return
+        sourceStats.entries.sortedBy { it.value.lastSeenMs }.take(over).forEach {
+            sourceStats.remove(it.key)
+        }
+    }
 
     private fun buildSourcesList(): List<SourceStat> =
         sourceStats.entries.map { (addr, s) ->

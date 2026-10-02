@@ -736,7 +736,10 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
             .groupBy { MagicClassifier.groupKey(it.hex) }
             .map { (_, list) ->
                 val sample = list.first()
-                AnalyzedPacket(sample.hex, MagicClassifier.groupLabel(sample.hex), sample.category, list.size)
+                // One classify() for the group, not one per row per redraw.
+                val c = MagicClassifier.classify(sample.hex)
+                val label = c?.label ?: MagicClassifier.rawLabel(sample.hex)
+                AnalyzedPacket(sample.hex, label, sample.category, list.size)
             }
             .sortedByDescending { it.count }
     }
@@ -1989,11 +1992,16 @@ private fun AutoTab(app: MagicMakerApp, state: ServiceState.UiState) {
                     modifier = Modifier.menuAnchor().fillMaxWidth(),
                 )
                 ExposedDropdownMenu(triggerExpanded, { triggerExpanded = false }) {
-                    triggers.forEach { opt ->
-                        DropdownMenuItem(
-                            text = { Text(opt.label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                            onClick = { triggerId = opt.id; triggerExpanded = false },
-                        )
+                    // Built from the whole library, so this can be thousands of rows. forEach
+                    // composes every one of them the instant the menu opens; LazyColumn only
+                    // composes what's on screen.
+                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        items(triggers) { opt ->
+                            DropdownMenuItem(
+                                text = { Text(opt.label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                                onClick = { triggerId = opt.id; triggerExpanded = false },
+                            )
+                        }
                     }
                 }
             }
@@ -2011,15 +2019,18 @@ private fun AutoTab(app: MagicMakerApp, state: ServiceState.UiState) {
                     modifier = Modifier.menuAnchor().fillMaxWidth(),
                 )
                 ExposedDropdownMenu(responseExpanded, { responseExpanded = false }) {
-                    responses.forEach { opt ->
-                        DropdownMenuItem(
-                            text = { Text(opt.label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                            onClick = {
-                                pickResponseId = opt.id
-                                if (opt.id !in responseStack) responseStack = responseStack + opt.id
-                                responseExpanded = false
-                            },
-                        )
+                    // Same as the trigger menu above: lazy, or opening it stalls the UI thread.
+                    LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                        items(responses) { opt ->
+                            DropdownMenuItem(
+                                text = { Text(opt.label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                                onClick = {
+                                    pickResponseId = opt.id
+                                    if (opt.id !in responseStack) responseStack = responseStack + opt.id
+                                    responseExpanded = false
+                                },
+                            )
+                        }
                     }
                 }
             }

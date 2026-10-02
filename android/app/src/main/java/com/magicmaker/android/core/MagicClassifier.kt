@@ -4,7 +4,30 @@ object MagicClassifier {
     private val colorPalette = PresetCatalog.starlightColorNames
     private val showHexes = PresetCatalog.showBlocks.values.map { it.uppercase() }.toSet()
 
+    private const val CLASSIFY_CACHE_MAX = 1024
+    private val classifyCache = object : LinkedHashMap<String, Optional>(256, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Optional>): Boolean =
+            size > CLASSIFY_CACHE_MAX
+    }
+
+    /** Null is a meaningful classify() result, so the cache stores it rather than re-deriving it. */
+    private class Optional(val value: ClassifiedPacket?)
+
+    /**
+     * classify() is pure: the same hex always yields the same result. It is also the single
+     * hottest function in the app — the scan path, the library writer, the automation matcher
+     * and every list row all call it, and a packet repeats hundreds of times a second while a
+     * wand is broadcasting. Memoize it so the regex and the show-block scan run once per
+     * distinct packet instead of once per sighting.
+     */
     fun classify(hexRaw: String): ClassifiedPacket? {
+        synchronized(classifyCache) { classifyCache[hexRaw] }?.let { return it.value }
+        val result = classifyUncached(hexRaw)
+        synchronized(classifyCache) { classifyCache[hexRaw] = Optional(result) }
+        return result
+    }
+
+    private fun classifyUncached(hexRaw: String): ClassifiedPacket? {
         val hex = hexRaw.uppercase().filter { it in "0123456789ABCDEF" }
         if (!hex.startsWith("8301") && !hex.contains("CF9B") && !hex.contains("CF0B")) return null
         val normalized = if (hex.startsWith("8301")) hex else "8301$hex"
@@ -307,7 +330,8 @@ object MagicClassifier {
         val h = HexUtils.canonicalHex(hexRaw)
         if (h.startsWith("8301C0")) return true       // guest MagicBand telemetry
         if (h.startsWith("83010F11")) return true      // rolling per-band ID broadcasts
-        return classify(h)?.typeInfo == "ping"
+        // Ping is TLV type 0xCC at the head — no need to run a full classify() for it.
+        return h.startsWith("8301CC03")
     }
 
     private val effectFamilyPrelude = Regex("E[0-9A-F]00E9")
