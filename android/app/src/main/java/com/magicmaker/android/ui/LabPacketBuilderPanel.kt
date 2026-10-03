@@ -11,6 +11,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -762,7 +769,13 @@ private fun PacketInspector(hex: String, onHexChange: (String) -> Unit) {
 private fun paletteOptions(): List<Pair<Int, String>> =
     LabPacketBuilder.paletteColors.map { it.id to it.label }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Picker for palette colours, buzz patterns and shows. A full dialog with a LazyColumn rather
+ * than an ExposedDropdownMenu: the dropdown's scroll position lived inside its popup, and the
+ * Lab recomposes every time a packet is heard, which rebuilt the popup and threw the list back
+ * to the top mid-scroll. The dialog owns its own list state, shows a swatch for palette rows,
+ * and gives 32 options tap targets a thumb can actually hit.
+ */
 @Composable
 private fun PaletteDropdown(
     label: String,
@@ -771,31 +784,66 @@ private fun PaletteDropdown(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var open by remember { mutableStateOf(false) }
     val selectedLabel = options.firstOrNull { it.first == selectedId }?.second ?: "?"
 
-    ExposedDropdownMenuBox(expanded, { expanded = it }, modifier = modifier) {
-        OutlinedButton(
-            onClick = { expanded = true },
-            modifier = Modifier.menuAnchor().height(28.dp).fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-        ) {
-            Text("$label: $selectedLabel", style = techLabel(), maxLines = 1)
+    OutlinedButton(
+        onClick = { open = true },
+        modifier = modifier.height(28.dp),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+    ) {
+        swatchFor(selectedLabel)?.let { c ->
+            Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(c))
+            Spacer(Modifier.width(6.dp))
         }
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(AppColors.Panel),
-        ) {
-            options.forEach { (id, name) ->
-                DropdownMenuItem(
-                    text = { Text(name, style = techLabel()) },
-                    onClick = {
-                        onSelect(id)
-                        expanded = false
-                    },
-                )
+        Text("$label: $selectedLabel", style = techLabel(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+
+    if (open) {
+        Dialog(onDismissRequest = { open = false }) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = AppColors.Panel,
+                tonalElevation = 2.dp,
+            ) {
+                Column(Modifier.padding(vertical = 8.dp)) {
+                    Text(
+                        label.uppercase(),
+                        style = techHeader(),
+                        color = AppColors.Cyan,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                    )
+                    val listState = rememberLazyListState(
+                        initialFirstVisibleItemIndex = options.indexOfFirst { it.first == selectedId }.coerceAtLeast(0),
+                    )
+                    LazyColumn(state = listState, modifier = Modifier.heightIn(max = 460.dp)) {
+                        items(options, key = { it.first }) { (id, name) ->
+                            val isSel = id == selectedId
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .background(if (isSel) AppColors.Cyan.copy(alpha = 0.15f) else Color.Transparent)
+                                    .clickable { onSelect(id); open = false }
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                swatchFor(name)?.let { c ->
+                                    Box(Modifier.size(16.dp).clip(RoundedCornerShape(3.dp)).background(c))
+                                    Spacer(Modifier.width(10.dp))
+                                }
+                                Text(name, style = techLabel(), color = if (isSel) AppColors.Cyan else AppColors.TextPrimary)
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/** Palette option labels are "#1B White" — pull the index out for a swatch; null for non-colours. */
+private fun swatchFor(optionLabel: String): Color? {
+    if (!optionLabel.startsWith("#") || optionLabel.length < 3) return null
+    val idx = optionLabel.substring(1, 3).toIntOrNull(16) ?: return null
+    return labSwatchColor(idx)
 }
