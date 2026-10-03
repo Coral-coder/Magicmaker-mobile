@@ -27,6 +27,13 @@ targets:
         # No encryption beyond what Apple provides (BLE and local-network HTTP only).
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
+        # App Store Connect rejects an iPad-capable bundle without these (error 90474).
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UIBackgroundModes:
           - bluetooth-central
         NSBluetoothAlwaysUsageDescription: "MagicMaker scans and sends Disney BLE packets for wand colors and show effects."
