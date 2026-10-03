@@ -302,6 +302,16 @@ So either `CF9B` is a different framing, or it is a transcription error that has
 carried forward in the codebase. **There is not a single Starlight packet in the capture**,
 so we cannot resolve it from data we have.
 
+Running the app's own legacy Starlight template through the parser sharpened this
+considerably. That template is `8301 CF9B 00 <9-byte serial> <colour>`: marker, then **exactly
+11 value bytes**. Eleven is `0x0B`. In other words the only thing wrong with the template under
+TLV is the single nibble that turns `0B` into `9B` — and the New Wand, which *is* known to work,
+uses `CF0B` with the same 11-byte layout.
+
+The most economical explanation is that `CF9B` is a transcription error carried forward in the
+code, and the Starlight wand and the New Wand are the same record type. **Still inferred, not
+proven** — transmit behaviour has deliberately not been changed on this basis.
+
 **This is the one open question worth a field test:** capture a real Starlight wand and we
 will know in one packet whether `CF9B` is real.
 
@@ -331,9 +341,9 @@ Newest-wins: a new command preempts one in flight rather than queueing behind it
 
 In priority order:
 
-1. **Replace the substring heuristics in `MagicClassifier` with a real TLV walker.** It is
-   correct where the regex is accidental, it is faster, and it makes `E914`-style unknown
-   subtypes fall out naturally instead of being dropped.
+1. **Replace the substring heuristics in `MagicClassifier` with a real TLV walker.** Done on
+   Android — `core/DisneyTlv.kt`. Verified against the old classifier over a 71-packet corpus:
+   every difference was one of the fixes predicted here. iOS still runs the substring version.
 2. **Filter on the head record type, not on substrings.** `C0` and `0F` are 91% of traffic
    and are never effects.
 3. **Dedupe `CF` packets on the tail**, not the full hex — the serial field is noise.
