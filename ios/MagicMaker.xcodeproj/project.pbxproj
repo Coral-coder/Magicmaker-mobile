@@ -29,7 +29,9 @@
 		9EA2E8AC01B035D09C9BEF90 /* PresetCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DE2091CB8C5ACAEC915DF23 /* PresetCatalog.swift */; };
 		AABB0011CCDD2233EEFF4455 /* PacketBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB0022CCDD2233EEFF4455 /* PacketBuilder.swift */; };
 		C1C2C3D4E5F60718293A4B5D /* LabPacketBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2C3D4E5F60718293A4B5D6E /* LabPacketBuilder.swift */; };
+		BA11D000E5F60718293A4B01 /* BandEffectModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA11D000E5F60718293A4B02 /* BandEffectModel.swift */; };
 		D1D2D3D4E5F60718293A4B5D /* LabBuilderPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2D3D4E5F60718293A4B5D6E /* LabBuilderPanel.swift */; };
+		BA11D000E5F60718293A4B03 /* BandPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA11D000E5F60718293A4B04 /* BandPreviewView.swift */; };
 		AABB0033CCDD2233EEFF4455 /* MdeLightSequence.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB0044CCDD2233EEFF4455 /* MdeLightSequence.swift */; };
 		AABB0055CCDD2233EEFF4455 /* MdeThemeCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB0066CCDD2233EEFF4455 /* MdeThemeCatalog.swift */; };
 		B6A97F408F403C26FB276399 /* PacketPatterns.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010D54AEFEDAF45A7708C89F /* PacketPatterns.swift */; };
@@ -54,7 +56,9 @@
 		1DE2091CB8C5ACAEC915DF23 /* PresetCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetCatalog.swift; sourceTree = "<group>"; };
 		AABB0022CCDD2233EEFF4455 /* PacketBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketBuilder.swift; sourceTree = "<group>"; };
 		C2C3D4E5F60718293A4B5D6E /* LabPacketBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabPacketBuilder.swift; sourceTree = "<group>"; };
+		BA11D000E5F60718293A4B02 /* BandEffectModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandEffectModel.swift; sourceTree = "<group>"; };
 		D2D3D4E5F60718293A4B5D6E /* LabBuilderPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabBuilderPanel.swift; sourceTree = "<group>"; };
+		BA11D000E5F60718293A4B04 /* BandPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandPreviewView.swift; sourceTree = "<group>"; };
 		AABB0044CCDD2233EEFF4455 /* MdeLightSequence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MdeLightSequence.swift; sourceTree = "<group>"; };
 		AABB0066CCDD2233EEFF4455 /* MdeThemeCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MdeThemeCatalog.swift; sourceTree = "<group>"; };
 		1F8D4718D1C32F409174A115 /* MagicStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagicStore.swift; sourceTree = "<group>"; };
@@ -106,6 +110,7 @@
 				010D54AEFEDAF45A7708C89F /* PacketPatterns.swift */,
 				AABB0022CCDD2233EEFF4455 /* PacketBuilder.swift */,
 				C2C3D4E5F60718293A4B5D6E /* LabPacketBuilder.swift */,
+				BA11D000E5F60718293A4B02 /* BandEffectModel.swift */,
 				AABB0044CCDD2233EEFF4455 /* MdeLightSequence.swift */,
 				AABB0066CCDD2233EEFF4455 /* MdeThemeCatalog.swift */,
 				1DE2091CB8C5ACAEC915DF23 /* PresetCatalog.swift */,
@@ -179,6 +184,7 @@
 				FFFA361D2DA0BFB300EF8E81 /* FilesTab.swift */,
 				4B5D5D1BB282E9379A64C059 /* LabTab.swift */,
 				D2D3D4E5F60718293A4B5D6E /* LabBuilderPanel.swift */,
+				BA11D000E5F60718293A4B04 /* BandPreviewView.swift */,
 				CBFD04FCA1753CCAB1E505AE /* PresetsTab.swift */,
 				0FED21B7C54E94E689A93AAC /* RecordTab.swift */,
 				9ECD54B4DC2714422A767DC3 /* RemoteTab.swift */,
@@ -284,7 +290,9 @@
 				B6A97F408F403C26FB276399 /* PacketPatterns.swift in Sources */,
 				AABB0011CCDD2233EEFF4455 /* PacketBuilder.swift in Sources */,
 				C1C2C3D4E5F60718293A4B5D /* LabPacketBuilder.swift in Sources */,
+				BA11D000E5F60718293A4B01 /* BandEffectModel.swift in Sources */,
 				D1D2D3D4E5F60718293A4B5D /* LabBuilderPanel.swift in Sources */,
+				BA11D000E5F60718293A4B03 /* BandPreviewView.swift in Sources */,
 				AABB0033CCDD2233EEFF4455 /* MdeLightSequence.swift in Sources */,
 				AABB0055CCDD2233EEFF4455 /* MdeThemeCatalog.swift in Sources */,
 				9EA2E8AC01B035D09C9BEF90 /* PresetCatalog.swift in Sources */,
