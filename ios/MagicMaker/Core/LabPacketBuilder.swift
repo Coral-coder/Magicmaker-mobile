@@ -50,7 +50,8 @@ enum LabPacketBuilder {
         ("Alt Strobe", "8301CC03000100E100E90F00110EF17AEC5C012814281448ABB0"),
         ("Slow Sparkle", "8301E100E90F00520EF17AEC5C021902190248ABB0"),
         ("Fast Sparkle", "8301E100E90F00520EF17AEC5C021B151B1548ABB0"),
-        ("Pirate Cannon", "8301E100E9110003240F55515BF00F10374894D13D0508B0"),
+        // The captured packet is 17 body bytes ending ...0508; the old copy had a spurious trailing B0.
+        ("Pirate Cannon", "8301E100E9110003240F55515BF00F10374894D13D0508"),
         ("Show Off", "8301CC03000100E100E90500090E1DB0"),
     ]
 
@@ -101,6 +102,127 @@ enum LabPacketBuilder {
 
     static func paletteLabel(_ id: Int) -> String {
         paletteColors.first(where: { $0.id == (id & 0x1F) })?.label ?? labLabel(id)
+    }
+
+    // MARK: - Guided builder model (mirrors Android LabPacketBuilder.LabPacketType / Framing / build)
+
+    /// A packet kind the Lab can compose end-to-end. `colorSlots` is how many palette colours the
+    /// type carries; `supportsVib` whether the buzz controls apply.
+    enum LabPacketType: String, CaseIterable, Identifiable {
+        case preset, dual, crossfade, rainbow, circle, vibrate, show, ping, raw
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .preset: return "Single Color"
+            case .dual: return "Dual Color"
+            case .crossfade: return "Crossfade"
+            case .rainbow: return "Rainbow / Custom"
+            case .circle: return "Circle Spin"
+            case .vibrate: return "Vibrate Only"
+            case .show: return "Park Show"
+            case .ping: return "Wake Ping"
+            case .raw: return "Raw Hex"
+            }
+        }
+
+        var blurb: String {
+            switch self {
+            case .preset: return "One solid band color."
+            case .dual: return "Two colors — inner / outer ring."
+            case .crossfade: return "Smooth fade from one color to another."
+            case .rainbow: return "Five LED colors — pick every one for your own animation."
+            case .circle: return "Rotating ring animation."
+            case .vibrate: return "Haptic buzz, no color change."
+            case .show: return "A real show effect captured in the park — lightning, sparkle, cannon…"
+            case .ping: return "Wakes nearby bands so they hear the next command."
+            case .raw: return "Type any payload by hand for total control."
+            }
+        }
+
+        var colorSlots: Int {
+            switch self {
+            case .preset: return 1
+            case .dual, .crossfade: return 2
+            case .rainbow: return 5
+            default: return 0
+            }
+        }
+
+        var supportsVib: Bool {
+            switch self {
+            case .preset, .dual, .crossfade, .rainbow, .circle, .vibrate: return true
+            default: return false
+            }
+        }
+    }
+
+    static func defaultColors(_ type: LabPacketType) -> [Int] {
+        switch type {
+        case .preset: return [PacketBuilder.Color.cyan]
+        case .dual: return [PacketBuilder.Color.yellowOrange, PacketBuilder.Color.blue]
+        case .crossfade: return [PacketBuilder.Color.red, PacketBuilder.Color.blue]
+        case .rainbow:
+            return [PacketBuilder.Color.yellowOrange, PacketBuilder.Color.red, PacketBuilder.Color.green,
+                    PacketBuilder.Color.blue, PacketBuilder.Color.purple]
+        default: return []
+        }
+    }
+
+    /// How the packet is framed around its effect record. Every effect in the park capture carries
+    /// a channel marker (E1 00); the esp32_magicband shapes never did. The wake-ping prefix is what
+    /// the captured show packets put in front. See docs/PROTOCOL.md.
+    struct Framing: Equatable {
+        var channelMarker: Bool
+        var wakePrefix: Bool
+    }
+
+    /// Framing that reproduces exactly what each type has always produced.
+    static func defaultFraming(_ type: LabPacketType) -> Framing {
+        type == .crossfade ? Framing(channelMarker: true, wakePrefix: false) : Framing(channelMarker: false, wakePrefix: false)
+    }
+
+    /// Shows, pings and raw hex are sent exactly as given.
+    static func framingApplies(_ type: LabPacketType) -> Bool {
+        type != .show && type != .ping && type != .raw
+    }
+
+    private static let channel1 = "E100"
+    private static let wakePrefix = "CC03000100"
+
+    /// Compose the hex for a fully specified builder state. Never transmits.
+    static func build(
+        type: LabPacketType,
+        colors: [Int],
+        vibEnabled: Bool,
+        vibPattern: Int,
+        rawHex: String = "",
+        framing: Framing? = nil,
+        showIndex: Int = 0
+    ) -> String {
+        func c(_ i: Int, _ fallback: Int) -> Int { colors.indices.contains(i) ? colors[i] : fallback }
+        let base: String
+        switch type {
+        case .preset: base = buildPreset(colorId: c(0, PacketBuilder.Color.cyan), vibEnabled: vibEnabled, vibPattern: vibPattern)
+        case .dual: base = buildDual(c(0, PacketBuilder.Color.yellowOrange), c(1, PacketBuilder.Color.blue), vibEnabled: vibEnabled, vibPattern: vibPattern)
+        case .crossfade: base = buildCrossfade(c(0, PacketBuilder.Color.red), c(1, PacketBuilder.Color.blue), vibEnabled: vibEnabled, vibPattern: vibPattern)
+        case .rainbow:
+            base = buildRainbow(c(0, PacketBuilder.Color.yellowOrange), c(1, PacketBuilder.Color.red), c(2, PacketBuilder.Color.green),
+                                c(3, PacketBuilder.Color.blue), c(4, PacketBuilder.Color.purple), vibEnabled: vibEnabled, vibPattern: vibPattern)
+        case .circle: base = buildCircle(vibEnabled: vibEnabled, vibPattern: vibPattern)
+        case .vibrate: base = buildVibrate(vibEnabled: vibEnabled, vibPattern: vibPattern)
+        case .show: base = showEffects.indices.contains(showIndex) ? showEffects[showIndex].1 : showEffects[0].1
+        case .ping: base = PacketBuilder.wakeupPing
+        case .raw: return HexUtils.canonicalHex(rawHex)
+        }
+        guard framingApplies(type) else { return base }
+        let f = framing ?? defaultFraming(type)
+        // Strip whatever framing the primitive builder baked in, then apply the requested one.
+        var body = base
+        if body.hasPrefix("8301") { body.removeFirst(4) }
+        if body.hasPrefix(wakePrefix) { body.removeFirst(wakePrefix.count) }
+        if body.hasPrefix(channel1) { body.removeFirst(channel1.count) }
+        return "8301" + (f.wakePrefix ? wakePrefix : "") + (f.channelMarker ? channel1 : "") + body
     }
 }
 

@@ -1,134 +1,227 @@
 import SwiftUI
 
+/// The Lab's packet composer. Nothing in here transmits. Every control only changes the packet
+/// that is loaded into the hex field below it (via `onHexBuilt`); the one SEND button on the Lab
+/// screen is the only thing that puts a packet on the air. Mirrors the Android Lab: pick what the
+/// band should do, set the colours, read the summary, then send when you are ready.
 struct LabBuilderPanel: View {
     let enabled: Bool
+    let loadedHex: String
     let onHexBuilt: (String) -> Void
-    let onTransmit: (String) -> Void
 
-    @State private var vibEnabled = true
-    @State private var vibPattern = 3
-    @State private var dualC1 = PacketBuilder.Color.yellowOrange
-    @State private var dualC2 = PacketBuilder.Color.blue
-    @State private var crossC1 = PacketBuilder.Color.red
-    @State private var crossC2 = PacketBuilder.Color.blue
-    @State private var rainbow: [Int] = [
-        PacketBuilder.Color.yellowOrange,
-        PacketBuilder.Color.red,
-        PacketBuilder.Color.green,
-        PacketBuilder.Color.blue,
-        PacketBuilder.Color.purple,
-    ]
+    @State private var type: LabPacketBuilder.LabPacketType = .preset
+    @State private var colors: [Int] = LabPacketBuilder.defaultColors(.preset)
+    @State private var vibEnabled = false
+    @State private var vibPattern = PacketBuilder.Vibration.triple
+    @State private var framing: LabPacketBuilder.Framing = LabPacketBuilder.defaultFraming(.preset)
+    @State private var showIndex = 0
+
+    private var builtHex: String {
+        LabPacketBuilder.build(
+            type: type, colors: colors, vibEnabled: vibEnabled, vibPattern: vibPattern,
+            rawHex: loadedHex, framing: framing, showIndex: showIndex
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text("VIB")
-                    .font(MMTheme.techLabel())
+            Text("WHAT DO YOU WANT THE BAND TO DO?")
+                .font(MMTheme.techLabel(9))
+                .foregroundStyle(MMTheme.cyanDim)
+            typeChips
+            Text(type.blurb)
+                .font(MMTheme.techLabel(9))
+                .foregroundStyle(MMTheme.textDim)
+
+            summaryCard
+
+            switch type {
+            case .raw:
+                Text("Edit the hex field below directly. The summary updates as you type.")
+                    .font(MMTheme.techLabel(9))
                     .foregroundStyle(MMTheme.textDim)
-                Toggle("", isOn: $vibEnabled)
-                    .labelsHidden()
-                    .tint(MMTheme.cyan)
-                LabPalettePicker(label: "PAT", selection: $vibPattern, options: LabPacketBuilder.vibrationPatterns.map { ($0.id, $0.label) })
-                MMCompactButton(title: "Wake", enabled: enabled) {
-                    onTransmit(PacketBuilder.wakeupPing)
+            case .ping:
+                Text("Nothing to set. Send this just before a command if a band isn't reacting.")
+                    .font(MMTheme.techLabel(9))
+                    .foregroundStyle(MMTheme.textDim)
+            case .show:
+                LabPalettePicker(
+                    label: "SHOW",
+                    selection: $showIndex,
+                    options: LabPacketBuilder.showEffects.enumerated().map { ($0.offset, $0.element.0) }
+                )
+                Text("Recorded in the park and replayed byte-for-byte.")
+                    .font(MMTheme.techLabel(9))
+                    .foregroundStyle(MMTheme.textDim)
+            default:
+                if type.colorSlots > 0 {
+                    labSection(type.colorSlots == 1 ? "COLOR" : "COLORS") {
+                        colorSlots
+                    }
                 }
-            }
-
-            labSection("PRIMARY") {
-                chipRow(LabPacketBuilder.primaryPresetColors) { color in
-                    onTransmit(LabPacketBuilder.buildPreset(colorId: color.id, vibEnabled: vibEnabled, vibPattern: vibPattern))
-                }
-            }
-
-            labSection("FULL PALETTE (0x00–0x1F)") {
-                chipRow(LabPacketBuilder.paletteColors) { color in
-                    onTransmit(LabPacketBuilder.buildPreset(colorId: color.id, vibEnabled: vibEnabled, vibPattern: vibPattern))
-                }
-            }
-
-            labMode("DUAL COLOR") {
-                HStack(spacing: 8) {
-                    LabPalettePicker(label: "IN", selection: $dualC1, options: paletteOptions)
-                    LabPalettePicker(label: "OUT", selection: $dualC2, options: paletteOptions)
-                }
-                MMCompactButton(title: "Build Dual", enabled: enabled) {
-                    onHexBuilt(LabPacketBuilder.buildDual(dualC1, dualC2, vibEnabled: vibEnabled, vibPattern: vibPattern))
-                }
-            }
-
-            labMode("CROSSFADE") {
-                HStack(spacing: 8) {
-                    LabPalettePicker(label: "A", selection: $crossC1, options: paletteOptions)
-                    LabPalettePicker(label: "B", selection: $crossC2, options: paletteOptions)
-                }
-                MMCompactButton(title: "Build Xfade", enabled: enabled) {
-                    onHexBuilt(LabPacketBuilder.buildCrossfade(crossC1, crossC2, vibEnabled: vibEnabled, vibPattern: vibPattern))
-                }
-            }
-
-            labMode("RAINBOW ×5") {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(0..<5, id: \.self) { index in
+                if type.supportsVib {
+                    HStack(spacing: 8) {
+                        Text("BUZZ")
+                            .font(MMTheme.techLabel())
+                            .foregroundStyle(MMTheme.cyanDim)
+                        Toggle("", isOn: $vibEnabled)
+                            .labelsHidden()
+                            .tint(MMTheme.cyan)
+                        if vibEnabled {
                             LabPalettePicker(
-                                label: "\(index + 1)",
-                                selection: binding(for: index),
-                                options: paletteOptions
+                                label: "PATTERN",
+                                selection: $vibPattern,
+                                options: LabPacketBuilder.vibrationPatterns.map { ($0.id, $0.label) }
                             )
                         }
-                    }
-                }
-                MMCompactButton(title: "Build Rainbow", enabled: enabled) {
-                    onHexBuilt(LabPacketBuilder.buildRainbow(
-                        rainbow[0], rainbow[1], rainbow[2], rainbow[3], rainbow[4],
-                        vibEnabled: vibEnabled, vibPattern: vibPattern
-                    ))
-                }
-            }
-
-            HStack(spacing: 8) {
-                labMode("CIRCLE") {
-                    MMCompactButton(title: "Build Circle", enabled: enabled) {
-                        onHexBuilt(LabPacketBuilder.buildCircle(vibEnabled: vibEnabled, vibPattern: vibPattern))
-                    }
-                }
-                labMode("FINALE") {
-                    MMCompactButton(title: "Rainbow FX", enabled: enabled) {
-                        onHexBuilt(PacketBuilder.rainbowFinale)
-                    }
-                }
-                labMode("VIB ONLY") {
-                    MMCompactButton(title: "Vib Band", enabled: enabled) {
-                        onTransmit(LabPacketBuilder.buildVibrate(vibEnabled: vibEnabled, vibPattern: vibPattern))
+                        Spacer()
                     }
                 }
             }
 
-            labMode("SHOW FX") {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(LabPacketBuilder.showEffects, id: \.0) { label, hex in
-                            Button(label.uppercased()) { onTransmit(hex) }
-                                .font(MMTheme.techLabel())
-                                .buttonStyle(.bordered)
-                                .tint(MMTheme.cyan)
-                                .disabled(!enabled)
-                        }
-                    }
+            if LabPacketBuilder.framingApplies(type) {
+                labSection("FRAMING") {
+                    framingToggle(
+                        "Channel marker (E1 00)",
+                        detail: "Every effect recorded in the park carries this. The esp32 presets never did. Try both.",
+                        isOn: Binding(get: { framing.channelMarker }, set: { framing.channelMarker = $0 })
+                    )
+                    framingToggle(
+                        "Wake ping first (CC03 000100)",
+                        detail: "Tells nearby bands to listen before the effect arrives.",
+                        isOn: Binding(get: { framing.wakePrefix }, set: { framing.wakePrefix = $0 })
+                    )
+                }
+            }
+        }
+        // The builder's only output: whatever it currently describes goes into the hex field.
+        .onChange(of: builtHex) { _, hex in if type != .raw { onHexBuilt(hex) } }
+        // A packet loaded from outside (Scan → "to Lab", a library row) must not be clobbered by
+        // the builder's defaults: switch to Raw Hex so the loaded packet is what gets sent.
+        .onChange(of: loadedHex) { _, hex in
+            if type != .raw, !hex.isEmpty, HexUtils.canonicalHex(hex) != builtHex { type = .raw }
+        }
+        .onAppear {
+            if !loadedHex.isEmpty, HexUtils.canonicalHex(loadedHex) != builtHex {
+                type = .raw
+            } else if type != .raw {
+                onHexBuilt(builtHex)
+            }
+        }
+    }
+
+    // MARK: - Pieces
+
+    private var typeChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(LabPacketBuilder.LabPacketType.allCases) { t in
+                    Button(t.label.uppercased()) { select(t) }
+                        .font(MMTheme.techLabel(9))
+                        .buttonStyle(.bordered)
+                        .tint(t == type ? MMTheme.cyan : MMTheme.cyanDim)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(t == type ? MMTheme.cyan : .clear, lineWidth: 1)
+                        )
                 }
             }
         }
     }
 
-    private var paletteOptions: [(Int, String)] {
-        LabPacketBuilder.paletteColors.map { ($0.id, $0.label) }
+    private func select(_ t: LabPacketBuilder.LabPacketType) {
+        guard t != type else { return }
+        type = t
+        colors = LabPacketBuilder.defaultColors(t)
+        framing = LabPacketBuilder.defaultFraming(t)
     }
 
-    private func binding(for index: Int) -> Binding<Int> {
-        Binding(
-            get: { rainbow[index] },
-            set: { rainbow[index] = $0 }
-        )
+    /// What the current settings will put on the air, in words — before any hex.
+    private var summaryCard: some View {
+        let hex = type == .raw ? HexUtils.canonicalHex(loadedHex) : builtHex
+        let classified = MagicClassifier.classify(hex)
+        let reject = HexUtils.legacyAdvertiseRejectReason(hex)
+        let bytes = HexUtils.hexToBytes(hex).count
+        let tone: Color = reject != nil ? MMTheme.error : (classified != nil ? MMTheme.cyan : MMTheme.amber)
+        var details: [String] = []
+        if LabPacketBuilder.framingApplies(type) {
+            details.append(framing.wakePrefix ? "wake ping first" : "no wake ping")
+            details.append(framing.channelMarker ? "channel 1" : "no channel marker")
+        }
+        if type.supportsVib {
+            details.append(vibEnabled
+                ? "buzz " + (LabPacketBuilder.vibrationPatterns.first { $0.id == vibPattern }?.label.lowercased() ?? "#\(vibPattern)")
+                : "no buzz")
+        }
+        details.append("\(bytes) bytes")
+        details.append(reject == nil ? "fits in BLE" : "TOO LONG")
+
+        return VStack(alignment: .leading, spacing: 2) {
+            Text("YOU ARE BUILDING")
+                .font(MMTheme.techLabel(9))
+                .foregroundStyle(MMTheme.textDim)
+            Text((classified?.label ?? (hex.isEmpty ? "Nothing yet" : "Unrecognised packet")).uppercased())
+                .font(MMTheme.techHeader())
+                .foregroundStyle(tone)
+                .lineLimit(2)
+            if let c = classified, !c.colors.isEmpty {
+                Text(c.colors.uppercased())
+                    .font(MMTheme.techLabel(9))
+                    .foregroundStyle(MMTheme.cyanDim)
+            }
+            Text(details.joined(separator: " · ").uppercased())
+                .font(MMTheme.techLabel(9))
+                .foregroundStyle(MMTheme.textDim)
+            if let reject { Text(reject).font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.error) }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MMTheme.panel)
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(tone.opacity(0.5), lineWidth: 1))
+    }
+
+    private var colorSlots: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(0..<type.colorSlots, id: \.self) { i in
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(starlightGlowColor(colors.indices.contains(i) ? colors[i] : 0))
+                        .frame(width: 10, height: 10)
+                    LabPalettePicker(
+                        label: slotLabel(i),
+                        selection: Binding(
+                            get: { colors.indices.contains(i) ? colors[i] : 0 },
+                            set: { v in
+                                var c = colors
+                                while c.count <= i { c.append(0) }
+                                c[i] = v
+                                colors = c
+                            }
+                        ),
+                        options: LabPacketBuilder.paletteColors.map { ($0.id, $0.label) }
+                    )
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    private func slotLabel(_ i: Int) -> String {
+        switch type {
+        case .dual: return i == 0 ? "INNER" : "OUTER"
+        case .crossfade: return i == 0 ? "FROM" : "TO"
+        default: return type.colorSlots == 1 ? "COLOR" : "\(i + 1)"
+        }
+    }
+
+    private func framingToggle(_ title: String, detail: String, isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Toggle("", isOn: isOn).labelsHidden().tint(MMTheme.cyan)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title.uppercased()).font(MMTheme.techLabel())
+                Text(detail).font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+            }
+        }
     }
 
     @ViewBuilder
@@ -136,37 +229,8 @@ struct LabBuilderPanel: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(MMTheme.techLabel(9))
-                .foregroundStyle(MMTheme.textDim)
-            content()
-        }
-    }
-
-    @ViewBuilder
-    private func labMode(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(MMTheme.techLabel())
                 .foregroundStyle(MMTheme.cyanDim)
             content()
-        }
-        .padding(6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(MMTheme.panel.opacity(0.35))
-        .overlay(RoundedRectangle(cornerRadius: 0).stroke(MMTheme.panelLine, lineWidth: 0.5))
-    }
-
-    @ViewBuilder
-    private func chipRow(_ colors: [LabPacketBuilder.PaletteColor], action: @escaping (LabPacketBuilder.PaletteColor) -> Void) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(colors) { color in
-                    Button(color.label) { action(color) }
-                        .font(MMTheme.techLabel(9))
-                        .buttonStyle(.bordered)
-                        .tint(MMTheme.cyan)
-                        .disabled(!enabled)
-                }
-            }
         }
     }
 }
