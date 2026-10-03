@@ -49,7 +49,7 @@ fun BandPreview(hex: String, modifier: Modifier = Modifier, compact: Boolean = f
         modifier
             .fillMaxWidth()
             .background(AppColors.Navy)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp, vertical = if (compact) 2.dp else 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Canvas(Modifier.fillMaxHeight().aspectRatio(1f)) {
@@ -86,17 +86,21 @@ fun BandPreview(hex: String, modifier: Modifier = Modifier, compact: Boolean = f
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = techLabel(), color = AppColors.TextDim)
             if (compact) {
-                // Scan-page strip: what it is and the bytes, nothing else.
-                Text(
-                    (MagicClassifier.classify(hex)?.label ?: model.note).uppercase(),
-                    style = techHeader(), color = if (model.kind == BandEffectModel.Kind.NONE) AppColors.TextDim else AppColors.Cyan,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
+                // Scan-page strip: exactly two text rows. Title and classification share the first.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, style = techLabel(), color = AppColors.TextDim)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        (MagicClassifier.classify(hex)?.label ?: model.note).uppercase(),
+                        style = techLabel(), color = if (model.kind == BandEffectModel.Kind.NONE) AppColors.TextDim else AppColors.Cyan,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Text(HexUtils.canonicalHex(hex), style = techLabel(), color = AppColors.CyanDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 return@Column
             }
+            Text(title, style = techLabel(), color = AppColors.TextDim)
             Text(
                 model.kind.name.replace('_', ' ').let { if (it == "NONE") "NO EFFECT" else it },
                 style = techHeader(), color = if (model.kind == BandEffectModel.Kind.NONE) AppColors.TextDim else AppColors.Cyan,
@@ -227,10 +231,10 @@ private fun ledColor(m: BandEffectModel, z: Int, t: Float): Color? {
 fun LastHeardStrip(hex: String, heard: Int, modifier: Modifier = Modifier) {
     if (hex.isBlank()) {
         Row(
-            modifier.fillMaxWidth().background(AppColors.Navy).padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier.fillMaxWidth().height(40.dp).background(AppColors.Navy).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) { Text("LAST HEARD · NOTHING YET", style = techLabel(), color = AppColors.TextDim) }
         return
     }
-    BandPreview(hex, modifier.height(64.dp), compact = true, title = "LAST HEARD · #$heard")
+    BandPreview(hex, modifier.height(40.dp), compact = true, title = "LAST HEARD · #$heard")
 }

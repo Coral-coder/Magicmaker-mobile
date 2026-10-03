@@ -46,20 +46,23 @@ struct BandPreviewView: View {
                 }
                 .aspectRatio(1, contentMode: .fit)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+                VStack(alignment: .leading, spacing: 1) {
                     if compact {
-                        // Scan-page strip: what it is and the bytes, nothing else.
-                        Text((MagicClassifier.classify(hex)?.label ?? model.note).uppercased())
-                            .font(MMTheme.techHeader())
-                            .foregroundStyle(model.kind == .none ? MMTheme.textDim : MMTheme.cyan)
-                            .lineLimit(1)
+                        // Scan-page strip: exactly two text rows. Title and classification share the first.
+                        HStack(spacing: 8) {
+                            Text(title).font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+                            Text((MagicClassifier.classify(hex)?.label ?? model.note).uppercased())
+                                .font(MMTheme.techLabel(9))
+                                .foregroundStyle(model.kind == .none ? MMTheme.textDim : MMTheme.cyan)
+                                .lineLimit(1)
+                        }
                         Text(HexUtils.canonicalHex(hex))
                             .font(MMTheme.techLabel(9))
                             .foregroundStyle(MMTheme.cyanDim)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     } else {
+                    Text(title).font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
                     Text(model.kind == .none ? "NO EFFECT" : kindName(model.kind))
                         .font(MMTheme.techHeader())
                         .foregroundStyle(model.kind == .none ? MMTheme.textDim : MMTheme.cyan)
@@ -83,7 +86,7 @@ struct BandPreviewView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.vertical, compact ? 2 : 6)
         }
         .background(MMTheme.navy)
     }
@@ -202,13 +205,14 @@ struct LastHeardStrip: View {
     var body: some View {
         if let last {
             BandPreviewView(hex: last.hex, compact: true, title: "LAST HEARD · \(last.count) LIVE")
-                .frame(height: 64)
+                .frame(height: 40)
         } else {
             HStack {
                 Text("LAST HEARD · NOTHING YET").font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
                 Spacer()
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .frame(height: 40)
+            .padding(.horizontal, 12)
             .background(MMTheme.navy)
         }
     }
