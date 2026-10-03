@@ -37,7 +37,7 @@ targets:
         BGTaskSchedulerPermittedIdentifiers: []
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.lightwave.mmios
+        PRODUCT_BUNDLE_IDENTIFIER: Com.lightwave.mmios
         # Set by the TestFlight workflow after each upload (.github/workflows/ios-testflight.yml).
         MARKETING_VERSION: "1.3.0"
         CURRENT_PROJECT_VERSION: "1"
