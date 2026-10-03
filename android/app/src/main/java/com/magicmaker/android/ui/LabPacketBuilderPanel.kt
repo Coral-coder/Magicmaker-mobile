@@ -44,8 +44,14 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
     var presetMsg by remember { mutableStateOf<String?>(null) }
     val scroll = rememberScrollState()
     val myPresets = remember(storeRev) { app.store.customPresets }
+    // What the preview animates: the builder's live packet, or the hex field when it is edited
+    // directly. Starts from the saved Lab hex so the band lights up the moment the tab opens.
+    var previewHex by remember(labLoadTick) { mutableStateOf(app.store.getLabHex()) }
 
     Column(Modifier.fillMaxSize()) {
+        // Pinned: always visible, never scrolls with the Lab, follows every packet change.
+        BandPreview(previewHex, Modifier.fillMaxWidth().fillMaxHeight(1f / 6f))
+        HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
         Column(
             Modifier
                 .weight(1f)
@@ -63,8 +69,10 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
         LabPacketBuilderPanel(
             loadedHex = hex,
             loadTick = labLoadTick,
+            onHexChanged = { previewHex = it },
             onHexBuilt = { built ->
                 hex = built
+                previewHex = built
                 app.store.saveLabHex(built)
             },
             onTransmit = { built ->
@@ -78,7 +86,7 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
 
         OutlinedTextField(
             hex,
-            { hex = it.uppercase() },
+            { hex = it.uppercase(); previewHex = hex },
             label = { Text("HEX OUTPUT", style = techLabel()) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
@@ -439,6 +447,7 @@ private fun TransmissionSettingsSection(
 private fun LabPacketBuilderPanel(
     loadedHex: String,
     loadTick: Int,
+    onHexChanged: (String) -> Unit = {},
     onHexBuilt: (String) -> Unit,
     onTransmit: (String) -> Unit,
 ) {
@@ -488,6 +497,8 @@ private fun LabPacketBuilderPanel(
             LabPacketBuilder.build(selectedType, colors, vibEnabled, vibPattern, rawHex, framing, showIndex)
         }.getOrDefault("")
     }
+    // Keep the pinned band preview on whatever the builder currently describes.
+    LaunchedEffect(currentHex) { if (currentHex.isNotBlank()) onHexChanged(currentHex) }
 
     Column(verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
         // ---- What kind of packet -------------------------------------------------------------
