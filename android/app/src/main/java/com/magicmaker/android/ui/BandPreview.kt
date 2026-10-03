@@ -86,38 +86,43 @@ fun BandPreview(hex: String, modifier: Modifier = Modifier, compact: Boolean = f
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            // No early returns inside composable lambdas: the Compose compiler can emit
+            // unbalanced composition groups for them and crash at runtime, not compile time.
             if (compact) {
                 // Scan-page strip: exactly two text rows. Title and classification share the first.
+                val label = remember(hex) {
+                    runCatching { MagicClassifier.classify(hex)?.label }.getOrNull() ?: model.note
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(title, style = techLabel(), color = AppColors.TextDim)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        (MagicClassifier.classify(hex)?.label ?: model.note).uppercase(),
+                        label.uppercase(),
                         style = techLabel(), color = if (model.kind == BandEffectModel.Kind.NONE) AppColors.TextDim else AppColors.Cyan,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Text(HexUtils.canonicalHex(hex), style = techLabel(), color = AppColors.CyanDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                return@Column
-            }
-            Text(title, style = techLabel(), color = AppColors.TextDim)
-            Text(
-                model.kind.name.replace('_', ' ').let { if (it == "NONE") "NO EFFECT" else it },
-                style = techHeader(), color = if (model.kind == BandEffectModel.Kind.NONE) AppColors.TextDim else AppColors.Cyan,
-            )
-            Text(
-                model.note.uppercase() + if (model.approximate) " · APPROX." else "",
-                style = techLabel(), color = if (model.approximate) AppColors.Amber else AppColors.TextDim,
-                maxLines = 2, overflow = TextOverflow.Ellipsis,
-            )
-            if (model.durationMs > 0 || model.alwaysOn) {
-                val dur = if (model.alwaysOn) "ALWAYS ON" else "~${model.durationMs / 1000}S" + if (model.fadeMs > 0) " · ${model.fadeMs / 1000}S FADE" else ""
-                Text(dur, style = techLabel(), color = AppColors.TextDim)
-            }
-            if (model.buzz > 0) {
-                val name = LabPacketBuilder.vibrationPatterns.firstOrNull { it.id == model.buzz }?.label ?: "#${model.buzz}"
-                val on = ((t * 6f) % 1f) < 0.5f
-                Text("BUZZ · ${name.uppercase()}", style = techLabel(), color = if (on) AppColors.Cyan else AppColors.CyanDim)
+            } else {
+                Text(title, style = techLabel(), color = AppColors.TextDim)
+                Text(
+                    model.kind.name.replace('_', ' ').let { if (it == "NONE") "NO EFFECT" else it },
+                    style = techHeader(), color = if (model.kind == BandEffectModel.Kind.NONE) AppColors.TextDim else AppColors.Cyan,
+                )
+                Text(
+                    model.note.uppercase() + if (model.approximate) " · APPROX." else "",
+                    style = techLabel(), color = if (model.approximate) AppColors.Amber else AppColors.TextDim,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+                if (model.durationMs > 0 || model.alwaysOn) {
+                    val dur = if (model.alwaysOn) "ALWAYS ON" else "~${model.durationMs / 1000}S" + if (model.fadeMs > 0) " · ${model.fadeMs / 1000}S FADE" else ""
+                    Text(dur, style = techLabel(), color = AppColors.TextDim)
+                }
+                if (model.buzz > 0) {
+                    val name = LabPacketBuilder.vibrationPatterns.firstOrNull { it.id == model.buzz }?.label ?: "#${model.buzz}"
+                    val on = ((t * 6f) % 1f) < 0.5f
+                    Text("BUZZ · ${name.uppercase()}", style = techLabel(), color = if (on) AppColors.Cyan else AppColors.CyanDim)
+                }
             }
         }
     }
@@ -234,7 +239,7 @@ fun LastHeardStrip(hex: String, heard: Int, modifier: Modifier = Modifier) {
             modifier.fillMaxWidth().height(40.dp).background(AppColors.Navy).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) { Text("LAST HEARD · NOTHING YET", style = techLabel(), color = AppColors.TextDim) }
-        return
+    } else {
+        BandPreview(hex, modifier.height(40.dp), compact = true, title = "LAST HEARD · #$heard")
     }
-    BandPreview(hex, modifier.height(40.dp), compact = true, title = "LAST HEARD · #$heard")
 }
