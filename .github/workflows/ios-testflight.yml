@@ -1,6 +1,6 @@
 # Archives the iOS app (ios/) and (optionally) uploads it to TestFlight, driven by markers in
-# the commit message of a push to main (the same scheme as the ePTT, ShotTrax and BingoBuddy
-# repos):
+# the subject (first line) of the commit message of a push to main (the same scheme as the
+# ePTT, ShotTrax and BingoBuddy repos):
 #
 #   no marker   nothing happens
 #   *b          archive and sign only, as a check; nothing is uploaded
@@ -56,7 +56,9 @@ jobs:
       - uses: actions/checkout@v4
       - id: plan
         run: |
-          message=$(git log -1 --format=%B)
+          # Subject line only: a body that merely mentions the markers (a squash-merged PR
+          # description, say) must not start an upload.
+          message=$(git log -1 --format=%s)
           build=false; upload=false
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             build=true; upload=true
