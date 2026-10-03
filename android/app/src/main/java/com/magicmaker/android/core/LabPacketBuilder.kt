@@ -43,7 +43,7 @@ object LabPacketBuilder {
         "Alt Strobe" to "8301CC03000100E100E90F00110EF17AEC5C012814281448ABB0",
         "Slow Sparkle" to "8301E100E90F00520EF17AEC5C021902190248ABB0",
         "Fast Sparkle" to "8301E100E90F00520EF17AEC5C021B151B1548ABB0",
-        "Pirate Cannon" to "8301E100E9110003240F55515BF00F10374894D13D0508B0",
+        "Pirate Cannon" to "8301E100E9110003240F55515BF00F10374894D13D0508",
         "Show Off" to "8301CC03000100E100E90500090E1DB0",
     )
 
@@ -126,6 +126,7 @@ object LabPacketBuilder {
         RAINBOW("Rainbow / Custom", "Five LED colors — pick every one for your own animation.", 5, true),
         CIRCLE("Circle Spin", "Rotating ring animation.", 0, true),
         VIBRATE("Vibrate Only", "Haptic buzz, no color change.", 0, true),
+        SHOW("Park Show", "A real show effect captured in the park — lightning, sparkle, cannon…", 0, false),
         PING("Wake Ping", "Wakes nearby bands so they hear the next command.", 0, false),
         RAW("Raw Hex", "Type any payload by hand for total control.", 0, false),
     }
@@ -145,6 +146,27 @@ object LabPacketBuilder {
         else -> emptyList()
     }
 
+    /**
+     * How a packet is framed around its effect record. Every effect in the park capture carries a
+     * channel marker (E1 00) before the E9 record; the esp32_magicband shapes this builder was
+     * ported from do not. The wake-ping prefix (CC03 000100) is what the captured show packets
+     * put in front to make bands listen first. Both are testable in the field from the Lab.
+     */
+    data class Framing(val channelMarker: Boolean, val wakePrefix: Boolean)
+
+    /** Framing that reproduces what each type has always produced — so defaults change nothing. */
+    fun defaultFraming(type: LabPacketType): Framing = when (type) {
+        LabPacketType.CROSSFADE -> Framing(channelMarker = true, wakePrefix = false)
+        else -> Framing(channelMarker = false, wakePrefix = false)
+    }
+
+    /** Types whose framing the user can change. Shows/pings/raw are sent exactly as given. */
+    fun framingApplies(type: LabPacketType): Boolean =
+        type != LabPacketType.SHOW && type != LabPacketType.PING && type != LabPacketType.RAW
+
+    private const val CHANNEL_1 = "E100"
+    private const val WAKE_PREFIX = "CC03000100"
+
     /** Compose the hex for a fully specified builder state. */
     fun build(
         type: LabPacketType,
@@ -152,9 +174,11 @@ object LabPacketBuilder {
         vibEnabled: Boolean,
         vibPattern: Int,
         rawHex: String = "",
+        framing: Framing = defaultFraming(type),
+        showIndex: Int = 0,
     ): String {
         fun c(i: Int, fallback: Int) = colors.getOrElse(i) { fallback }
-        return when (type) {
+        val base = when (type) {
             LabPacketType.PRESET -> buildPresetById(c(0, PacketBuilder.Color.CYAN), vibEnabled, vibPattern)
             LabPacketType.DUAL -> buildDual(
                 c(0, PacketBuilder.Color.YELLOW_ORANGE), c(1, PacketBuilder.Color.BLUE), vibEnabled, vibPattern,
@@ -172,8 +196,18 @@ object LabPacketBuilder {
             )
             LabPacketType.CIRCLE -> buildCircle(vibEnabled, vibPattern)
             LabPacketType.VIBRATE -> buildVibrate(vibEnabled, vibPattern)
+            LabPacketType.SHOW -> showEffects.getOrElse(showIndex) { showEffects.first() }.second
             LabPacketType.PING -> buildPing()
             LabPacketType.RAW -> HexUtils.canonicalHex(rawHex)
+        }
+        if (!framingApplies(type)) return base
+        // Strip whatever framing the primitive builder baked in, then apply the requested one.
+        val body = base.removePrefix("8301").removePrefix(WAKE_PREFIX).removePrefix(CHANNEL_1)
+        return buildString {
+            append("8301")
+            if (framing.wakePrefix) append(WAKE_PREFIX)
+            if (framing.channelMarker) append(CHANNEL_1)
+            append(body)
         }
     }
 
@@ -228,13 +262,15 @@ object LabPacketBuilder {
         val vibEnabled: Boolean,
         val vibPattern: Int,
         val rawHex: String,
+        val framing: Framing = defaultFraming(type),
+        val showIndex: Int = 0,
     )
 
     /**
-     * Parse a received packet back into editable builder fields. Field-decodes the color command
-     * families (E905/E906/E909/E90B/E911); anything we can't safely take apart (complex animations,
-     * unknown effect families) comes back as [LabPacketType.RAW] with the hex preserved so it can
-     * still be tweaked byte-by-byte. Never throws.
+     * Parse a received packet back into editable builder fields by walking its TLV records.
+     * Field-decodes the shapes the builder can rebuild (E905/E906/E909/E90B/E911) and recognises
+     * the captured park shows; anything else comes back as [LabPacketType.RAW] with the hex
+     * preserved so it can still be tweaked byte-by-byte. Never throws.
      */
     fun decode(hexRaw: String): Decoded? {
         val h = HexUtils.canonicalHex(hexRaw)
@@ -246,35 +282,35 @@ object LabPacketBuilder {
 
         fun raw() = Decoded(LabPacketType.RAW, emptyList(), vibEnabled, vibPattern, h)
 
-        // Wake/show pings: 8301CC03… with no effect payload.
-        if (h.startsWith("8301CC03") && !h.contains("E9")) {
-            return Decoded(LabPacketType.PING, emptyList(), false, vibPattern, h)
+        showEffects.indexOfFirst { it.second.equals(h, ignoreCase = true) }.takeIf { it >= 0 }?.let { idx ->
+            return Decoded(LabPacketType.SHOW, emptyList(), false, vibPattern, h, showIndex = idx)
         }
 
-        val pos = h.indexOf("E9")
-        if (pos < 0 || pos + 4 > h.length) return raw()
+        val parsed = DisneyTlv.parse(h) ?: return raw()
+        val first = parsed.records.firstOrNull() ?: return raw()
+        val effect = parsed.effect
 
-        // Color slots live at funcCode + 3 header bytes (pos+10), masked to the low 5 bits.
+        if (effect == null) {
+            return if (first.type == DisneyTlv.TYPE_PING) Decoded(LabPacketType.PING, emptyList(), false, vibPattern, h) else raw()
+        }
+
+        val framing = Framing(
+            channelMarker = parsed.channel != null,
+            wakePrefix = first.type == DisneyTlv.TYPE_PING,
+        )
+
+        // Palette colours sit at value[3..] of the effect record, low 5 bits.
         fun colorsAt(n: Int): List<Int>? {
-            val out = ArrayList<Int>(n)
-            for (slot in 0 until n) {
-                val s = pos + 10 + slot * 2
-                if (s + 2 > h.length) return null
-                out += (h.substring(s, s + 2).toIntOrNull(16) ?: return null) and 0x1F
-            }
-            return out
+            if (effect.length < 3 + n) return null
+            return (0 until n).map { (effect.byte(3 + it) ?: return null) and 0x1F }
         }
 
-        return when (h.substring(pos, pos + 4)) {
-            "E905" -> colorsAt(1)?.let { Decoded(LabPacketType.PRESET, it, vibEnabled, vibPattern, h) } ?: raw()
-            "E906" -> colorsAt(2)?.let { Decoded(LabPacketType.DUAL, it, vibEnabled, vibPattern, h) } ?: raw()
-            "E909" -> colorsAt(5)?.let { Decoded(LabPacketType.RAINBOW, it, vibEnabled, vibPattern, h) } ?: raw()
-            "E90B" -> Decoded(LabPacketType.CIRCLE, emptyList(), vibEnabled, vibPattern, h)
-            "E911" -> if (h.contains("55515BF00F10374894D13D0508B0")) {
-                raw() // Pirate Cannon show packet — not a plain crossfade.
-            } else {
-                colorsAt(2)?.let { Decoded(LabPacketType.CROSSFADE, it, vibEnabled, vibPattern, h) } ?: raw()
-            }
+        return when (effect.length) {
+            0x05 -> colorsAt(1)?.let { Decoded(LabPacketType.PRESET, it, vibEnabled, vibPattern, h, framing) } ?: raw()
+            0x06 -> colorsAt(2)?.let { Decoded(LabPacketType.DUAL, it, vibEnabled, vibPattern, h, framing) } ?: raw()
+            0x09 -> colorsAt(5)?.let { Decoded(LabPacketType.RAINBOW, it, vibEnabled, vibPattern, h, framing) } ?: raw()
+            0x0B -> Decoded(LabPacketType.CIRCLE, emptyList(), vibEnabled, vibPattern, h, framing)
+            0x11 -> colorsAt(2)?.let { Decoded(LabPacketType.CROSSFADE, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             else -> raw()
         }
     }

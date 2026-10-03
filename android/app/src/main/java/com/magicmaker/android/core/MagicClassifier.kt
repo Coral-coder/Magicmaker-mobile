@@ -39,28 +39,33 @@ object MagicClassifier {
             return ClassifiedPacket(normalized, entry.key, MagicCategory.SHOW, "show_block", "", "SHOW:$normalized")
         }
 
-        // Anchored to the 8301CC03 prefix (not a loose substring) so band telemetry that
-        // merely contains "CC03" in its rolling payload isn't mislabeled as a ping. The two
-        // bytes after CC03 distinguish the ping types seen in the parks.
-        if (normalized.startsWith("8301CC03") && !normalized.contains("E9")) {
-            val param = if (normalized.length >= 14) normalized.substring(8, 14) else normalized.substring(8)
-            val pingLabel = when (param) {
-                "000000" -> "Signal Beacon"
-                "000100" -> "Wake Ping"
-                "234100" -> "Show Ping (2341)"
-                "203000" -> "Show Ping (2030)"
-                else -> "Interaction Ping"
-            }
-            return ClassifiedPacket(normalized, pingLabel, MagicCategory.SHOW, "ping", "", "PING:$normalized")
-        }
+        // Walk the TLV chain instead of pattern-matching the hex. A ping is a CC record with no
+        // effect record after it; an effect is an E9 record wherever it sits in the chain (with
+        // or without a channel marker, with or without a wake-ping prefix); everything else is
+        // judged by its leading record type.
+        val parsed = DisneyTlv.parse(normalized) ?: return null
+        val first = parsed.records.firstOrNull() ?: return null
+        val effect = parsed.effect
 
-        // Real effect/show commands carry an E?00E9xx prelude (channel byte, 00, then the E9
-        // function). Requiring that structure stops band telemetry that merely contains a stray
-        // "E9" from being misread as a color/effect. Non-E9 Ex families fall through as before.
-        val prelude = Regex("E[0-9A-F]00E9").find(normalized)
-            ?: return classifyEffectFamily(normalized)
-        val pos = prelude.range.last - 1
-        val funcCode = normalized.substring(pos, minOf(pos + 4, normalized.length))
+        if (effect == null && first.type == DisneyTlv.TYPE_PING) {
+            return ClassifiedPacket(
+                normalized, DisneyTlv.pingName(first.valueHex().take(6)), MagicCategory.SHOW, "ping", "", "PING:$normalized",
+            )
+        }
+        if (effect == null) return classifyEffectFamily(normalized, parsed, first)
+
+        return classifyEffect(normalized, effect)
+    }
+
+    /** E9 record → the colour / animation / show-control classification. */
+    private fun classifyEffect(normalized: String, e: DisneyTlv.Record): ClassifiedPacket? {
+        // "E9" + length byte — the four hex chars the rest of the app has always keyed on.
+        val funcCode = e.headHex()
+        val body = e.valueHex()
+        // The old substring code took its signature windows from the "E9" onward; keep the
+        // same windows so existing simKeys (and the automation rules built on them) still match.
+        val fromHead = funcCode + body
+        fun palette(i: Int): Int = (e.byte(i) ?: 0) and 0x1F
 
         val label: String
         val typeInfo: String
@@ -69,7 +74,7 @@ object MagicClassifier {
 
         when (funcCode) {
             "E905" -> {
-                val colorIdx = extractE905Color(normalized, pos)
+                val colorIdx = palette(3)
                 val name = colorPalette[colorIdx] ?: "Unknown"
                 label = if (name == "Off") "Single Color: Off" else "Single Color: $name"
                 typeInfo = "single"
@@ -77,8 +82,8 @@ object MagicClassifier {
                 simKey = "C1:${"%02X".format(colorIdx)}"
             }
             "E906" -> {
-                val c1 = if (normalized.length >= pos + 12) normalized.substring(pos + 10, pos + 12).toInt(16) and 0x1F else 0
-                val c2 = if (normalized.length >= pos + 14) normalized.substring(pos + 12, pos + 14).toInt(16) and 0x1F else 0
+                val c1 = palette(3)
+                val c2 = palette(4)
                 val n1 = colorPalette[c1] ?: "?"
                 val n2 = colorPalette[c2] ?: "?"
                 label = "Dual Color: $n2/$n1"
@@ -88,24 +93,24 @@ object MagicClassifier {
             }
             "E90C" -> {
                 label = when {
-                    normalized.contains("5D465BF00532374895", ignoreCase = true) -> "Animation: Lightning Pulse"
-                    normalized.contains("B1B9B5B1A2307B7DB0", ignoreCase = true) -> "Animation: 5-Color Cycle"
-                    normalized.contains("5D465BF005323748B0", ignoreCase = true) -> "Animation: Taste the Rainbow"
+                    body.contains("5D465BF00532374895") -> "Animation: Lightning Pulse"
+                    body.contains("B1B9B5B1A2307B7DB0") -> "Animation: 5-Color Cycle"
+                    body.contains("5D465BF005323748B0") -> "Animation: Taste the Rainbow"
                     else -> "Animation: Complex (E90C)"
                 }
                 typeInfo = "e90c"
                 colors = ""
                 simKey = when {
-                    normalized.contains("5D465BF00532374895", ignoreCase = true) -> "A:LIGHTNING"
-                    normalized.contains("5D465BF005323748B0", ignoreCase = true) -> "A:RAINBOW"
-                    else -> "A:E90C:${normalized.substring(pos, minOf(pos + 20, normalized.length))}"
+                    body.contains("5D465BF00532374895") -> "A:LIGHTNING"
+                    body.contains("5D465BF005323748B0") -> "A:RAINBOW"
+                    else -> "A:E90C:${fromHead.take(20)}"
                 }
             }
             "E90F" -> {
                 label = "Animation: Alternating Strobe"
                 typeInfo = "e90f"
                 colors = ""
-                simKey = "A:E90F:${normalized.substring(pos, minOf(pos + 16, normalized.length))}"
+                simKey = "A:E90F:${fromHead.take(16)}"
             }
             "E90B" -> {
                 label = "Effect: Circle"
@@ -116,32 +121,29 @@ object MagicClassifier {
             "E909" -> {
                 label = "Effect: 5-LED Rainbow"
                 typeInfo = "e909"
-                colors = ""
+                colors = if (e.length >= 8) (3..7).joinToString(" / ") { StarlightColors.nameFor(palette(it)) } else ""
                 simKey = "A:E909"
             }
             "E911" -> {
-                label = if (normalized.contains("55515BF00F10374894D13D0508B0", ignoreCase = true)) {
-                    "Show: Pirate Cannon"
-                } else {
-                    "Animation: Palette Cross-Fade"
-                }
+                // The captured Pirate Cannon packet is exactly 17 body bytes and ends ...0508.
+                // The old signature had a trailing B0 that no real packet carries.
+                val pirate = body.contains("55515BF00F10374894D13D0508")
+                label = if (pirate) "Show: Pirate Cannon" else "Animation: Palette Cross-Fade"
                 typeInfo = "e911"
-                colors = extractFadeColor(normalized)
-                simKey = if (normalized.contains("55515BF00F10374894D13D0508B0", ignoreCase = true)) {
-                    "A:PIRATE_CANNON"
-                } else {
-                    "A:E911:${normalized.takeLast(4)}"
-                }
+                // Fade from/to live at value[3]/value[4] — not "the byte before a trailing B0",
+                // which two of the nine real E911 packets do not even have.
+                colors = if (pirate) "" else "${StarlightColors.nameFor(palette(3))} / ${StarlightColors.nameFor(palette(4))}"
+                simKey = if (pirate) "A:PIRATE_CANNON" else "A:E911:${normalized.takeLast(4)}"
             }
-            "E90E", "E909", "E908" -> {
+            "E90E", "E908" -> {
                 label = "Show Control: $funcCode"
                 typeInfo = funcCode.lowercase()
                 colors = ""
                 simKey = "S:$funcCode"
             }
             else -> {
-                // Real E?00E9 structure but an E9 subtype we don't name yet (e.g. E914) — keep it
-                // as show control instead of dropping/genericizing; this is what we want to catch.
+                // A real E9 record whose body length we have no name for yet (E914 is one). It is
+                // show control by construction — keep it, never drop it to "unknown".
                 label = "Show Control: $funcCode"
                 typeInfo = funcCode.lowercase()
                 colors = ""
@@ -154,21 +156,20 @@ object MagicClassifier {
     }
 
     /**
-     * Disney device command families use an 0xEx type byte (E1/E4/E5/EA/EF…) — real
-     * effects/interactions even when we don't decode the exact action yet. Classify them by
-     * type signature so they're named + saved as Animation instead of dropped as raw. Rolling
-     * band telemetry (type C0 / 0F) is NOT 0xEx, so it stays out of here.
+     * No effect record: judge the packet by its leading record. Disney infrastructure uses
+     * 0xEx record types (E4/E5/EA/EF…) for beacons and cues — real transmissions even though we
+     * do not decode the action. Band telemetry (C0 / 0F) is not 0xEx and stays out of here.
      */
-    private fun classifyEffectFamily(normalized: String): ClassifiedPacket? {
-        if (normalized.length < 8 || normalized[4] != 'E') return null
-        val type = normalized.substring(4, 8)
+    private fun classifyEffectFamily(normalized: String, parsed: DisneyTlv.Parsed, first: DisneyTlv.Record): ClassifiedPacket? {
+        if (first.type !in 0xE0..0xEF) return null
+        val type = first.headHex()
 
-        // EMCOT color cue: the palette-index byte after an "EF0501A6 <flag>" sub-command.
+        // EMCOT colour cue: an EF record with body 01 A6 <flag> <palette index>.
         fun cueColor(): String? {
-            val m = normalized.indexOf("EF0501A6")
-            if (m < 0 || m + 12 > normalized.length) return null
-            val v = normalized.substring(m + 10, m + 12).toIntOrNull(16) ?: return null
-            return StarlightColors.nameFor(v)
+            val cue = parsed.records.firstOrNull {
+                it.type == 0xEF && it.declaredLength == 5 && it.byte(0) == 0x01 && it.byte(1) == 0xA6
+            } ?: return null
+            return StarlightColors.nameFor(cue.byte(3) ?: return null)
         }
 
         return when {
@@ -192,7 +193,7 @@ object MagicClassifier {
             type == "E501" -> ClassifiedPacket(
                 normalized, "Sync Cue (E501)", MagicCategory.ANIMATION, "fx_e501", "", "FX:$normalized",
             )
-            type.startsWith("EA") -> ClassifiedPacket(
+            first.type == 0xEA -> ClassifiedPacket(
                 normalized, "Animation (style ${type.substring(2)})", MagicCategory.ANIMATION, "fx_ea", "", "FX:$normalized",
             )
             else -> ClassifiedPacket(
@@ -271,21 +272,7 @@ object MagicClassifier {
         )
     }
 
-    private fun extractE905Color(hex: String, pos: Int): Int {
-        if (hex.endsWith("B0") && hex.length >= 4) {
-            return hex.substring(hex.length - 4, hex.length - 2).toInt(16) and 0x1F
-        }
-        if (hex.length >= pos + 12) {
-            return hex.substring(pos + 10, pos + 12).toInt(16) and 0x1F
-        }
-        return 0
-    }
 
-    private fun extractFadeColor(hex: String): String {
-        if (!hex.endsWith("B0") || hex.length < 4) return ""
-        val byte = hex.substring(hex.length - 4, hex.length - 2).toInt(16) and 0x1F
-        return colorPalette[byte] ?: ""
-    }
 
     private fun categorize(hex: String, label: String, typeInfo: String): MagicCategory {
         if (typeInfo in listOf("starlight", "single", "dual")) return MagicCategory.COLOR
@@ -334,11 +321,9 @@ object MagicClassifier {
         return h.startsWith("8301CC03")
     }
 
-    private val effectFamilyPrelude = Regex("E[0-9A-F]00E9")
-
     /**
      * Strict "is this a real, band/wand-controllable show-control packet" test: interaction pings,
-     * E?00E9 effect commands, Starlight/New Wand, and known show blocks. Deliberately EXCLUDES the
+     * E9 effect records, Starlight/New Wand, and known show blocks. Deliberately EXCLUDES the
      * classifyEffectFamily beacon families (EA/EF/E4/E5…) — those are stationary park infrastructure
      * beacons that never animate a band, so treating them as show control just clutters the library.
      */
@@ -346,7 +331,8 @@ object MagicClassifier {
         val h = HexUtils.canonicalHex(hexRaw)
         if (h.startsWith("8301CC03")) return true
         if (h.contains("CF9B") || h.contains("CF0B")) return true
-        if (effectFamilyPrelude.containsMatchIn(h)) return true
+        // An E9 record anywhere in the chain — with or without a channel marker in front of it.
+        if (DisneyTlv.parse(h)?.has(DisneyTlv.TYPE_EFFECT) == true) return true
         return showHexes.contains(h)
     }
 

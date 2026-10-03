@@ -48,7 +48,7 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
         ) {
         Text("PACKET BUILDER", style = techHeader())
         Text(
-            "esp32_magicband payload composer — builds 8301… hex for TX",
+            "Pick what the band should do, set the colors, and the card below tells you exactly what you're sending.",
             style = techLabel(),
             color = AppColors.TextDim,
         )
@@ -435,11 +435,16 @@ private fun LabPacketBuilderPanel(
     onHexBuilt: (String) -> Unit,
     onTransmit: (String) -> Unit,
 ) {
-    var selectedType by remember { mutableStateOf<LabPacketBuilder.LabPacketType?>(null) }
-    var colors by remember { mutableStateOf(listOf<Int>()) }
-    var vibEnabled by remember { mutableStateOf(true) }
+    // Everything on one screen, no steps to click through. The type chips are always visible,
+    // the fields for the chosen type sit under them, and the summary + anatomy cards keep
+    // saying — in words — what the current settings will put on the air.
+    var selectedType by remember { mutableStateOf(LabPacketBuilder.LabPacketType.PRESET) }
+    var colors by remember { mutableStateOf(LabPacketBuilder.defaultColors(LabPacketBuilder.LabPacketType.PRESET)) }
+    var vibEnabled by remember { mutableStateOf(false) }
     var vibPattern by remember { mutableIntStateOf(PacketBuilder.Vibration.TRIPLE) }
     var rawHex by remember { mutableStateOf("") }
+    var framing by remember { mutableStateOf(LabPacketBuilder.defaultFraming(LabPacketBuilder.LabPacketType.PRESET)) }
+    var showIndex by remember { mutableIntStateOf(0) }
     var loadMsg by remember { mutableStateOf<String?>(null) }
 
     fun applyDecoded(d: LabPacketBuilder.Decoded) {
@@ -448,9 +453,11 @@ private fun LabPacketBuilderPanel(
         vibEnabled = d.vibEnabled
         vibPattern = d.vibPattern
         rawHex = d.rawHex
+        framing = d.framing
+        showIndex = d.showIndex
     }
 
-    // A received packet was just loaded into the Lab — decode it into the fields for editing.
+    // A received packet was just sent to the Lab — decode it into the fields for editing.
     LaunchedEffect(loadTick) {
         if (loadTick > 0) {
             runCatching { LabPacketBuilder.decode(loadedHex) }.getOrNull()?.let {
@@ -461,93 +468,78 @@ private fun LabPacketBuilderPanel(
     }
 
     fun selectType(type: LabPacketBuilder.LabPacketType) {
+        if (type == selectedType) return
         selectedType = type
         colors = LabPacketBuilder.defaultColors(type)
-        if (type == LabPacketBuilder.LabPacketType.RAW && rawHex.isBlank()) {
-            rawHex = loadedHex
-        }
+        framing = LabPacketBuilder.defaultFraming(type)
+        if (type == LabPacketBuilder.LabPacketType.RAW && rawHex.isBlank()) rawHex = loadedHex
         loadMsg = null
     }
 
-    fun currentHex(): String =
-        LabPacketBuilder.build(selectedType!!, colors, vibEnabled, vibPattern, rawHex)
+    val currentHex = remember(selectedType, colors, vibEnabled, vibPattern, rawHex, framing, showIndex) {
+        runCatching {
+            LabPacketBuilder.build(selectedType, colors, vibEnabled, vibPattern, rawHex, framing, showIndex)
+        }.getOrDefault("")
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
-        val type = selectedType
-        if (type == null) {
-            // ---- Step 1: choose a packet type ------------------------------------------------
-            Text("STEP 1 · CHOOSE A PACKET TYPE", style = techLabel(), color = AppColors.CyanDim)
-            FlowRowTypeGrid(onSelect = { selectType(it) })
-            Spacer(Modifier.height(2.dp))
-            OutlinedButton(
-                onClick = {
-                    val decoded = LabPacketBuilder.decode(loadedHex)
-                    if (decoded != null) {
-                        applyDecoded(decoded)
-                        loadMsg = "Loaded ${decoded.type.label} from current hex"
-                    } else {
-                        loadMsg = "Nothing to load — hex field is empty"
-                    }
-                },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                modifier = Modifier.height(28.dp),
-            ) { Text("LOAD CURRENT HEX INTO BUILDER", style = techLabel(), color = AppColors.Cyan) }
-            loadMsg?.let { Text(it, style = techLabel(), color = AppColors.TextDim) }
-        } else {
-            // ---- Step 2: configure the chosen type ------------------------------------------
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
-            ) {
-                OutlinedButton(
-                    onClick = { selectedType = null; loadMsg = null },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    modifier = Modifier.height(28.dp),
-                ) { Text("‹ TYPE", style = techLabel()) }
-                Column(Modifier.weight(1f)) {
-                    Text(type.label.uppercase(), style = techHeader())
-                    Text(type.blurb, style = techLabel(), color = AppColors.TextDim, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
+        // ---- What kind of packet -------------------------------------------------------------
+        Text("WHAT DO YOU WANT THE BAND TO DO?", style = techLabel(), color = AppColors.CyanDim)
+        TypeChips(selected = selectedType, onSelect = { selectType(it) })
+        Text(selectedType.blurb, style = techLabel(), color = AppColors.TextDim)
+        loadMsg?.let { Text(it, style = techLabel(), color = AppColors.Cyan) }
+
+        // ---- The sentence version of the packet ---------------------------------------------
+        PacketSummaryCard(currentHex)
+
+        // ---- Fields for this type ------------------------------------------------------------
+        when (selectedType) {
+            LabPacketBuilder.LabPacketType.RAW -> {
+                OutlinedTextField(
+                    rawHex,
+                    { rawHex = it.uppercase() },
+                    label = { Text("RAW HEX (8301…)", style = techLabel()) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = techLabel().copy(color = AppColors.CyanDim),
+                )
             }
-
-            loadMsg?.let { Text(it, style = techLabel(), color = AppColors.Cyan) }
-
-            when (type) {
-                LabPacketBuilder.LabPacketType.RAW -> {
-                    OutlinedTextField(
-                        rawHex,
-                        { rawHex = it.uppercase() },
-                        label = { Text("RAW HEX", style = techLabel()) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        textStyle = techLabel().copy(color = AppColors.CyanDim),
-                    )
-                }
-                LabPacketBuilder.LabPacketType.PING -> {
+            LabPacketBuilder.LabPacketType.PING -> {
+                Text(
+                    "Nothing to set. Send this just before a command if a band isn't reacting.",
+                    style = techLabel(), color = AppColors.TextDim,
+                )
+            }
+            LabPacketBuilder.LabPacketType.SHOW -> {
+                PaletteDropdown(
+                    label = "SHOW",
+                    selectedId = showIndex,
+                    options = LabPacketBuilder.showEffects.mapIndexed { i, (name, _) -> i to name },
+                    onSelect = { showIndex = it },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Recorded in the park and replayed byte-for-byte. Framing is part of the recording.",
+                    style = techLabel(), color = AppColors.TextDim,
+                )
+            }
+            else -> {
+                if (selectedType.colorSlots > 0) {
                     Text(
-                        "No options — this wakes nearby bands. Send it just before a command if a band isn't reacting.",
-                        style = techLabel(),
-                        color = AppColors.TextDim,
+                        if (selectedType.colorSlots == 1) "COLOR" else "COLORS",
+                        style = techLabel(), color = AppColors.CyanDim,
                     )
+                    ColorSlots(selectedType, colors, onChange = { colors = it })
                 }
-                else -> {
-                    if (type.colorSlots > 0) {
-                        Text(
-                            if (type.colorSlots == 1) "STEP 2 · PICK A COLOR" else "STEP 2 · PICK ${type.colorSlots} COLORS",
-                            style = techLabel(),
-                            color = AppColors.CyanDim,
-                        )
-                        ColorSlots(type, colors, onChange = { colors = it })
-                    }
-                    if (type.supportsVib) {
-                        Text("STEP 3 · VIBRATION", style = techLabel(), color = AppColors.CyanDim)
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Switch(vibEnabled, { vibEnabled = it }, modifier = Modifier.height(24.dp))
+                if (selectedType.supportsVib) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("BUZZ", style = techLabel(), color = AppColors.CyanDim)
+                        Switch(vibEnabled, { vibEnabled = it }, modifier = Modifier.height(24.dp))
+                        if (vibEnabled) {
                             PaletteDropdown(
                                 label = "PATTERN",
                                 selectedId = vibPattern,
@@ -559,37 +551,94 @@ private fun LabPacketBuilderPanel(
                     }
                 }
             }
+        }
 
-            // ---- Build / send actions ---------------------------------------------------------
-            Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
-                Button(
-                    onClick = { onTransmit(currentHex()) },
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp),
-                ) { Text("SEND NOW", style = techLabel()) }
-                OutlinedButton(
-                    onClick = { onHexBuilt(currentHex()) },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp),
-                ) { Text("BUILD → HEX", style = techLabel(), color = AppColors.Cyan) }
-            }
+        // ---- Framing: the bytes around the effect --------------------------------------------
+        if (LabPacketBuilder.framingApplies(selectedType)) {
+            Text("FRAMING", style = techLabel(), color = AppColors.CyanDim)
+            FramingToggle(
+                title = "Channel marker (E1 00)",
+                detail = "Every effect recorded in the park carries this before the effect record. The esp32 presets never did. Try both — one may work where the other doesn't.",
+                checked = framing.channelMarker,
+                onChange = { framing = framing.copy(channelMarker = it) },
+            )
+            FramingToggle(
+                title = "Wake ping first (CC03 000100)",
+                detail = "Tells nearby bands to listen before the effect arrives. The captured show packets all start this way.",
+                checked = framing.wakePrefix,
+                onChange = { framing = framing.copy(wakePrefix = it) },
+            )
+        }
+
+        // ---- The bytes, explained ------------------------------------------------------------
+        if (currentHex.isNotBlank()) PacketAnatomy(currentHex)
+
+        // ---- Actions -------------------------------------------------------------------------
+        Row(horizontalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
+            Button(
+                onClick = { if (currentHex.isNotBlank()) onTransmit(currentHex) },
+                enabled = currentHex.isNotBlank() && HexUtils.legacyAdvertiseRejectReason(currentHex) == null,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                modifier = Modifier.height(32.dp),
+            ) { Text("SEND NOW", style = techLabel()) }
+            OutlinedButton(
+                onClick = { if (currentHex.isNotBlank()) onHexBuilt(currentHex) },
+                enabled = currentHex.isNotBlank(),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(32.dp),
+            ) { Text("USE IN HEX FIELD", style = techLabel(), color = AppColors.Cyan) }
+            OutlinedButton(
+                onClick = {
+                    val decoded = LabPacketBuilder.decode(loadedHex)
+                    if (decoded != null) { applyDecoded(decoded); loadMsg = "Loaded ${decoded.type.label} from hex field" }
+                    else loadMsg = "Hex field is empty"
+                },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(32.dp),
+            ) { Text("LOAD HEX", style = techLabel(), color = AppColors.CyanDim) }
         }
     }
 }
 
-/** The packet-type chooser — one chip per [LabPacketBuilder.LabPacketType]. */
+/** Always-visible packet-type chips; the selected one is filled so you can see what you're on. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FlowRowTypeGrid(onSelect: (LabPacketBuilder.LabPacketType) -> Unit) {
+private fun TypeChips(
+    selected: LabPacketBuilder.LabPacketType,
+    onSelect: (LabPacketBuilder.LabPacketType) -> Unit,
+) {
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         LabPacketBuilder.LabPacketType.entries.forEach { type ->
-            OutlinedButton(
-                onClick = { onSelect(type) },
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-            ) { Text(type.label.uppercase(), style = techLabel(), color = AppColors.Cyan) }
+            val isSel = type == selected
+            if (isSel) {
+                Button(
+                    onClick = { onSelect(type) },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) { Text(type.label.uppercase(), style = techLabel()) }
+            } else {
+                OutlinedButton(
+                    onClick = { onSelect(type) },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) { Text(type.label.uppercase(), style = techLabel(), color = AppColors.Cyan) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FramingToggle(title: String, detail: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(AppDimens.gap),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Switch(checked, onChange, modifier = Modifier.height(24.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title.uppercase(), style = techLabel())
+            Text(detail, style = techLabel(), color = AppColors.TextDim)
         }
     }
 }

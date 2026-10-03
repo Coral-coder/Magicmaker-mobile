@@ -573,14 +573,14 @@ class MagicStore(context: Context) {
         ServiceState.bumpStoreRevision()
     }
 
+    // The Lab scratch hex/label live in SharedPreferences only. They used to call save() too,
+    // which rewrote the whole library to disk on every byte the user edited in the inspector.
     fun saveLabHex(hex: String) {
         prefs.edit().putString("lab_hex", hex.uppercase()).apply()
-        save()
     }
 
     fun saveLabLabel(label: String) {
         prefs.edit().putString("lab_label", label).apply()
-        save()
     }
 
     fun loadIntoLab(hex: String, label: String = "") {
