@@ -92,8 +92,8 @@ enum LabPacketBuilder {
         PacketBuilder.rainbow5(c1: c1, c2: c2, c3: c3, c4: c4, c5: c5, vib: vib(enabled: vibEnabled, pattern: vibPattern))
     }
 
-    static func buildCircle(vibEnabled: Bool, vibPattern: Int) -> String {
-        PacketBuilder.circle(vib: vib(enabled: vibEnabled, pattern: vibPattern))
+    static func buildCircle(vibEnabled: Bool, vibPattern: Int, colors: [Int] = []) -> String {
+        PacketBuilder.circle(colors: colors, vib: vib(enabled: vibEnabled, pattern: vibPattern))
     }
 
     static func buildVibrate(vibEnabled: Bool, vibPattern: Int) -> String {
@@ -132,7 +132,7 @@ enum LabPacketBuilder {
             case .dual: return "Two colors — inner / outer ring."
             case .crossfade: return "Smooth fade from one color to another."
             case .rainbow: return "Five LED colors — pick every one for your own animation."
-            case .circle: return "Rotating ring animation."
+            case .circle: return "Rotating ring — seven pattern colours you can change (Figment is this shape)."
             case .vibrate: return "Haptic buzz, no color change."
             case .show: return "A real show effect captured in the park — lightning, sparkle, cannon…"
             case .ping: return "Wakes nearby bands so they hear the next command."
@@ -145,6 +145,7 @@ enum LabPacketBuilder {
             case .preset: return 1
             case .dual, .crossfade: return 2
             case .rainbow: return 5
+            case .circle: return 7
             default: return 0
             }
         }
@@ -165,6 +166,7 @@ enum LabPacketBuilder {
         case .rainbow:
             return [PacketBuilder.Color.yellowOrange, PacketBuilder.Color.red, PacketBuilder.Color.green,
                     PacketBuilder.Color.blue, PacketBuilder.Color.purple]
+        case .circle: return PacketBuilder.circlePattern.map { $0 & 0x1F }
         default: return []
         }
     }
@@ -209,7 +211,7 @@ enum LabPacketBuilder {
         case .rainbow:
             base = buildRainbow(c(0, PacketBuilder.Color.yellowOrange), c(1, PacketBuilder.Color.red), c(2, PacketBuilder.Color.green),
                                 c(3, PacketBuilder.Color.blue), c(4, PacketBuilder.Color.purple), vibEnabled: vibEnabled, vibPattern: vibPattern)
-        case .circle: base = buildCircle(vibEnabled: vibEnabled, vibPattern: vibPattern)
+        case .circle: base = buildCircle(vibEnabled: vibEnabled, vibPattern: vibPattern, colors: colors)
         case .vibrate: base = buildVibrate(vibEnabled: vibEnabled, vibPattern: vibPattern)
         case .show: base = showEffects.indices.contains(showIndex) ? showEffects[showIndex].1 : showEffects[0].1
         case .ping: base = PacketBuilder.wakeupPing

@@ -210,6 +210,7 @@ struct LabBuilderPanel: View {
         switch type {
         case .dual: return i == 0 ? "INNER" : "OUTER"
         case .crossfade: return i == 0 ? "FROM" : "TO"
+        case .circle: return "P\(i + 1)"
         default: return type.colorSlots == 1 ? "COLOR" : "\(i + 1)"
         }
     }

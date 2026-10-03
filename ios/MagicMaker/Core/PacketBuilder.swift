@@ -65,8 +65,19 @@ enum PacketBuilder {
         ])
     }
 
-    static func circle(vib: Int = 0) -> String {
-        pkt([0x83, 0x01, 0xE9, 0x0B, 0x0B, 0x0F, 0x0F, 0x5C, 0x5D, 0x48, 0xA5, 0xD1, 0x45, 0x32, tail(vib: vib)])
+    /// The seven pattern bytes of the circle body. Each decodes like every other colour byte: low
+    /// 5 bits a palette index, high bits a slot flag (White, Off, Pink, Bright Purple, Yellow
+    /// Orange, Bright Purple, Lime). Figment's rotating two-colour effect is this same shape.
+    static let circlePattern = [0x5C, 0x5D, 0x48, 0xA5, 0xD1, 0x45, 0x32]
+
+    static func circle(vib: Int = 0) -> String { circle(colors: [], vib: vib) }
+
+    /// Circle with the pattern bytes' palette indexes replaced; each byte keeps its own flag bits.
+    static func circle(colors: [Int], vib: Int) -> String {
+        let pattern = circlePattern.enumerated().map { i, b in
+            colors.indices.contains(i) ? (b & 0xE0) | (colors[i] & 0x1F) : b
+        }
+        return pkt([0x83, 0x01, 0xE9, 0x0B, 0x0B, 0x0F, 0x0F] + pattern + [tail(vib: vib)])
     }
 
     static func crossfade(c1: Int = Color.red, c2: Int = Color.blue, vib: Int = 0) -> String {
