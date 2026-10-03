@@ -337,6 +337,95 @@ Newest-wins: a new command preempts one in flight rather than queueing behind it
 
 ---
 
+## 6a. What other implementations say
+
+Two independent, public re-implementations of this protocol were read in full (source, not
+summaries). Both cite the same primary research — EMCOT's MagicBand+ page
+(`emcot.world/Disney_MagicBand+_Bluetooth_Codes`, mirrored at `em-cot.github.io`). Where the two
+agree with each other and with our capture, confidence is high. Where they disagree, that is
+recorded here rather than resolved by guessing.
+
+| Source | What it is |
+|---|---|
+| [Haw8411/magic-band-plus-lights](https://github.com/Haw8411/magic-band-plus-lights) | Flipper Zero app. `protocols/magicband.c` carries **36 named payloads** verbatim and builders for E905/E906/E908/E909. |
+| [Shoopity/esp32_magicband_broadcaster-and-listener](https://github.com/Shoopity/esp32_magicband_broadcaster-and-listener) | ESP32 **listener** that decodes real packets onto a 5-zone LED model — the closest thing to band firmware anyone has published. |
+| [xxfunprojectsxx/esp32_magicband](https://github.com/xxfunprojectsxx/esp32_magicband) | The original broadcaster this app's `PacketBuilder` was ported from. |
+| [abramsimon/magicband-controller](https://github.com/abramsimon/magicband-controller) | ESP32-S3 broadcaster; same five shapes. |
+
+**No MagicBand+ firmware dump or decompiled command handler is public.** The band uses a
+Nordic BLE SoC (the original MagicBand teardown by Adafruit found an nRF24LE1; the + is a newer
+part). Its FCC filing is **2AYEL-7282**, filed through a shell company, Pietersite Unakite LLC;
+the internal-photo exhibit is public on fccid.io and shows the board. Everything below is
+therefore *observed behaviour reproduced by others*, not Disney's code.
+
+### The hardware
+
+**Five LEDs: one at each corner of the square face and one in the centre.** Both
+implementations model exactly this, and it is what the protocol's shapes are built around:
+"dual" is centre vs corners, the 5-colour command is one colour per LED.
+
+Zone numbering used by the listener, which this app now follows:
+
+```
+ Z2 ──────── Z4         Z1 bottom-left   Z4 top-right
+ │     Z3     │          Z2 top-left      Z5 bottom-right
+ Z1 ──────── Z5          Z3 centre
+```
+
+### The E9 body, decoded further
+
+For an effect record `E9 <len> <body>`, body byte offsets (0-based):
+
+| Byte | Meaning | Confidence |
+|---|---|---|
+| `[0]` | Sub-code, `00` in every effect seen | **Proven** (capture) |
+| `[1]` | **Timing.** bits 0–3 duration count; bit 6 selects ×3.1 s (else ×1.5 s); bits 4–5 fade-out seconds; bit 7 always-on. Our `2E` = 14 × 1.5 = **21 s, 2 s fade**. `8F` = always on. | **Inferred** — both implementations agree; matches Flipper's named presets (`09` ≈ 20 s, `06` ≈ 10 s, `04` ≈ 5 s, `03` ≈ 3 s) |
+| `[2]` | Flags, usually `0E`/`0F` | **Unknown** |
+| `[3..]` | Effect-specific; colour bytes are `flag:3 \| palette:5` | **Proven** for the colour bits |
+| last | Tail, `B0`-ish | **Disputed** — see below |
+
+### Per-shape decode (what the listener does with each length)
+
+| Len | Shape | Colour bytes | LED mapping |
+|---|---|---|---|
+| `05` | Single | `[3]` low 5 bits | **High 3 bits of `[3]` are a zone mask.** Both agree `0`=all, `3`=bottom-left, `4`=top-left. They *disagree* on `1`/`2` (Flipper: TR/BR; listener: centre/TR). Our `E0` = mask 7 = all. |
+| `06` | Dual | `[3]`, `[4]` | `[3]` → **centre**, `[4]` → **four corners** (both agree) |
+| `08` | **Custom RGB** | `[3..5]` = R, G, B as 6-bit values `<<1` | Flipper builds `E9 08 00 0E D2 55 r g b tail`. We have never used this. |
+| `09` | 5-LED | `[3..7]`, one per LED | **Disputed.** Listener: Z1..Z5 = BL, TL, C, TR, BR. Flipper: C, TR, BR, BL, TL. |
+| `0B` | Circle | none — both treat the body as fixed | "Green double comet" chasing round the corners. Neither decoder reads colours from it; our editable P1–P7 slots are an experiment, not a documented feature. |
+| `0C` | Animations | signature at `[3..5]` | `5D 46 5B` → fade (tail `95`) or rainbow; `4F 4F 5B` → strobe; `B1 B9 B5` → stepper |
+| `0E` | Twinkle / flash | `[3..7]`, one per zone | Pattern `[marker, A, B, A, B]` = two-colour alternation |
+| `0F` | Candles / pulse | — | matched by signature |
+| `10` | Alternating | — | matched by signature |
+| `11` | Cross-fade / pulse burst | `[3]`, `[4]` | `F4 48 82` present → smooth two-colour fade (centre out of phase); else pulse burst with `[3]` centre, `[4]` corners. |
+| `12` | **Rotating colours** | `[3..7]` in zone order **Z2, Z3, Z4, Z5, Z1** | `[2]` = `0F` → colour rotate; else two-colour toggle. **This is the best candidate for Figment's rotating two-colour effect** — not `0B`. |
+| `13` | Zone alternate | `[3]` centre, `[4]` group B, `[5]` group A | Z1/Z4 vs Z2/Z5 alternate at 1 s |
+| `14` | Repeat fade | colour at `[8]` when `[7]` is `05`/`02` | all five, 1.25 s cycle |
+
+### The tail byte is disputed
+
+Three readings exist for the last body byte:
+
+- `esp32_magicband` (and this app): `B0 | vibration(0–15)` — low nibble is the pattern.
+- Flipper: `vibration << 4 | 0x0B` — **high** nibble is the pattern, low nibble `B` means "enable". Its vibe table: `B` pulse 1 s, `A` short 0.5 s, `7` long 2 s, `5` fast, `6` complex, `8` rapid.
+- The capture: real effects end `B0`, `B5`, `95`, `B8`, `BB`, `B3` — and also `01`, which fits neither.
+
+Treat the buzz nibble shown in the Lab as a guess until a band confirms it.
+
+### Pings carry a channel marker too
+
+Every ping in the Flipper list is `E1 00 CC 03 xx xx xx` — channel marker *before* the CC
+record. Our capture saw `CC 03` with and without it. The `CC 03 13 20 00` variant is named
+"RRC" there; we have not seen it.
+
+### Reconciling with the earlier sections
+
+- The "function code is really type + length" finding stands; both implementations switch on
+  the length byte as the sub-action.
+- The channel marker (`E1`/`E2`) is present on every payload in both lists, including pings.
+  `E2` appears on some crossfades and all the `E907` unknowns.
+- `E907` exists (two variants, 7-byte body, `43 43 41` / `44 44 41`), purpose unknown.
+
 ## 7. What to do with this
 
 In priority order:
