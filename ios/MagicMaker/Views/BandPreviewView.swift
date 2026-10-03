@@ -1,15 +1,14 @@
 import SwiftUI
 
-/// What we expect the packet to look like on the band. A MagicBand+ has five LEDs: one at each
-/// corner of the face and one in the centre. Dual colour is centre vs corners, the 5-LED rainbow
-/// is one colour per LED, circle chases around the four corners. Pinned above the Lab so it is
-/// always visible and follows every change to the packet. Colours are exact; where the motion or
-/// the LED order is a guess the model says so and the caption shows APPROX.
+/// What we expect the packet to look like on the band: the square face with its five LEDs
+/// (four corners and the centre), animating the decoded `BandEffectModel` in a loop. Pinned above
+/// the Lab so it is always visible and follows every change to the packet. Colours are exact;
+/// where the motion or LED order is reproduced from other decoders the caption shows APPROX.
 struct BandPreviewView: View {
     let hex: String
 
     private let period: Double = 2.4
-    private let center = 4
+    private let z3 = 2   // centre zone index
 
     var body: some View {
         let model = BandEffectModel.from(hex)
@@ -26,17 +25,17 @@ struct BandPreviewView: View {
                     ctx.fill(facePath, with: .color(Color(red: 0.043, green: 0.078, blue: 0.14)))
                     ctx.stroke(facePath, with: .color(MMTheme.panelLine), lineWidth: w * 0.012)
 
-                    // LED 0..3 corners clockwise from top-left; 4 centre.
+                    // Zones Z1..Z5 = bottom-left, top-left, centre, top-right, bottom-right.
                     let inset = w * 0.20
                     let points = [
+                        CGPoint(x: face.minX + inset, y: face.maxY - inset),
                         CGPoint(x: face.minX + inset, y: face.minY + inset),
+                        CGPoint(x: face.midX, y: face.midY),
                         CGPoint(x: face.maxX - inset, y: face.minY + inset),
                         CGPoint(x: face.maxX - inset, y: face.maxY - inset),
-                        CGPoint(x: face.minX + inset, y: face.maxY - inset),
-                        CGPoint(x: face.midX, y: face.midY),
                     ]
-                    for (i, p) in points.enumerated() {
-                        let c = ledColor(model, i, t) ?? dim
+                    for (z, p) in points.enumerated() {
+                        let c = ledColor(model, z, t) ?? dim
                         if c != dim {
                             ctx.fill(Path(ellipseIn: CGRect(x: p.x - ledR * 2.2, y: p.y - ledR * 2.2, width: ledR * 4.4, height: ledR * 4.4)), with: .color(c.opacity(0.30)))
                         }
@@ -47,13 +46,17 @@ struct BandPreviewView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("BAND PREVIEW").font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
-                    Text(model.kind == .none ? "NO EFFECT" : model.kind.rawValue.uppercased())
+                    Text(model.kind == .none ? "NO EFFECT" : kindName(model.kind))
                         .font(MMTheme.techHeader())
                         .foregroundStyle(model.kind == .none ? MMTheme.textDim : MMTheme.cyan)
                     Text(model.note.uppercased() + (model.approximate ? " · APPROX." : ""))
                         .font(MMTheme.techLabel(9))
                         .foregroundStyle(model.approximate ? MMTheme.amber : MMTheme.textDim)
                         .lineLimit(2)
+                    if model.durationMs > 0 || model.alwaysOn {
+                        let dur = model.alwaysOn ? "ALWAYS ON" : "~\(model.durationMs / 1000)S" + (model.fadeMs > 0 ? " · \(model.fadeMs / 1000)S FADE" : "")
+                        Text(dur).font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+                    }
                     if model.buzz > 0 {
                         let name = LabPacketBuilder.vibrationPatterns.first { $0.id == model.buzz }?.label ?? "#\(model.buzz)"
                         let on = (t * 6).truncatingRemainder(dividingBy: 1) < 0.5
@@ -70,49 +73,86 @@ struct BandPreviewView: View {
         .background(MMTheme.navy)
     }
 
-    /// Colour of LED `i` (0..3 corners clockwise from top-left, 4 centre) at phase `t`, or nil for off.
-    private func ledColor(_ m: BandEffectModel, _ i: Int, _ t: Double) -> Color? {
-        func pal(_ idx: Int) -> Color { starlightGlowColor(idx) }
+    private func kindName(_ k: BandEffectModel.Kind) -> String {
+        switch k {
+        case .pulseBurst: return "PULSE BURST"
+        case .repeatFade: return "REPEAT FADE"
+        default: return k.rawValue.uppercased()
+        }
+    }
+
+    /// Colour of zone `z` (0..4 = Z1..Z5) at phase `t` in 0..1, or nil for off.
+    private func ledColor(_ m: BandEffectModel, _ z: Int, _ t: Double) -> Color? {
+        func pal(_ idx: Int?) -> Color? { idx.map { starlightGlowColor($0) } }
+        let rest = pal(m.perLed.indices.contains(z) ? m.perLed[z] : nil)
         let breathe = 0.75 + 0.25 * sin(2 * Double.pi * t)
-        let isCenter = i == center
         switch m.kind {
         case .none, .ping: return nil
-        case .single, .wand: return m.colors.first.map { pal($0).opacity(breathe) }
-        case .dual:
-            let idx = isCenter ? m.colors.first : (m.colors.count > 1 ? m.colors[1] : nil)
-            return idx.map { pal($0) }
+        case .single, .wand: return rest?.opacity(breathe)
+        case .dual: return rest
+        case .toggle:
+            let a = m.perLed.compactMap { $0 }.first
+            let b = m.perLed.compactMap { $0 }.first { $0 != a } ?? a
+            return pal((t * 4).truncatingRemainder(dividingBy: 1) < 0.5 ? a : b)
         case .rainbow:
-            guard !m.colors.isEmpty else { return nil }
-            let shift = m.approximate ? Int(t * Double(m.colors.count)) : 0
-            return pal(m.colors[(i + shift) % m.colors.count])
+            if m.note.contains("cycle"), m.perLed.allSatisfy({ $0 != nil }) {
+                let shift = Int(t * 5)
+                return pal(m.perLed[(z + shift) % 5])
+            }
+            return rest
+        case .rotate:
+            let order = [1, 2, 3, 4, 0]
+            let pos = order.firstIndex(of: z) ?? 0
+            let step = Int(t * 10)
+            return pal(m.perLed[order[(pos + step) % 5]])
         case .crossfade:
-            guard let a = m.colors.first else { return nil }
-            let b = m.colors.count > 1 ? m.colors[1] : a
+            guard let a = pal(m.colors.first) else { return nil }
+            let b = pal(m.colors.count > 1 ? m.colors[1] : m.colors[0]) ?? a
             let f = 0.5 - 0.5 * cos(2 * Double.pi * t)
-            return blend(pal(a), pal(b), f)
+            return z == z3 ? blend(b, a, f) : blend(a, b, f)
+        case .pulseBurst:
+            let pos = (t * 2.4).truncatingRemainder(dividingBy: 1.5)
+            if pos >= 1 { return rest?.opacity(0.05) }
+            let sub = pos.truncatingRemainder(dividingBy: 0.5)
+            let bright = sub < 0.25 ? sub / 0.25 : 1 - (sub - 0.25) / 0.25
+            return rest?.opacity(0.1 + 0.9 * bright)
         case .circle:
-            guard !m.colors.isEmpty else { return nil }
-            if isCenter { return pal(m.colors[0]).opacity(0.6) }
-            let step = Int(t * 8)
-            let lead = step % 4
-            let c = pal(m.colors[(i + step) % m.colors.count])
-            return i == lead ? c : c.opacity(0.35)
+            if z == z3 { return rest?.opacity(0.15) }
+            let corners = [0, 1, 3, 4]
+            let pos = corners.firstIndex(of: z) ?? 0
+            let head = Int(t * 8) % 4
+            let d = (pos - head + 4) % 4
+            let base = rest ?? starlightGlowColor(0x19)
+            return (d == 0 || d == 2) ? base : base.opacity(0.3)
+        case .twinkle:
+            let r = sin(Double(z) * 12.9898 + t * 40) * 43758.5453
+            let v = r - floor(r)
+            return v > 0.6 ? rest : rest?.opacity(0.12)
+        case .alternate:
+            if z == z3 { return rest }
+            let half = (t * 2.4).truncatingRemainder(dividingBy: 1) < 0.5
+            let isA = z == 0 || z == 3
+            return isA == half ? rest : rest?.opacity(0.08)
+        case .repeatFade:
+            let pos = (t * 2.4).truncatingRemainder(dividingBy: 1.25)
+            let bright = pos < 1 ? 1 - pos : 0
+            return rest?.opacity(0.05 + 0.95 * bright)
         case .lightning:
             let phase = (t * 3).truncatingRemainder(dividingBy: 1)
-            return (phase < 0.08 || (phase > 0.16 && phase < 0.22)) ? .white : pal(0x02).opacity(0.25)
-        case .sparkle:
-            let r = sin(Double(i) * 12.9898 + t * 40) * 43758.5453
-            let v = r - floor(r)
-            let base = m.colors.isEmpty ? Color.white : pal(m.colors[i % m.colors.count])
-            return v > 0.55 ? base : base.opacity(0.12)
+            return (phase < 0.08 || (phase > 0.16 && phase < 0.22)) ? .white : Color.white.opacity(0.15)
         case .strobe:
-            let half = (t * 8).truncatingRemainder(dividingBy: 1) < 0.5
-            let c = m.colors.first.map { pal($0) } ?? .white
-            let group = isCenter ? 0 : i % 2
-            return ((group == 0) == half) ? c : c.opacity(0.1)
+            let pos = (t * 5).truncatingRemainder(dividingBy: 5)
+            if pos < 0.5 { return starlightGlowColor(0x11) }
+            if pos < 1 { return starlightGlowColor(0x13) }
+            return starlightGlowColor(0x13).opacity(0.05)
+        case .stepper:
+            guard !m.colors.isEmpty else { return rest }
+            let step = (Int(t * 4.8) + z) % m.colors.count
+            return pal(m.colors[step])
+        case .rgb: return Color(white: 0.62).opacity(breathe)
         case .complex:
-            let v = 0.5 + 0.5 * sin(2 * Double.pi * t + Double(i) * 1.3)
-            return blend(pal(0x15), pal(0x0F), v)
+            let v = 0.5 + 0.5 * sin(2 * Double.pi * t + Double(z) * 1.3)
+            return blend(rest ?? starlightGlowColor(0x15), starlightGlowColor(0x0F), v)
         }
     }
 

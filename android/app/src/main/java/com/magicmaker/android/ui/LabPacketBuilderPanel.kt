@@ -580,6 +580,17 @@ private fun LabPacketBuilderPanel(
                 checked = framing.channelMarker,
                 onChange = { framing = framing.copy(channelMarker = it) },
             )
+            PaletteDropdown(
+                label = "DURATION",
+                selectedId = framing.timing,
+                options = PacketBuilder.Timing.options,
+                onSelect = { framing = framing.copy(timing = it) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "How long the band holds the effect — the timing byte. Default keeps the shape's own value (~21 s for the colour presets).",
+                style = techLabel(), color = AppColors.TextDim,
+            )
             FramingToggle(
                 title = "Wake ping first (CC03 000100)",
                 detail = "Tells nearby bands to listen before the effect arrives. The captured show packets all start this way.",
@@ -672,6 +683,9 @@ private fun ColorSlots(
         LabPacketBuilder.LabPacketType.DUAL -> { i -> if (i == 0) "INNER" else "OUTER" }
         LabPacketBuilder.LabPacketType.CROSSFADE -> { i -> if (i == 0) "FROM" else "TO" }
         LabPacketBuilder.LabPacketType.CIRCLE -> { i -> "P${i + 1}" }
+        // Five LEDs: Z1 bottom-left, Z2 top-left, Z3 centre, Z4 top-right, Z5 bottom-right.
+        LabPacketBuilder.LabPacketType.RAINBOW, LabPacketBuilder.LabPacketType.ROTATE ->
+            { i -> listOf("BOT-L", "TOP-L", "CENTRE", "TOP-R", "BOT-R")[i] }
         else -> { i -> "${i + 1}" }
     }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

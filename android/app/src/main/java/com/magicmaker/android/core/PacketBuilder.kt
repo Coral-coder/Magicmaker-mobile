@@ -111,6 +111,47 @@ object PacketBuilder {
         tail(vib),
     )
 
+    /**
+     * E912 "rotating colours": five per-zone colours (in zone order Z2, Z3, Z4, Z5, Z1) that
+     * the band rotates around its face. Template is the captured variant the Flipper app ships
+     * (`E2 00 E9 12 00 03 0F A2 A2 A4 A4 A2 30 D0 37 F4 D2 46 00 64 FC B0`); flag byte 0F selects
+     * rotate rather than two-colour toggle. Colours are given here in Z1..Z5 order.
+     */
+    fun rotate(z1: Int, z2: Int, z3: Int, z4: Int, z5: Int, vib: Int = Vibration.OFF): String = pkt(
+        0x83, 0x01, 0xE1, 0x00, 0xE9, 0x12, 0x00, 0x03, 0x0F,
+        0xA0 or (z2 and 0x1F), 0xA0 or (z3 and 0x1F), 0xA0 or (z4 and 0x1F), 0xA0 or (z5 and 0x1F), 0xA0 or (z1 and 0x1F),
+        0x30, 0xD0, 0x37, 0xF4, 0xD2, 0x46, 0x00, 0x64, 0xFC,
+        tail(vib),
+    )
+
+    /** Named values for the effect body's timing byte (body[1]). See docs/PROTOCOL.md §6a. */
+    object Timing {
+        const val DEFAULT = -1          // keep the template's own byte
+        const val ALWAYS_ON = 0x8F
+        const val S20 = 0x09
+        const val S10 = 0x06
+        const val S5 = 0x04
+        const val S3 = 0x03
+        val options: List<Pair<Int, String>> = listOf(
+            DEFAULT to "Default", ALWAYS_ON to "Always on", S20 to "~20 s", S10 to "~10 s", S5 to "~5 s", S3 to "~3 s",
+        )
+    }
+
+    /** Replace the timing byte (body[1]) of the first E9 record in [hex]. No-op for [Timing.DEFAULT]. */
+    fun withTiming(hex: String, timing: Int): String {
+        if (timing == Timing.DEFAULT) return hex
+        val parsed = DisneyTlv.parse(hex) ?: return hex
+        val e = parsed.effect ?: return hex
+        if (e.length < 2) return hex
+        // Locate the record in the hex: "E9" + length byte, then body.
+        val head = "E9" + "%02X".format(e.declaredLength)
+        val idx = HexUtils.canonicalHex(hex).indexOf(head)
+        if (idx < 0) return hex
+        val h = HexUtils.canonicalHex(hex)
+        val pos = idx + 4 + 2          // after head (4 chars) + body[0] (2 chars)
+        return h.substring(0, pos) + "%02X".format(timing and 0xFF) + h.substring(pos + 2)
+    }
+
     /** Park-captured rainbow finale (CC03 wrapper) — strong haptic show packet. */
     fun rainbowFinale(): String =
         "8301CC03000100E100E90C000F0F5D465BF005323748B0"

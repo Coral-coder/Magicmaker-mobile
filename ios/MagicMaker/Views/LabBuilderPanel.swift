@@ -86,6 +86,13 @@ struct LabBuilderPanel: View {
                         detail: "Every effect recorded in the park carries this. The esp32 presets never did. Try both.",
                         isOn: Binding(get: { framing.channelMarker }, set: { framing.channelMarker = $0 })
                     )
+                    LabPalettePicker(
+                        label: "DURATION",
+                        selection: Binding(get: { framing.timing }, set: { framing.timing = $0 }),
+                        options: PacketBuilder.Timing.options
+                    )
+                    Text("How long the band holds the effect — the timing byte. Default keeps the shape's own value (~21 s for the colour presets).")
+                        .font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
                     framingToggle(
                         "Wake ping first (CC03 000100)",
                         detail: "Tells nearby bands to listen before the effect arrives.",
@@ -211,6 +218,8 @@ struct LabBuilderPanel: View {
         case .dual: return i == 0 ? "INNER" : "OUTER"
         case .crossfade: return i == 0 ? "FROM" : "TO"
         case .circle: return "P\(i + 1)"
+        // Five LEDs: Z1 bottom-left, Z2 top-left, Z3 centre, Z4 top-right, Z5 bottom-right.
+        case .rainbow, .rotate: return ["BOT-L", "TOP-L", "CENTRE", "TOP-R", "BOT-R"][i]
         default: return type.colorSlots == 1 ? "COLOR" : "\(i + 1)"
         }
     }

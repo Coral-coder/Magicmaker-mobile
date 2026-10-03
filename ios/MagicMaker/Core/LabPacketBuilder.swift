@@ -109,7 +109,7 @@ enum LabPacketBuilder {
     /// A packet kind the Lab can compose end-to-end. `colorSlots` is how many palette colours the
     /// type carries; `supportsVib` whether the buzz controls apply.
     enum LabPacketType: String, CaseIterable, Identifiable {
-        case preset, dual, crossfade, rainbow, circle, vibrate, show, ping, raw
+        case preset, dual, crossfade, rainbow, rotate, circle, vibrate, show, ping, raw
         var id: String { rawValue }
 
         var label: String {
@@ -118,6 +118,7 @@ enum LabPacketBuilder {
             case .dual: return "Dual Color"
             case .crossfade: return "Crossfade"
             case .rainbow: return "Rainbow / Custom"
+            case .rotate: return "Rotating Colors"
             case .circle: return "Circle Spin"
             case .vibrate: return "Vibrate Only"
             case .show: return "Park Show"
@@ -132,6 +133,7 @@ enum LabPacketBuilder {
             case .dual: return "Two colors — inner / outer ring."
             case .crossfade: return "Smooth fade from one color to another."
             case .rainbow: return "Five LED colors — pick every one for your own animation."
+            case .rotate: return "Five zone colors that rotate around the band (Figment-style)."
             case .circle: return "Rotating ring — seven pattern colours you can change (Figment is this shape)."
             case .vibrate: return "Haptic buzz, no color change."
             case .show: return "A real show effect captured in the park — lightning, sparkle, cannon…"
@@ -144,7 +146,7 @@ enum LabPacketBuilder {
             switch self {
             case .preset: return 1
             case .dual, .crossfade: return 2
-            case .rainbow: return 5
+            case .rainbow, .rotate: return 5
             case .circle: return 7
             default: return 0
             }
@@ -152,7 +154,7 @@ enum LabPacketBuilder {
 
         var supportsVib: Bool {
             switch self {
-            case .preset, .dual, .crossfade, .rainbow, .circle, .vibrate: return true
+            case .preset, .dual, .crossfade, .rainbow, .rotate, .circle, .vibrate: return true
             default: return false
             }
         }
@@ -167,6 +169,7 @@ enum LabPacketBuilder {
             return [PacketBuilder.Color.yellowOrange, PacketBuilder.Color.red, PacketBuilder.Color.green,
                     PacketBuilder.Color.blue, PacketBuilder.Color.purple]
         case .circle: return PacketBuilder.circlePattern.map { $0 & 0x1F }
+        case .rotate: return [PacketBuilder.Color.blue, PacketBuilder.Color.blue, PacketBuilder.Color.blue, 0x04, 0x04]
         default: return []
         }
     }
@@ -177,11 +180,13 @@ enum LabPacketBuilder {
     struct Framing: Equatable {
         var channelMarker: Bool
         var wakePrefix: Bool
+        /// Timing byte override for the effect body, or `PacketBuilder.Timing.default`.
+        var timing: Int = PacketBuilder.Timing.default
     }
 
     /// Framing that reproduces exactly what each type has always produced.
     static func defaultFraming(_ type: LabPacketType) -> Framing {
-        type == .crossfade ? Framing(channelMarker: true, wakePrefix: false) : Framing(channelMarker: false, wakePrefix: false)
+        (type == .crossfade || type == .rotate) ? Framing(channelMarker: true, wakePrefix: false) : Framing(channelMarker: false, wakePrefix: false)
     }
 
     /// Shows, pings and raw hex are sent exactly as given.
@@ -212,6 +217,7 @@ enum LabPacketBuilder {
             base = buildRainbow(c(0, PacketBuilder.Color.yellowOrange), c(1, PacketBuilder.Color.red), c(2, PacketBuilder.Color.green),
                                 c(3, PacketBuilder.Color.blue), c(4, PacketBuilder.Color.purple), vibEnabled: vibEnabled, vibPattern: vibPattern)
         case .circle: base = buildCircle(vibEnabled: vibEnabled, vibPattern: vibPattern, colors: colors)
+        case .rotate: base = PacketBuilder.rotate(c(0, 0x02), c(1, 0x02), c(2, 0x02), c(3, 0x04), c(4, 0x04), vib: vib(enabled: vibEnabled, pattern: vibPattern))
         case .vibrate: base = buildVibrate(vibEnabled: vibEnabled, vibPattern: vibPattern)
         case .show: base = showEffects.indices.contains(showIndex) ? showEffects[showIndex].1 : showEffects[0].1
         case .ping: base = PacketBuilder.wakeupPing
@@ -224,7 +230,7 @@ enum LabPacketBuilder {
         if body.hasPrefix("8301") { body.removeFirst(4) }
         if body.hasPrefix(wakePrefix) { body.removeFirst(wakePrefix.count) }
         if body.hasPrefix(channel1) { body.removeFirst(channel1.count) }
-        return "8301" + (f.wakePrefix ? wakePrefix : "") + (f.channelMarker ? channel1 : "") + body
+        return PacketBuilder.withTiming("8301" + (f.wakePrefix ? wakePrefix : "") + (f.channelMarker ? channel1 : "") + body, f.timing)
     }
 }
 

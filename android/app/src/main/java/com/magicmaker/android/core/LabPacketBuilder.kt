@@ -124,6 +124,7 @@ object LabPacketBuilder {
         DUAL("Dual Color", "Two colors — inner / outer ring.", 2, true),
         CROSSFADE("Crossfade", "Smooth fade from one color to another.", 2, true),
         RAINBOW("Rainbow / Custom", "Five LED colors — pick every one for your own animation.", 5, true),
+        ROTATE("Rotating Colors", "Five zone colors that rotate around the band (Figment-style).", 5, true),
         CIRCLE("Circle Spin", "Rotating ring — seven pattern colours you can change (Figment is this shape).", 7, true),
         VIBRATE("Vibrate Only", "Haptic buzz, no color change.", 0, true),
         SHOW("Park Show", "A real show effect captured in the park — lightning, sparkle, cannon…", 0, false),
@@ -144,6 +145,7 @@ object LabPacketBuilder {
             PacketBuilder.Color.PURPLE,
         )
         LabPacketType.CIRCLE -> PacketBuilder.CIRCLE_PATTERN.map { it and 0x1F }
+        LabPacketType.ROTATE -> listOf(PacketBuilder.Color.BLUE, PacketBuilder.Color.BLUE, PacketBuilder.Color.BLUE, 0x04, 0x04)
         else -> emptyList()
     }
 
@@ -153,11 +155,16 @@ object LabPacketBuilder {
      * ported from do not. The wake-ping prefix (CC03 000100) is what the captured show packets
      * put in front to make bands listen first. Both are testable in the field from the Lab.
      */
-    data class Framing(val channelMarker: Boolean, val wakePrefix: Boolean)
+    data class Framing(
+        val channelMarker: Boolean,
+        val wakePrefix: Boolean,
+        /** Timing byte override for the effect body, or [PacketBuilder.Timing.DEFAULT]. */
+        val timing: Int = PacketBuilder.Timing.DEFAULT,
+    )
 
     /** Framing that reproduces what each type has always produced — so defaults change nothing. */
     fun defaultFraming(type: LabPacketType): Framing = when (type) {
-        LabPacketType.CROSSFADE -> Framing(channelMarker = true, wakePrefix = false)
+        LabPacketType.CROSSFADE, LabPacketType.ROTATE -> Framing(channelMarker = true, wakePrefix = false)
         else -> Framing(channelMarker = false, wakePrefix = false)
     }
 
@@ -196,6 +203,7 @@ object LabPacketBuilder {
                 vibEnabled, vibPattern,
             )
             LabPacketType.CIRCLE -> buildCircle(vibEnabled, vibPattern, colors)
+            LabPacketType.ROTATE -> PacketBuilder.rotate(c(0, 0x02), c(1, 0x02), c(2, 0x02), c(3, 0x04), c(4, 0x04), vib(vibEnabled, vibPattern))
             LabPacketType.VIBRATE -> buildVibrate(vibEnabled, vibPattern)
             LabPacketType.SHOW -> showEffects.getOrElse(showIndex) { showEffects.first() }.second
             LabPacketType.PING -> buildPing()
@@ -204,12 +212,13 @@ object LabPacketBuilder {
         if (!framingApplies(type)) return base
         // Strip whatever framing the primitive builder baked in, then apply the requested one.
         val body = base.removePrefix("8301").removePrefix(WAKE_PREFIX).removePrefix(CHANNEL_1)
-        return buildString {
+        val framed = buildString {
             append("8301")
             if (framing.wakePrefix) append(WAKE_PREFIX)
             if (framing.channelMarker) append(CHANNEL_1)
             append(body)
         }
+        return PacketBuilder.withTiming(framed, framing.timing)
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -295,9 +304,16 @@ object LabPacketBuilder {
             return if (first.type == DisneyTlv.TYPE_PING) Decoded(LabPacketType.PING, emptyList(), false, vibPattern, h) else raw()
         }
 
+        // Report a named timing only when it differs from what the shape's own template carries,
+        // so decode(build(x)) gives back x's framing exactly.
+        val timingByte = effect.byte(1)
+        val templateTiming = when (effect.declaredLength) {
+            0x05, 0x09 -> 0x2E; 0x06 -> 0x22; 0x0B -> 0x0F; 0x11 -> 0x6F; 0x12 -> 0x03; else -> -1
+        }
         val framing = Framing(
             channelMarker = parsed.channel != null,
             wakePrefix = first.type == DisneyTlv.TYPE_PING,
+            timing = if (timingByte != null && timingByte != templateTiming && PacketBuilder.Timing.options.any { it.first == timingByte }) timingByte else PacketBuilder.Timing.DEFAULT,
         )
 
         // Palette colours sit at value[3..] of the effect record, low 5 bits.
@@ -312,6 +328,8 @@ object LabPacketBuilder {
             0x09 -> colorsAt(5)?.let { Decoded(LabPacketType.RAINBOW, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             0x0B -> colorsAt(7)?.let { Decoded(LabPacketType.CIRCLE, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             0x11 -> colorsAt(2)?.let { Decoded(LabPacketType.CROSSFADE, it, vibEnabled, vibPattern, h, framing) } ?: raw()
+            // E912 colour bytes are in zone order Z2, Z3, Z4, Z5, Z1 — present them as Z1..Z5.
+            0x12 -> colorsAt(5)?.let { c -> Decoded(LabPacketType.ROTATE, listOf(c[4], c[0], c[1], c[2], c[3]), vibEnabled, vibPattern, h, framing) } ?: raw()
             else -> raw()
         }
     }

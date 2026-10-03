@@ -80,6 +80,33 @@ enum PacketBuilder {
         return pkt([0x83, 0x01, 0xE9, 0x0B, 0x0B, 0x0F, 0x0F] + pattern + [tail(vib: vib)])
     }
 
+    /// E912 "rotating colours": five per-zone colours the band rotates around its face. Template is
+    /// the captured variant in the Flipper app; flag byte 0F selects rotate. Given in Z1..Z5 order;
+    /// on air the bytes are Z2, Z3, Z4, Z5, Z1.
+    static func rotate(_ z1: Int, _ z2: Int, _ z3: Int, _ z4: Int, _ z5: Int, vib: Int = 0) -> String {
+        pkt([0x83, 0x01, 0xE1, 0x00, 0xE9, 0x12, 0x00, 0x03, 0x0F,
+             0xA0 | (z2 & 0x1F), 0xA0 | (z3 & 0x1F), 0xA0 | (z4 & 0x1F), 0xA0 | (z5 & 0x1F), 0xA0 | (z1 & 0x1F),
+             0x30, 0xD0, 0x37, 0xF4, 0xD2, 0x46, 0x00, 0x64, 0xFC, tail(vib: vib)])
+    }
+
+    /// Named values for the effect body's timing byte (body[1]). See docs/PROTOCOL.md §6a.
+    enum Timing {
+        static let `default` = -1
+        static let alwaysOn = 0x8F
+        static let options: [(Int, String)] = [(-1, "Default"), (0x8F, "Always on"), (0x09, "~20 s"), (0x06, "~10 s"), (0x04, "~5 s"), (0x03, "~3 s")]
+    }
+
+    /// Replace the timing byte (body[1]) of the first E9 record. No-op for `Timing.default`.
+    static func withTiming(_ hex: String, _ timing: Int) -> String {
+        guard timing != Timing.default else { return hex }
+        let h = HexUtils.canonicalHex(hex)
+        guard let r = h.range(of: "E9"), h.distance(from: r.upperBound, to: h.endIndex) >= 6 else { return hex }
+        // "E9" + len (2) + body[0] (2) → body[1] starts 6 chars after the "E9" start.
+        let start = h.index(r.lowerBound, offsetBy: 6)
+        let end = h.index(start, offsetBy: 2)
+        return h.replacingCharacters(in: start..<end, with: String(format: "%02X", timing & 0xFF))
+    }
+
     static func crossfade(c1: Int = Color.red, c2: Int = Color.blue, vib: Int = 0) -> String {
         pkt([
             0x83, 0x01, 0xE1, 0x00, 0xE9, 0x11, 0x00, 0x6F, 0x0F,

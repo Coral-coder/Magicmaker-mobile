@@ -135,10 +135,35 @@ object MagicClassifier {
                 colors = if (pirate) "" else "${StarlightColors.nameFor(palette(3))} / ${StarlightColors.nameFor(palette(4))}"
                 simKey = if (pirate) "A:PIRATE_CANNON" else "A:E911:${normalized.takeLast(4)}"
             }
-            "E90E", "E908" -> {
-                label = "Show Control: $funcCode"
-                typeInfo = funcCode.lowercase()
-                colors = ""
+            // Lengths other decoders have named (docs/PROTOCOL.md §6a). typeInfo/simKey stay the
+            // same as before so stored library entries and automation rules keep matching.
+            "E908" -> {
+                label = "Custom RGB Color"
+                typeInfo = "e908"; colors = ""; simKey = "S:$funcCode"
+            }
+            "E90E" -> {
+                label = "Twinkle / Flash (E90E)"
+                typeInfo = "e90e"
+                colors = if (e.length >= 8) (3..7).joinToString(" / ") { StarlightColors.nameFor(palette(it)) } else ""
+                simKey = "S:$funcCode"
+            }
+            "E910" -> { label = "Alternating (E910)"; typeInfo = "e910"; colors = ""; simKey = "S:$funcCode" }
+            "E912" -> {
+                label = if (e.byte(2) == 0x0F) "Rotating Colors (E912)" else "Two-Color Toggle (E912)"
+                typeInfo = "e912"
+                colors = if (e.length >= 8) (3..7).joinToString(" / ") { StarlightColors.nameFor(palette(it)) } else ""
+                simKey = "S:$funcCode"
+            }
+            "E913" -> {
+                label = "Corner Alternate (E913)"
+                typeInfo = "e913"
+                colors = if (e.length >= 6) "${StarlightColors.nameFor(palette(3))} centre, ${StarlightColors.nameFor(palette(5))} / ${StarlightColors.nameFor(palette(4))}" else ""
+                simKey = "S:$funcCode"
+            }
+            "E914" -> {
+                label = "Repeating Fade (E914)"
+                typeInfo = "e914"
+                colors = if (e.length >= 9) StarlightColors.nameFor(palette(8)) else ""
                 simKey = "S:$funcCode"
             }
             else -> {

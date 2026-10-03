@@ -186,13 +186,17 @@ object DisneyTlv {
         val hasTail = (v.last().toInt() and 0xF0) == 0xB0
 
         if (colorSlots > 0 && v.size >= 3 + colorSlots) {
-            out += Segment(hexOf(0, 3), "Header", "Sub-code and two timing/flag bytes. Constant per effect shape.", SegmentKind.HEADER)
+            out += Segment(hexOf(0, 3), "Header", headerCaption(v), SegmentKind.HEADER)
             for (s in 0 until colorSlots) {
                 val b = v[3 + s].toInt() and 0xFF
                 val idx = b and 0x1F
+                val high = (b shr 5) and 0x07
+                val flagNote = if (r.declaredLength == 0x05) {
+                    when (high) { 0, 7 -> " Zone mask $high = all LEDs."; 3 -> " Zone mask 3 = bottom-left only."; 4 -> " Zone mask 4 = top-left only."; else -> " Zone mask $high (mapping disputed)." }
+                } else " High bits are the slot flag."
                 out += Segment(
                     "%02X".format(b), colorSlotTitle(r.declaredLength, s, colorSlots),
-                    "Low 5 bits = palette #%02X %s. High bits are the slot flag.".format(idx, StarlightColors.nameFor(idx)),
+                    "Low 5 bits = palette #%02X %s.".format(idx, StarlightColors.nameFor(idx)) + flagNote,
                     SegmentKind.COLOR,
                 )
             }
@@ -200,8 +204,9 @@ object DisneyTlv {
             val dataEnd = if (hasTail) v.size - 1 else v.size
             if (dataEnd > rest) out += Segment(hexOf(rest, dataEnd), "Data", "Timing / curve bytes for this effect.", SegmentKind.DATA)
         } else {
+            if (v.size >= 3) out += Segment(hexOf(0, 3), "Header", headerCaption(v), SegmentKind.HEADER)
             val dataEnd = if (hasTail) v.size - 1 else v.size
-            out += Segment(hexOf(0, dataEnd), "Data", "Body of an effect we do not decode field-by-field yet.", SegmentKind.DATA)
+            if (dataEnd > 3) out += Segment(hexOf(3, dataEnd), "Data", "Body of an effect we do not decode field-by-field yet.", SegmentKind.DATA)
         }
         if (hasTail) {
             val vib = v.last().toInt() and 0x0F
@@ -212,6 +217,19 @@ object DisneyTlv {
             )
         }
         return out
+    }
+
+    /** Body byte 1 is timing: bits 0-3 count, bit 6 ×3.1 s else ×1.5 s, bits 4-5 fade s, bit 7 always-on. */
+    fun timingCaption(b: Int): String {
+        if ((b shr 7) and 1 == 1) return "always on"
+        val secs = (b and 0x0F) * if ((b shr 6) and 1 == 1) 3.1f else 1.5f
+        val fade = (b shr 4) and 0x03
+        return "on for ~${"%.0f".format(secs)} s" + if (fade > 0) ", ${fade} s fade-out" else ""
+    }
+
+    private fun headerCaption(v: ByteArray): String {
+        val t = v.getOrNull(1)?.toInt()?.and(0xFF)
+        return "Sub-code, then timing byte" + (t?.let { " (${timingCaption(it)})" } ?: "") + ", then flags."
     }
 
     fun pingName(valueHex: String): String = when (valueHex) {
@@ -229,10 +247,14 @@ object DisneyTlv {
         0x09 -> "5-LED rainbow"
         0x0B -> "Circle spin"
         0x0C -> "Complex animation"
-        0x0E -> "Show control"
-        0x0F -> "Alternating strobe"
-        0x11 -> "Palette cross-fade"
-        0x14 -> "Show control (E914)"
+        0x08 -> "Custom RGB colour"
+        0x0E -> "Per-zone twinkle / flash"
+        0x0F -> "Candles / pulse"
+        0x10 -> "Alternating"
+        0x11 -> "Two-colour fade / pulse burst"
+        0x12 -> "Rotating colours"
+        0x13 -> "Corner-pair alternate"
+        0x14 -> "Repeating fade"
         else -> "Show control (E9%02X)".format(length)
     }
 
@@ -242,7 +264,10 @@ object DisneyTlv {
         0x06 -> 2
         0x09 -> 5
         0x0B -> 7
+        0x0E -> 5
         0x11 -> 2
+        0x12 -> 5
+        0x13 -> 3
         else -> 0
     }
 
@@ -250,6 +275,9 @@ object DisneyTlv {
         0x06 -> if (slot == 0) "Inner colour" else "Outer colour"
         0x11 -> if (slot == 0) "Fade from" else "Fade to"
         0x0B -> "Pattern ${slot + 1}"
+        0x0E -> "Zone ${slot + 1}"
+        0x12 -> "Zone ${listOf(2, 3, 4, 5, 1)[slot]}"
+        0x13 -> listOf("Centre", "Pair B", "Pair A")[slot]
         else -> if (slots == 1) "Colour" else "Colour ${slot + 1}"
     }
 }
