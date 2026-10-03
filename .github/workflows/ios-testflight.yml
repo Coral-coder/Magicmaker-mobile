@@ -89,7 +89,7 @@ jobs:
       UPLOAD: ${{ needs.plan.outputs.upload }}
       PROJECT: "MagicMaker.xcodeproj"
       SCHEME: "MagicMaker"
-      BUNDLE_ID: "com.lightwave.mmios"
+      BUNDLE_ID: "Com.lightwave.mmios"
       TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
