@@ -774,10 +774,12 @@ struct RemoteLabView: View {
                     .font(MMTheme.techHeader())
                     .foregroundStyle(MMTheme.cyan)
 
+                // The builder never transmits. It only fills the hex field; SEND below is the
+                // single thing on this screen that puts a packet on the air.
                 LabBuilderPanel(
                     enabled: vm.remoteLinkReady,
-                    onHexBuilt: { vm.androidLabHex = $0 },
-                    onTransmit: { vm.transmitAndroidHex($0) }
+                    loadedHex: vm.androidLabHex,
+                    onHexBuilt: { vm.androidLabHex = $0 }
                 )
 
                 DisclosureGroup(isExpanded: $remoteUI.txSettingsExpanded) {
@@ -817,6 +819,9 @@ struct RemoteLabView: View {
                         .foregroundStyle(MMTheme.cyan)
                 }
 
+                Text("PACKET TO SEND")
+                    .font(MMTheme.techLabel(9))
+                    .foregroundStyle(MMTheme.cyanDim)
                 TextField("HEX (8301…)", text: $vm.androidLabHex)
                     .font(MMTheme.techLabel())
                     .foregroundStyle(MMTheme.textPrimary)
@@ -825,13 +830,24 @@ struct RemoteLabView: View {
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(MMTheme.panelLine, lineWidth: 0.5))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                    .disabled(!vm.remoteLinkReady)
 
-                MMPrimaryButton(
-                    title: "Send",
-                    enabled: vm.remoteLinkReady && !vm.androidLabHex.isEmpty,
-                    action: { vm.transmitAndroidHex(vm.androidLabHex) }
-                )
+                // The one and only transmit control in the Lab.
+                Button {
+                    vm.transmitAndroidHex(vm.androidLabHex)
+                } label: {
+                    Text("SEND")
+                        .font(MMTheme.techHeader())
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(MMTheme.cyan)
+                .disabled(!vm.remoteLinkReady || vm.androidLabHex.isEmpty
+                          || HexUtils.legacyAdvertiseRejectReason(vm.androidLabHex) != nil)
+                if !vm.remoteLinkReady {
+                    Text("LINK NOT READY — CONNECT A RELAY ON THE LINK TAB TO SEND")
+                        .font(MMTheme.techLabel(9))
+                        .foregroundStyle(MMTheme.amber)
+                }
 
                 labMbleSection
             }
