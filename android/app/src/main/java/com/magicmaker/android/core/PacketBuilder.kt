@@ -79,12 +79,24 @@ object PacketBuilder {
         tail(vib),
     )
 
-    /** action=circle — rotating ring (E90B). */
-    fun circle(vib: Int = Vibration.OFF): String = pkt(
-        0x83, 0x01, 0xE9, 0x0B, 0x0B, 0x0F, 0x0F,
-        0x5C, 0x5D, 0x48, 0xA5, 0xD1, 0x45, 0x32,
-        tail(vib),
-    )
+    /**
+     * The seven pattern bytes of the circle body. Each decodes like every other colour byte in
+     * the protocol — low 5 bits a palette index, high bits a slot flag: 5C White, 5D Off, 48 Pink,
+     * A5 Bright Purple, D1 Yellow Orange, 45 Bright Purple, 32 Lime. Figment's rotating dual-colour
+     * effect classifies as this same shape, so the colours are editable, flags preserved.
+     */
+    val CIRCLE_PATTERN = intArrayOf(0x5C, 0x5D, 0x48, 0xA5, 0xD1, 0x45, 0x32)
+
+    /** action=circle — rotating ring (E90B), default pattern colours. */
+    fun circle(vib: Int = Vibration.OFF): String = circle(emptyList(), vib)
+
+    /** Circle with the pattern bytes' palette indexes replaced; each byte keeps its own flag bits. */
+    fun circle(colors: List<Int>, vib: Int): String {
+        val pattern = CIRCLE_PATTERN.mapIndexed { i, b ->
+            colors.getOrNull(i)?.let { (b and 0xE0) or (it and 0x1F) } ?: b
+        }
+        return pkt(0x83, 0x01, 0xE9, 0x0B, 0x0B, 0x0F, 0x0F, *pattern.toIntArray(), tail(vib))
+    }
 
     /** action=crossfade */
     fun crossfade(

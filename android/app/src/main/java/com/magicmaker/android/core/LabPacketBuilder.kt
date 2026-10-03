@@ -86,8 +86,8 @@ object LabPacketBuilder {
     fun buildRainbow(c1: Int, c2: Int, c3: Int, c4: Int, c5: Int, vibEnabled: Boolean, vibPattern: Int): String =
         PacketBuilder.rainbow5(c1, c2, c3, c4, c5, vib(vibEnabled, vibPattern))
 
-    fun buildCircle(vibEnabled: Boolean, vibPattern: Int): String =
-        PacketBuilder.circle(vib(vibEnabled, vibPattern))
+    fun buildCircle(vibEnabled: Boolean, vibPattern: Int, colors: List<Int> = emptyList()): String =
+        PacketBuilder.circle(colors, vib(vibEnabled, vibPattern))
 
     fun buildPing(): String = PacketBuilder.WAKEUP_PING
 
@@ -124,7 +124,7 @@ object LabPacketBuilder {
         DUAL("Dual Color", "Two colors — inner / outer ring.", 2, true),
         CROSSFADE("Crossfade", "Smooth fade from one color to another.", 2, true),
         RAINBOW("Rainbow / Custom", "Five LED colors — pick every one for your own animation.", 5, true),
-        CIRCLE("Circle Spin", "Rotating ring animation.", 0, true),
+        CIRCLE("Circle Spin", "Rotating ring — seven pattern colours you can change (Figment is this shape).", 7, true),
         VIBRATE("Vibrate Only", "Haptic buzz, no color change.", 0, true),
         SHOW("Park Show", "A real show effect captured in the park — lightning, sparkle, cannon…", 0, false),
         PING("Wake Ping", "Wakes nearby bands so they hear the next command.", 0, false),
@@ -143,6 +143,7 @@ object LabPacketBuilder {
             PacketBuilder.Color.BLUE,
             PacketBuilder.Color.PURPLE,
         )
+        LabPacketType.CIRCLE -> PacketBuilder.CIRCLE_PATTERN.map { it and 0x1F }
         else -> emptyList()
     }
 
@@ -194,7 +195,7 @@ object LabPacketBuilder {
                 c(4, PacketBuilder.Color.PURPLE),
                 vibEnabled, vibPattern,
             )
-            LabPacketType.CIRCLE -> buildCircle(vibEnabled, vibPattern)
+            LabPacketType.CIRCLE -> buildCircle(vibEnabled, vibPattern, colors)
             LabPacketType.VIBRATE -> buildVibrate(vibEnabled, vibPattern)
             LabPacketType.SHOW -> showEffects.getOrElse(showIndex) { showEffects.first() }.second
             LabPacketType.PING -> buildPing()
@@ -309,7 +310,7 @@ object LabPacketBuilder {
             0x05 -> colorsAt(1)?.let { Decoded(LabPacketType.PRESET, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             0x06 -> colorsAt(2)?.let { Decoded(LabPacketType.DUAL, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             0x09 -> colorsAt(5)?.let { Decoded(LabPacketType.RAINBOW, it, vibEnabled, vibPattern, h, framing) } ?: raw()
-            0x0B -> Decoded(LabPacketType.CIRCLE, emptyList(), vibEnabled, vibPattern, h, framing)
+            0x0B -> colorsAt(7)?.let { Decoded(LabPacketType.CIRCLE, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             0x11 -> colorsAt(2)?.let { Decoded(LabPacketType.CROSSFADE, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             else -> raw()
         }

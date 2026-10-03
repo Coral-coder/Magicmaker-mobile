@@ -241,6 +241,7 @@ object DisneyTlv {
         0x05 -> 1
         0x06 -> 2
         0x09 -> 5
+        0x0B -> 7
         0x11 -> 2
         else -> 0
     }
@@ -248,6 +249,7 @@ object DisneyTlv {
     private fun colorSlotTitle(length: Int, slot: Int, slots: Int): String = when (length) {
         0x06 -> if (slot == 0) "Inner colour" else "Outer colour"
         0x11 -> if (slot == 0) "Fade from" else "Fade to"
+        0x0B -> "Pattern ${slot + 1}"
         else -> if (slots == 1) "Colour" else "Colour ${slot + 1}"
     }
 }

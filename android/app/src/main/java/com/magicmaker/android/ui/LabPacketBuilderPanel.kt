@@ -660,6 +660,7 @@ private fun ColorSlots(
     val slotLabels: (Int) -> String = when (type) {
         LabPacketBuilder.LabPacketType.DUAL -> { i -> if (i == 0) "INNER" else "OUTER" }
         LabPacketBuilder.LabPacketType.CROSSFADE -> { i -> if (i == 0) "FROM" else "TO" }
+        LabPacketBuilder.LabPacketType.CIRCLE -> { i -> "P${i + 1}" }
         else -> { i -> "${i + 1}" }
     }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
