@@ -40,7 +40,7 @@ python3 tools/generate_xcode_project.py
 
 ## TestFlight from GitHub Actions
 
-`.github/workflows/ios-testflight.yml` archives the app (bundle ID `com.lightweight.MMIOS`)
+`.github/workflows/ios-testflight.yml` archives the app (bundle ID `com.lightwave.MMIOS`)
 and uploads it to TestFlight. Pushes to `main` are controlled by markers in the commit message:
 
 | Commit message | What happens |
@@ -63,7 +63,7 @@ Signing is automatic: the App Store Connect API key lets Xcode create and use th
 certificate and profiles. The secrets (`APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`,
 `ASC_KEY_P8`, and optionally `DEV_CERT_P12` / `DEV_CERT_PASSWORD`) are the same ones the ePTT
 repo uses; copy them here with its **Actions → Share secrets** workflow (repos:
-`Magicmaker-mobile`). The app record for `com.lightweight.MMIOS` must exist in App Store
+`Magicmaker-mobile`). The app record for `com.lightwave.MMIOS` must exist in App Store
 Connect before the first upload.
 
 ## Park checklist
