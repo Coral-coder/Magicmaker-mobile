@@ -768,6 +768,20 @@ struct RemoteLabView: View {
     @State private var mbleToken = ""
 
     var body: some View {
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                // Pinned: top sixth of the screen, always visible, animating whatever packet the
+                // Lab currently holds. The Lab itself scrolls independently beneath it.
+                BandPreviewView(hex: vm.androidLabHex)
+                    .frame(height: geo.size.height / 6)
+                Rectangle().fill(MMTheme.panelLine).frame(height: 0.5)
+                labScroll
+            }
+        }
+        .background(MMTheme.navy)
+    }
+
+    private var labScroll: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 Text("LAB")
