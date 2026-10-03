@@ -395,7 +395,7 @@
 					"-ld_classic",
 				);
 				MARKETING_VERSION = 1.3.0;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				PRODUCT_BUNDLE_IDENTIFIER = Com.lightwave.mmios;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -482,7 +482,7 @@
 					"-ld_classic",
 				);
 				MARKETING_VERSION = 1.3.0;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				PRODUCT_BUNDLE_IDENTIFIER = Com.lightwave.mmios;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
