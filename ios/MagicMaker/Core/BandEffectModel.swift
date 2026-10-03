@@ -62,7 +62,7 @@ struct BandEffectModel: Equatable {
         switch e.declared {
         case 0x05: return BandEffectModel(kind: .single, colors: palette(1), buzz: buzz, approximate: false, note: "Solid colour")
         case 0x06: return BandEffectModel(kind: .dual, colors: palette(2), buzz: buzz, approximate: false, note: "Inner / outer")
-        case 0x09: return BandEffectModel(kind: .rainbow, colors: palette(5), buzz: buzz, approximate: false, note: "Five LED colours")
+        case 0x09: return BandEffectModel(kind: .rainbow, colors: palette(5), buzz: buzz, approximate: true, note: "One colour per LED — corner order approximate")
         case 0x0B: return BandEffectModel(kind: .circle, colors: palette(7), buzz: buzz, approximate: true, note: "Rotation speed/direction approximate")
         case 0x11:
             if body.contains("55515BF00F10374894D13D0508") {

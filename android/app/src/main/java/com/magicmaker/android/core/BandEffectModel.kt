@@ -48,7 +48,7 @@ data class BandEffectModel(
             return when (e.declaredLength) {
                 0x05 -> BandEffectModel(Kind.SINGLE, palette(1), buzz, false, "Solid colour")
                 0x06 -> BandEffectModel(Kind.DUAL, palette(2), buzz, false, "Inner / outer")
-                0x09 -> BandEffectModel(Kind.RAINBOW, palette(5), buzz, false, "Five LED colours")
+                0x09 -> BandEffectModel(Kind.RAINBOW, palette(5), buzz, true, "One colour per LED — corner order approximate")
                 0x0B -> BandEffectModel(Kind.CIRCLE, palette(7), buzz, true, "Rotation speed/direction approximate")
                 0x11 -> if (body.contains("55515BF00F10374894D13D0508")) {
                     BandEffectModel(Kind.COMPLEX, emptyList(), buzz, true, "Pirate Cannon — motion approximate")

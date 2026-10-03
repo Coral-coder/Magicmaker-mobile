@@ -1,14 +1,15 @@
 import SwiftUI
 
-/// What we expect the packet to look like on the band: a ring of LEDs around the icon disc,
-/// animating the decoded `BandEffectModel` in a loop. Pinned above the Lab so it is always
-/// visible and follows every change to the packet. Colours are exact; where the motion is a
-/// guess the model says so and the caption shows APPROX.
+/// What we expect the packet to look like on the band. A MagicBand+ has five LEDs: one at each
+/// corner of the face and one in the centre. Dual colour is centre vs corners, the 5-LED rainbow
+/// is one colour per LED, circle chases around the four corners. Pinned above the Lab so it is
+/// always visible and follows every change to the packet. Colours are exact; where the motion or
+/// the LED order is a guess the model says so and the caption shows APPROX.
 struct BandPreviewView: View {
     let hex: String
 
-    private let leds = 12
     private let period: Double = 2.4
+    private let center = 4
 
     var body: some View {
         let model = BandEffectModel.from(hex)
@@ -16,25 +17,28 @@ struct BandPreviewView: View {
             let t = (context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)) / period
             HStack(spacing: 12) {
                 Canvas { ctx, size in
-                    let cx = size.width / 2, cy = size.height / 2
-                    let ringR = min(size.width, size.height) * 0.40
-                    let ledR = min(size.width, size.height) * 0.065
+                    let w = min(size.width, size.height)
+                    let face = CGRect(x: w * 0.08, y: w * 0.08, width: w * 0.84, height: w * 0.84)
                     let dim = Color(red: 0.08, green: 0.14, blue: 0.23)
+                    let ledR = w * 0.085
 
-                    let centre: Color
-                    switch model.kind {
-                    case .dual: centre = model.colors.first.map { starlightGlowColor($0) } ?? dim
-                    case .single, .wand: centre = model.colors.first.map { starlightGlowColor($0).opacity(0.35) } ?? dim
-                    default: centre = dim
-                    }
-                    ctx.fill(Path(ellipseIn: CGRect(x: cx - ringR * 0.45, y: cy - ringR * 0.45, width: ringR * 0.9, height: ringR * 0.9)), with: .color(centre))
+                    let facePath = Path(roundedRect: face, cornerRadius: w * 0.16)
+                    ctx.fill(facePath, with: .color(Color(red: 0.043, green: 0.078, blue: 0.14)))
+                    ctx.stroke(facePath, with: .color(MMTheme.panelLine), lineWidth: w * 0.012)
 
-                    for i in 0..<leds {
-                        let a = 2 * Double.pi * Double(i) / Double(leds) - Double.pi / 2
-                        let p = CGPoint(x: cx + ringR * CGFloat(cos(a)), y: cy + ringR * CGFloat(sin(a)))
-                        let c = ledColor(model, i, leds, t) ?? dim
+                    // LED 0..3 corners clockwise from top-left; 4 centre.
+                    let inset = w * 0.20
+                    let points = [
+                        CGPoint(x: face.minX + inset, y: face.minY + inset),
+                        CGPoint(x: face.maxX - inset, y: face.minY + inset),
+                        CGPoint(x: face.maxX - inset, y: face.maxY - inset),
+                        CGPoint(x: face.minX + inset, y: face.maxY - inset),
+                        CGPoint(x: face.midX, y: face.midY),
+                    ]
+                    for (i, p) in points.enumerated() {
+                        let c = ledColor(model, i, t) ?? dim
                         if c != dim {
-                            ctx.fill(Path(ellipseIn: CGRect(x: p.x - ledR * 2.1, y: p.y - ledR * 2.1, width: ledR * 4.2, height: ledR * 4.2)), with: .color(c.opacity(0.28)))
+                            ctx.fill(Path(ellipseIn: CGRect(x: p.x - ledR * 2.2, y: p.y - ledR * 2.2, width: ledR * 4.4, height: ledR * 4.4)), with: .color(c.opacity(0.30)))
                         }
                         ctx.fill(Path(ellipseIn: CGRect(x: p.x - ledR, y: p.y - ledR, width: ledR * 2, height: ledR * 2)), with: .color(c))
                     }
@@ -66,18 +70,21 @@ struct BandPreviewView: View {
         .background(MMTheme.navy)
     }
 
-    /// Colour of LED `i` of `n` at phase `t` in 0..1, or nil for off. Pure function of the model.
-    private func ledColor(_ m: BandEffectModel, _ i: Int, _ n: Int, _ t: Double) -> Color? {
+    /// Colour of LED `i` (0..3 corners clockwise from top-left, 4 centre) at phase `t`, or nil for off.
+    private func ledColor(_ m: BandEffectModel, _ i: Int, _ t: Double) -> Color? {
         func pal(_ idx: Int) -> Color { starlightGlowColor(idx) }
         let breathe = 0.75 + 0.25 * sin(2 * Double.pi * t)
+        let isCenter = i == center
         switch m.kind {
         case .none, .ping: return nil
         case .single, .wand: return m.colors.first.map { pal($0).opacity(breathe) }
-        case .dual: return m.colors.count > 1 ? pal(m.colors[1]) : nil
+        case .dual:
+            let idx = isCenter ? m.colors.first : (m.colors.count > 1 ? m.colors[1] : nil)
+            return idx.map { pal($0) }
         case .rainbow:
             guard !m.colors.isEmpty else { return nil }
             let shift = m.approximate ? Int(t * Double(m.colors.count)) : 0
-            return pal(m.colors[(i * m.colors.count / n + shift) % m.colors.count])
+            return pal(m.colors[(i + shift) % m.colors.count])
         case .crossfade:
             guard let a = m.colors.first else { return nil }
             let b = m.colors.count > 1 ? m.colors[1] : a
@@ -85,10 +92,11 @@ struct BandPreviewView: View {
             return blend(pal(a), pal(b), f)
         case .circle:
             guard !m.colors.isEmpty else { return nil }
-            let step = Int(t * Double(m.colors.count) * 2)
-            let idx = ((i + step) % n) * m.colors.count / n
-            let c = pal(m.colors[idx % m.colors.count])
-            return (i + step) % n == 0 ? c : c.opacity(0.55)
+            if isCenter { return pal(m.colors[0]).opacity(0.6) }
+            let step = Int(t * 8)
+            let lead = step % 4
+            let c = pal(m.colors[(i + step) % m.colors.count])
+            return i == lead ? c : c.opacity(0.35)
         case .lightning:
             let phase = (t * 3).truncatingRemainder(dividingBy: 1)
             return (phase < 0.08 || (phase > 0.16 && phase < 0.22)) ? .white : pal(0x02).opacity(0.25)
@@ -96,13 +104,14 @@ struct BandPreviewView: View {
             let r = sin(Double(i) * 12.9898 + t * 40) * 43758.5453
             let v = r - floor(r)
             let base = m.colors.isEmpty ? Color.white : pal(m.colors[i % m.colors.count])
-            return v > 0.6 ? base : base.opacity(0.12)
+            return v > 0.55 ? base : base.opacity(0.12)
         case .strobe:
             let half = (t * 8).truncatingRemainder(dividingBy: 1) < 0.5
             let c = m.colors.first.map { pal($0) } ?? .white
-            return ((i % 2 == 0) == half) ? c : c.opacity(0.1)
+            let group = isCenter ? 0 : i % 2
+            return ((group == 0) == half) ? c : c.opacity(0.1)
         case .complex:
-            let v = 0.5 + 0.5 * sin(2 * Double.pi * t + Double(i) * 0.9)
+            let v = 0.5 + 0.5 * sin(2 * Double.pi * t + Double(i) * 1.3)
             return blend(pal(0x15), pal(0x0F), v)
         }
     }
