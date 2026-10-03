@@ -21,7 +21,9 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.magicmaker.android.core.BandEffectModel
+import com.magicmaker.android.core.HexUtils
 import com.magicmaker.android.core.LabPacketBuilder
+import com.magicmaker.android.core.MagicClassifier
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -34,7 +36,7 @@ import kotlin.math.sin
  * the LED order is a guess the model says so and the caption shows it.
  */
 @Composable
-fun BandPreview(hex: String, modifier: Modifier = Modifier) {
+fun BandPreview(hex: String, modifier: Modifier = Modifier, compact: Boolean = false, title: String = "BAND PREVIEW") {
     val model = remember(hex) { runCatching { BandEffectModel.from(hex) }.getOrDefault(BandEffectModel.EMPTY) }
     val transition = rememberInfiniteTransition(label = "band")
     val t by transition.animateFloat(
@@ -84,7 +86,17 @@ fun BandPreview(hex: String, modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("BAND PREVIEW", style = techLabel(), color = AppColors.TextDim)
+            Text(title, style = techLabel(), color = AppColors.TextDim)
+            if (compact) {
+                // Scan-page strip: what it is and the bytes, nothing else.
+                Text(
+                    (MagicClassifier.classify(hex)?.label ?: model.note).uppercase(),
+                    style = techHeader(), color = if (model.kind == BandEffectModel.Kind.NONE) AppColors.TextDim else AppColors.Cyan,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                Text(HexUtils.canonicalHex(hex), style = techLabel(), color = AppColors.CyanDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                return@Column
+            }
             Text(
                 model.kind.name.replace('_', ' ').let { if (it == "NONE") "NO EFFECT" else it },
                 style = techHeader(), color = if (model.kind == BandEffectModel.Kind.NONE) AppColors.TextDim else AppColors.Cyan,
@@ -205,4 +217,20 @@ private fun ledColor(m: BandEffectModel, z: Int, t: Float): Color? {
             lerp(rest ?: labSwatchColor(0x15), labSwatchColor(0x0F), v)
         }
     }
+}
+
+/**
+ * Scan page: the last packet heard, as the band would show it. Small — one row — and always at
+ * the top, so you can watch what is arriving without reading hex.
+ */
+@Composable
+fun LastHeardStrip(hex: String, heard: Int, modifier: Modifier = Modifier) {
+    if (hex.isBlank()) {
+        Row(
+            modifier.fillMaxWidth().background(AppColors.Navy).padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) { Text("LAST HEARD · NOTHING YET", style = techLabel(), color = AppColors.TextDim) }
+        return
+    }
+    BandPreview(hex, modifier.height(64.dp), compact = true, title = "LAST HEARD · #$heard")
 }

@@ -1067,6 +1067,8 @@ struct RemoteScanTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            LastHeardStrip()
+            Rectangle().fill(MMTheme.panelLine).frame(height: 0.5)
             scanExpandBar
             if remoteUI.scanControlsExpanded {
                 ScrollView {

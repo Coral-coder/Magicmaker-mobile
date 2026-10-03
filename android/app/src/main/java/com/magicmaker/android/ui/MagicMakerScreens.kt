@@ -991,6 +991,8 @@ private fun ScanTab(state: ServiceState.UiState, onLoadInLab: (String, String) -
 
     WideScreenColumns(
         controls = {
+            LastHeardStrip(state.lastHeardHex, state.packetsHeard)
+            HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
             if (!batteryOk) {
                 Surface(color = AppColors.Amber.copy(alpha = 0.12f), shape = RectangleShape) {
                     Row(

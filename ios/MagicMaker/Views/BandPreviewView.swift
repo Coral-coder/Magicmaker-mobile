@@ -6,6 +6,8 @@ import SwiftUI
 /// where the motion or LED order is reproduced from other decoders the caption shows APPROX.
 struct BandPreviewView: View {
     let hex: String
+    var compact: Bool = false
+    var title: String = "BAND PREVIEW"
 
     private let period: Double = 2.4
     private let z3 = 2   // centre zone index
@@ -45,7 +47,19 @@ struct BandPreviewView: View {
                 .aspectRatio(1, contentMode: .fit)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("BAND PREVIEW").font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+                    Text(title).font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+                    if compact {
+                        // Scan-page strip: what it is and the bytes, nothing else.
+                        Text((MagicClassifier.classify(hex)?.label ?? model.note).uppercased())
+                            .font(MMTheme.techHeader())
+                            .foregroundStyle(model.kind == .none ? MMTheme.textDim : MMTheme.cyan)
+                            .lineLimit(1)
+                        Text(HexUtils.canonicalHex(hex))
+                            .font(MMTheme.techLabel(9))
+                            .foregroundStyle(MMTheme.cyanDim)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
                     Text(model.kind == .none ? "NO EFFECT" : kindName(model.kind))
                         .font(MMTheme.techHeader())
                         .foregroundStyle(model.kind == .none ? MMTheme.textDim : MMTheme.cyan)
@@ -63,6 +77,7 @@ struct BandPreviewView: View {
                         Text("BUZZ · \(name.uppercased())")
                             .font(MMTheme.techLabel(9))
                             .foregroundStyle(on ? MMTheme.cyan : MMTheme.cyanDim)
+                    }
                     }
                 }
                 Spacer(minLength: 0)
@@ -164,5 +179,37 @@ struct BandPreviewView: View {
         ub.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
         let k = CGFloat(f)
         return Color(red: r1 + (r2 - r1) * k, green: g1 + (g2 - g1) * k, blue: b1 + (b2 - b1) * k)
+    }
+}
+
+/// Scan page: the last packet heard (from the phone's own scan or the Android relay), as the band
+/// would show it. One row, always at the top.
+struct LastHeardStrip: View {
+    @EnvironmentObject var vm: AppViewModel
+
+    private var last: (hex: String, count: Int)? {
+        let local = vm.livePackets.max(by: { $0.timestampMs < $1.timestampMs })
+        let relay = vm.androidLivePackets.max(by: { $0.timestampMs < $1.timestampMs })
+        let count = vm.livePackets.count + vm.androidLivePackets.count
+        switch (local, relay) {
+        case let (l?, r?): return (l.timestampMs >= r.timestampMs ? l.hex : r.hex, count)
+        case let (l?, nil): return (l.hex, count)
+        case let (nil, r?): return (r.hex, count)
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        if let last {
+            BandPreviewView(hex: last.hex, compact: true, title: "LAST HEARD · \(last.count) LIVE")
+                .frame(height: 64)
+        } else {
+            HStack {
+                Text("LAST HEARD · NOTHING YET").font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(MMTheme.navy)
+        }
     }
 }
