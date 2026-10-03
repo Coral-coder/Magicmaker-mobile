@@ -725,14 +725,19 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
     var selectedAddr by remember(selectedPath) { mutableStateOf("") }
     var bandOnly by remember(selectedPath) { mutableStateOf(false) }
     var analyzing by remember(selectedPath) { mutableStateOf(false) }
+    // Guest-band telemetry and pings are most of any park capture. Hidden by default, but a
+    // recording that is nothing else used to analyse to an empty list with no way to see why.
+    var hideNoise by remember(selectedPath) { mutableStateOf(true) }
     var namingTarget by remember { mutableStateOf<AnalyzedPacket?>(null) }
-    val analyzed = remember(packets, selectedCats, selectedAddr, bandOnly) {
-        packets.asSequence()
-            .filter { selectedCats.isEmpty() || it.category in selectedCats }
+    val filtered = remember(packets, selectedCats, selectedAddr, bandOnly) {
+        packets.filter { selectedCats.isEmpty() || it.category in selectedCats }
             .filter { selectedAddr.isEmpty() || it.sourceAddress == selectedAddr }
             .filter { !bandOnly || it.isBand }
-            // Hide guest-band telemetry and pings — they're high-volume noise, not effects.
-            .filter { !MagicClassifier.isLibraryNoise(it.hex) }
+    }
+    val noiseCount = remember(filtered) { filtered.count { MagicClassifier.isLibraryNoise(it.hex) } }
+    val analyzed = remember(filtered, hideNoise) {
+        filtered.asSequence()
+            .filter { !hideNoise || !MagicClassifier.isLibraryNoise(it.hex) }
             .groupBy { MagicClassifier.groupKey(it.hex) }
             .map { (_, list) ->
                 val sample = list.first()
@@ -897,10 +902,19 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
                             ) { Text("ADD ALL → LIB", style = techLabel(), color = AppColors.Cyan) }
                         }
                         if (analyzing) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "HIDE BANDS & PINGS ($noiseCount OF ${filtered.size})",
+                                    style = techLabel(), color = AppColors.TextDim,
+                                )
+                                Switch(checked = hideNoise, onCheckedChange = { hideNoise = it })
+                            }
                             Text(
-                                "${analyzed.size} UNIQUE (pings & other bands hidden) · TAP = TX · NAME = ADD",
+                                if (analyzed.isEmpty() && noiseCount > 0)
+                                    "EVERYTHING IN THIS FILTER IS BAND TELEMETRY OR PINGS — FLIP THE SWITCH TO SEE IT"
+                                else "${analyzed.size} UNIQUE · TAP = TX · NAME = ADD",
                                 style = techLabel(),
-                                color = AppColors.TextDim,
+                                color = if (analyzed.isEmpty() && noiseCount > 0) AppColors.Amber else AppColors.TextDim,
                             )
                             analyzed.take(300).forEach { row ->
                                 Row(
