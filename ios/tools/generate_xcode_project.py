@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PROJECT_NAME = "MagicMaker"
-BUNDLE_ID = "com.magicmaker.ios"
+BUNDLE_ID = "com.lightweight.MMIOS"
 
 SWIFT_SOURCES = [
     "MagicMaker/MagicMakerApp.swift",

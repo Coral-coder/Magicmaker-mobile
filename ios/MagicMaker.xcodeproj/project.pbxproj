@@ -386,7 +386,9 @@
 					"$(inherited)",
 					"-ld_classic",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.magicmaker.ios;
+				MARKETING_VERSION = 1.3.0;
+				CURRENT_PROJECT_VERSION = 1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lightweight.MMIOS;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -471,7 +473,9 @@
 					"$(inherited)",
 					"-ld_classic",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.magicmaker.ios;
+				MARKETING_VERSION = 1.3.0;
+				CURRENT_PROJECT_VERSION = 1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lightweight.MMIOS;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
