@@ -236,22 +236,91 @@ struct LabBuilderPanel: View {
     }
 }
 
+/// Picker for palette colours, buzz patterns and shows. A presented sheet with its own List, not
+/// a `Menu`: the Lab view re-renders every 2 s (relay status poll) and on every heard packet, and
+/// each re-render rebuilt the open menu and threw its scroll back to the top. The sheet's list
+/// owns its scroll position, opens at the current selection, shows a swatch for palette rows and
+/// gives 32 options rows a thumb can hit.
 private struct LabPalettePicker: View {
     let label: String
     @Binding var selection: Int
     let options: [(Int, String)]
 
+    @State private var open = false
+
     var body: some View {
-        Menu {
-            ForEach(options, id: \.0) { id, name in
-                Button(name) { selection = id }
-            }
+        Button {
+            open = true
         } label: {
-            Text("\(label): \(options.first(where: { $0.0 == selection })?.1 ?? "?")")
-                .font(MMTheme.techLabel(9))
-                .foregroundStyle(MMTheme.cyan)
-                .lineLimit(1)
+            HStack(spacing: 4) {
+                if let c = swatch(for: currentName) {
+                    Circle().fill(c).frame(width: 9, height: 9)
+                }
+                Text("\(label): \(currentName)")
+                    .font(MMTheme.techLabel(9))
+                    .foregroundStyle(MMTheme.cyan)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(MMTheme.textDim)
+            }
         }
+        .buttonStyle(.bordered)
+        .tint(MMTheme.cyanDim)
         .disabled(options.isEmpty)
+        .sheet(isPresented: $open) {
+            NavigationStack {
+                ScrollViewReader { proxy in
+                    List {
+                        ForEach(options, id: \.0) { id, name in
+                            Button {
+                                selection = id
+                                open = false
+                            } label: {
+                                HStack(spacing: 10) {
+                                    if let c = swatch(for: name) {
+                                        RoundedRectangle(cornerRadius: 3).fill(c).frame(width: 16, height: 16)
+                                    }
+                                    Text(name)
+                                        .font(MMTheme.techLabel(12))
+                                        .foregroundStyle(id == selection ? MMTheme.cyan : MMTheme.textPrimary)
+                                    Spacer()
+                                    if id == selection {
+                                        Image(systemName: "checkmark").foregroundStyle(MMTheme.cyan)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .id(id)
+                            .listRowBackground(id == selection ? MMTheme.cyan.opacity(0.12) : MMTheme.panel)
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .background(MMTheme.navy)
+                    .onAppear { proxy.scrollTo(selection, anchor: .center) }
+                }
+                .navigationTitle(label.uppercased())
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { open = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private var currentName: String {
+        options.first(where: { $0.0 == selection })?.1 ?? "?"
+    }
+
+    /// Palette labels are "#1B White" — pull the index out for a swatch; nil for non-colours.
+    private func swatch(for optionLabel: String) -> Color? {
+        guard optionLabel.hasPrefix("#"), optionLabel.count >= 3 else { return nil }
+        let hex = optionLabel.dropFirst().prefix(2)
+        guard let idx = Int(hex, radix: 16) else { return nil }
+        return starlightGlowColor(idx)
     }
 }
