@@ -40,16 +40,17 @@ python3 tools/generate_xcode_project.py
 
 ## TestFlight from GitHub Actions
 
-`.github/workflows/ios-testflight.yml` archives the app (bundle ID `com.lightwave.MMIOS`)
-and uploads it to TestFlight. Pushes to `main` are controlled by markers in the commit message:
+`.github/workflows/ios-testflight.yml` archives the app (bundle ID `com.lightwave.mmios`)
+and uploads it to TestFlight. Pushes to `main` are controlled by markers in the first line of
+the commit message:
 
-| Commit message | What happens |
+| Commit subject | What happens |
 | --- | --- |
 | no marker | nothing |
 | contains `*b` | archive and sign only, as a check; nothing is uploaded |
 | contains `*u` | archive and upload to TestFlight: same version, build number plus one |
 
-- **New version:** put `*u` in the commit message, tag the commit and push both:
+- **New version:** put `*u` in the commit subject, tag the commit and push both:
   `git tag v1.4.0 && git push origin main v1.4.0`. That uploads 1.4.0, build 1.
 - **By hand:** **Actions → iOS TestFlight → Run workflow** always uploads. Its version and
   build fields are optional overrides.
@@ -63,7 +64,7 @@ Signing is automatic: the App Store Connect API key lets Xcode create and use th
 certificate and profiles. The secrets (`APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`,
 `ASC_KEY_P8`, and optionally `DEV_CERT_P12` / `DEV_CERT_PASSWORD`) are the same ones the ePTT
 repo uses; copy them here with its **Actions → Share secrets** workflow (repos:
-`Magicmaker-mobile`). The app record for `com.lightwave.MMIOS` must exist in App Store
+`Magicmaker-mobile`). The app record for `com.lightwave.mmios` must exist in App Store
 Connect before the first upload.
 
 ## Park checklist
