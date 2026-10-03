@@ -22,7 +22,7 @@ struct BandPreviewView: View {
                     let dim = Color(red: 0.08, green: 0.14, blue: 0.23)
                     let ledR = w * 0.085
 
-                    let facePath = Path(roundedRect: face, cornerRadius: w * 0.16)
+                    let facePath = Path(roundedRect: face, cornerRadius: w * 0.07)
                     ctx.fill(facePath, with: .color(Color(red: 0.043, green: 0.078, blue: 0.14)))
                     ctx.stroke(facePath, with: .color(MMTheme.panelLine), lineWidth: w * 0.012)
 

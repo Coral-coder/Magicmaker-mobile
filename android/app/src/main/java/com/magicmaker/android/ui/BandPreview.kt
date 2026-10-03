@@ -59,11 +59,11 @@ fun BandPreview(hex: String, modifier: Modifier = Modifier) {
             // The band face.
             drawRoundRect(
                 Color(0xFF0B1424), topLeft = face.topLeft, size = face.size,
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.16f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.07f),
             )
             drawRoundRect(
                 Color(0xFF1E3A5F), topLeft = face.topLeft, size = face.size,
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.16f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(w * 0.07f),
                 style = androidx.compose.ui.graphics.drawscope.Stroke(width = w * 0.012f),
             )
 
