@@ -33,52 +33,80 @@ enum MagicClassifier {
         let colors: String
         let simKey: String
 
+        // Body byte i of the E9 record sits 4 + 2i hex chars after the "E9" + length head.
+        func bodyByte(_ i: Int) -> Int? {
+            let o = pos + 4 + i * 2
+            guard o + 2 <= normalized.count else { return nil }
+            let a = normalized.index(normalized.startIndex, offsetBy: o)
+            return Int(normalized[a..<normalized.index(a, offsetBy: 2)], radix: 16)
+        }
+        func name(_ i: Int) -> String { colorPalette[(bodyByte(i) ?? 0) & 0x1F] ?? "?" }
+        let head = String(normalized[normalized.index(normalized.startIndex, offsetBy: pos)...])
+
         switch funcCode {
         case "E905":
-            let colorIdx = extractE905Color(normalized, pos: pos)
-            let name = colorPalette[colorIdx] ?? "Unknown"
-            label = name == "Off" ? "Single Color: Off" : "Single Color: \(name)"
+            let colorIdx = (bodyByte(3) ?? 0) & 0x1F
+            let n = colorPalette[colorIdx] ?? "Unknown"
+            label = n == "Off" ? "Single Color: Off" : "Single Color: \(n)"
             typeInfo = "single"
-            colors = name
+            colors = n
             simKey = "C1:\(String(format: "%02X", colorIdx))"
         case "E906":
-            let c1 = normalized.count >= pos + 12 ? Int(normalized[normalized.index(normalized.startIndex, offsetBy: pos + 10)..<normalized.index(normalized.startIndex, offsetBy: pos + 12)], radix: 16)! & 0x1F : 0
-            let c2 = normalized.count >= pos + 14 ? Int(normalized[normalized.index(normalized.startIndex, offsetBy: pos + 12)..<normalized.index(normalized.startIndex, offsetBy: pos + 14)], radix: 16)! & 0x1F : 0
-            let n1 = colorPalette[c1] ?? "?"
-            let n2 = colorPalette[c2] ?? "?"
-            label = "Dual Color: \(n2)/\(n1)"
+            // First colour byte lights the centre LED, second the four corners.
+            let c1 = (bodyByte(3) ?? 0) & 0x1F, c2 = (bodyByte(4) ?? 0) & 0x1F
+            label = "Dual Color: \(name(3)) centre / \(name(4)) corners"
             typeInfo = "dual"
-            colors = "\(n2) / \(n1)"
+            colors = "\(name(3)) / \(name(4))"
             simKey = "C2:\(String(format: "%02X", c2)):\(String(format: "%02X", c1))"
         case "E90C":
-            label = if normalized.localizedCaseInsensitiveContains("5D465BF00532374895") { "Animation: Lightning Pulse" }
-            else if normalized.localizedCaseInsensitiveContains("B1B9B5B1A2307B7DB0") { "Animation: 5-Color Cycle" }
-            else if normalized.localizedCaseInsensitiveContains("5D465BF005323748B0") { "Animation: Taste the Rainbow" }
-            else { "Animation: Complex (E90C)" }
+            if head.contains("5D465BF00532374895") { label = "Animation: Lightning Pulse" }
+            else if head.contains("B1B9B5B1A2307B7DB0") { label = "Animation: 5-Color Cycle" }
+            else if head.contains("5D465BF005323748B0") { label = "Animation: Taste the Rainbow" }
+            else { label = "Animation (E90C)" }
             typeInfo = "e90c"
-            colors = ""
-            simKey = if normalized.localizedCaseInsensitiveContains("5D465BF00532374895") { "A:LIGHTNING" }
-            else if normalized.localizedCaseInsensitiveContains("5D465BF005323748B0") { "A:RAINBOW" }
-            else { "A:E90C:\(String(normalized[normalized.index(normalized.startIndex, offsetBy: pos)..<normalized.index(normalized.startIndex, offsetBy: min(pos + 20, normalized.count))]))" }
+            colors = ((bodyByte(3) ?? 0) >> 5) == 2 ? "\(name(3)) / \(name(4))" : ""
+            simKey = head.contains("5D465BF00532374895") ? "A:LIGHTNING"
+                : head.contains("5D465BF005323748B0") ? "A:RAINBOW" : "A:E90C:\(head.prefix(20))"
         case "E90F":
-            label = "Animation: Alternating Strobe"
+            switch bodyByte(11) ?? -1 {
+            case 0x2A: label = "Candle Flicker (E90F)"
+            case 0x02: label = "Centre Pulse (E90F)"
+            default: label = "Animation (E90F)"
+            }
             typeInfo = "e90f"
-            colors = ""
-            simKey = "A:E90F:\(String(normalized[normalized.index(normalized.startIndex, offsetBy: pos)..<normalized.index(normalized.startIndex, offsetBy: min(pos + 16, normalized.count))]))"
+            colors = "\(name(3)) centre / \(name(4)) corners"
+            simKey = "A:E90F:\(head.prefix(16))"
+        case "E90B":
+            label = "Effect: Circle"; typeInfo = "e90b"; colors = ""; simKey = "A:CIRCLE"
+        case "E909":
+            label = "5-Zone Colors"; typeInfo = "e909"
+            colors = (3...7).map { name($0) }.joined(separator: " / ")
+            simKey = "A:E909"
+        case "E910":
+            label = "Comet (E910)"; typeInfo = "e910"; colors = name(6); simKey = "S:\(funcCode)"
         case "E911":
-            label = normalized.localizedCaseInsensitiveContains("55515BF00F10374894D13D0508B0") ? "Show: Pirate Cannon" : "Animation: Palette Cross-Fade"
+            let pirate = head.contains("55515BF00F10374894D13D0508")
+            label = pirate ? "Show: Pirate Cannon" : "Cross-Fade: \(name(3)) / \(name(4))"
             typeInfo = "e911"
-            colors = extractFadeColor(normalized)
-            simKey = normalized.localizedCaseInsensitiveContains("55515BF00F10374894D13D0508B0") ? "A:PIRATE_CANNON" : "A:E911:\(normalized.suffix(4))"
-        case "E90E", "E909", "E908":
-            label = "Show Control: \(funcCode)"
-            typeInfo = funcCode.lowercased()
-            colors = ""
+            colors = pirate ? "" : "\(name(3)) / \(name(4))"
+            simKey = pirate ? "A:PIRATE_CANNON" : "A:E911:\(normalized.suffix(4))"
+        case "E90E":
+            label = "Twinkle / Flash (E90E)"; typeInfo = "e90e"
+            colors = (3...7).map { name($0) }.joined(separator: " / ")
             simKey = "S:\(funcCode)"
+        case "E912":
+            label = bodyByte(2) == 0x0F ? "Rotating Colors (E912)" : "Two-Color Toggle (E912)"
+            typeInfo = "e912"; colors = (3...7).map { name($0) }.joined(separator: " / "); simKey = "S:\(funcCode)"
+        case "E913":
+            label = "Corner Alternate (E913)"; typeInfo = "e913"
+            colors = "\(name(3)) centre, \(name(5)) / \(name(4))"; simKey = "S:\(funcCode)"
+        case "E914":
+            label = "Repeating Fade (E914)"; typeInfo = "e914"; colors = name(8); simKey = "S:\(funcCode)"
+        case "E908":
+            label = "Custom RGB Color"; typeInfo = "e908"; colors = ""; simKey = "S:\(funcCode)"
         default:
-            // Real E?00E9 structure but an E9 subtype we don't have a name for yet (e.g. E914).
-            // Keep it as show control instead of dropping it to "unknown" — this is exactly the
-            // kind of packet we want to capture, not lose in the noise.
+            // A real E9 record with a length we have no name for yet. Keep it as show control
+            // instead of dropping it to "unknown".
             label = "Show Control: \(funcCode)"
             typeInfo = funcCode.lowercased()
             colors = ""

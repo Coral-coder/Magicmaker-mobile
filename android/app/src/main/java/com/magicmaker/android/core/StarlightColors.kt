@@ -31,7 +31,7 @@ object StarlightColors {
         0x0E to "Pink",
         0x0F to "Yellow Orange",
         0x10 to "Off Yellow",
-        0x11 to "Yellow Orange",
+        0x11 to "Yellow",
         0x12 to "Lime",
         0x13 to "Orange",
         0x14 to "Red Orange",

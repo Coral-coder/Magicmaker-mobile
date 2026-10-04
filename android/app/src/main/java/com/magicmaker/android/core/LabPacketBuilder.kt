@@ -45,6 +45,22 @@ object LabPacketBuilder {
         "Fast Sparkle" to "8301E100E90F00520EF17AEC5C021B151B1548ABB0",
         "Pirate Cannon" to "8301E100E9110003240F55515BF00F10374894D13D0508",
         "Show Off" to "8301CC03000100E100E90500090E1DB0",
+        // Captured at a show on 2026-10-03, replayed byte-for-byte.
+        "Oct 3 · Pink/cyan animation" to "8301E100E90C00010F4D575A940705488BB0",
+        "Oct 3 · Pink animation" to "8301E100E90C00410F4D4E5A940F1B488BB0",
+        "Oct 3 · Pink comet" to "8301E100E91000194897D00E8ED146060F30D04E1FB0",
+        "Oct 3 · Cyan pulse fade" to "8301E100E911002B0F405D58F44882D146040FD0650AB0",
+        "Oct 3 · Pink/cyan cross-fade" to "8301E200E911002F0F4D5758F44882D1460407D06532B0",
+        "Oct 3 · Cyan/pink twinkle" to "8301E100E90E00040FB7A8B6ADA059190248AEB0",
+        "Oct 3 · White/cyan twinkle" to "8301E100E90E00730FBBBBB8BBB859190248AEB0",
+        "Oct 3 · Yellow twinkle" to "8301E100E90E00020FB1B1B1B1B159190248AEB0",
+        "Oct 3 · White centre, cyan corners" to "8301E100E90600220F5C57B0",
+        "Oct 3 · Yellow/purple/orange" to "8301E200E90900210FB1A1B3B3A1B0",
+        "Oct 3 · Repeating fade" to "8301E100E9140054D037F0D23D021E180EF38983510EF10C49B0",
+        "Oct 3 · Cyan candles" to "8301E200E90F00120F40565813488DD2462A1317B0",
+        "Oct 3 · Blue centre pulse" to "8301E100E90F00020F43445801488DD246020100B0",
+        "Oct 3 · White flash" to "8301E200E90500110EFBB0",
+        "Oct 3 · Lights off" to "8301E200E90500010EFDB0",
     )
 
     data class VibrationPattern(val label: String, val id: Int)
@@ -234,7 +250,7 @@ object LabPacketBuilder {
 
     /** Captured show effects minus the blackout packet, for the same reason. */
     private val randomShowEffects: List<Pair<String, String>> by lazy {
-        showEffects.filter { it.first != "Show Off" }
+        showEffects.filter { it.first != "Show Off" && !it.first.endsWith("Lights off") }
     }
 
     /**

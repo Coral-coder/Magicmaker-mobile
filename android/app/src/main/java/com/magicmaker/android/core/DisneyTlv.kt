@@ -244,13 +244,13 @@ object DisneyTlv {
     fun effectName(length: Int): String = when (length) {
         0x05 -> "Single colour"
         0x06 -> "Dual colour"
-        0x09 -> "5-LED rainbow"
+        0x09 -> "5-zone colours"
         0x0B -> "Circle spin"
         0x0C -> "Complex animation"
         0x08 -> "Custom RGB colour"
         0x0E -> "Per-zone twinkle / flash"
-        0x0F -> "Candles / pulse"
-        0x10 -> "Alternating"
+        0x0F -> "Candle flicker / centre pulse"
+        0x10 -> "Comet"
         0x11 -> "Two-colour fade / pulse burst"
         0x12 -> "Rotating colours"
         0x13 -> "Corner-pair alternate"
@@ -264,7 +264,9 @@ object DisneyTlv {
         0x06 -> 2
         0x09 -> 5
         0x0B -> 7
+        0x0C -> 2
         0x0E -> 5
+        0x0F -> 2
         0x11 -> 2
         0x12 -> 5
         0x13 -> 3
@@ -272,9 +274,9 @@ object DisneyTlv {
     }
 
     private fun colorSlotTitle(length: Int, slot: Int, slots: Int): String = when (length) {
-        0x06 -> if (slot == 0) "Inner colour" else "Outer colour"
         0x11 -> if (slot == 0) "Fade from" else "Fade to"
         0x0B -> "Pattern ${slot + 1}"
+        0x06, 0x0F -> if (slot == 0) "Centre colour" else "Corner colour"
         0x0E -> "Zone ${slot + 1}"
         0x12 -> "Zone ${listOf(2, 3, 4, 5, 1)[slot]}"
         0x13 -> listOf("Centre", "Pair B", "Pair A")[slot]

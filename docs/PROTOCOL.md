@@ -426,6 +426,31 @@ record. Our capture saw `CC 03` with and without it. The `CC 03 13 20 00` varian
   `E2` appears on some crossfades and all the `E907` unknowns.
 - `E907` exists (two variants, 7-byte body, `43 43 41` / `44 44 41`), purpose unknown.
 
+## 6b. A show capture (2026-10-03)
+
+5,460 advertisements recorded through a full show; 640 were effect records across 21 unique
+packets. Every one parses as exact TLV. What it added:
+
+- **Palette 0x11 is "Yellow"**, not "Yellow Orange" — both public palettes say so, and the show's
+  all-`B1` twinkle is a yellow wash. Fixed in both apps.
+- **E90C bodies carry two colour bytes at [3], [4]** (flag `010`), also in the public
+  signatures: `5D 46` = Off/Lavender, `4F 4F` = Yellow-Orange ×2. Two new park variants:
+  `4D 57 5A 94 07 05 48 8B` (pink/cyan, the most-repeated pattern of the night) and
+  `4D 4E 5A 94 0F 1B 48 8B` (pink). Motion still undecoded.
+- **E90F is one template with a mode byte at [11]**: `2A` candle flicker, `02` centre pulse
+  (matching the public listener). [3] = centre colour, [4] = corners. Previously mislabelled
+  "Alternating Strobe".
+- **E910 is a comet**, colour at body[6] (`8E` = pink here; the Flipper sample's `A0` = cyan
+  matches the listener's "cyan comet").
+- **E911 colours at [3], [4]** confirmed against real fades: `40 5D` cyan↔off pulse,
+  `4D 57` pink↔cyan. The old trailing-`B0` reading had called these "Pink" and "Lime".
+- **Real dual-colour packets use flag `010`** (`5C 57`), as the Flipper builder does. The
+  esp32_magicband template this app's Dual builder came from uses `100` (`0x80`). Unverified
+  whether the band cares; worth a field test before changing what the app sends.
+- Pattern change is bracketed by `E905 … FD` ("all off", 1.5 s) between effects.
+- One `CF9B … C42922EFD819F22A62 00` packet: that serial is this app's own default Starlight
+  template, so it came from a MagicMaker device nearby, not a park wand.
+
 ## 7. What to do with this
 
 In priority order:

@@ -86,9 +86,10 @@ object MagicClassifier {
                 val c2 = palette(4)
                 val n1 = colorPalette[c1] ?: "?"
                 val n2 = colorPalette[c2] ?: "?"
-                label = "Dual Color: $n2/$n1"
+                // First colour byte lights the centre LED, second the four corners.
+                label = "Dual Color: $n1 centre / $n2 corners"
                 typeInfo = "dual"
-                colors = "$n2 / $n1"
+                colors = "$n1 / $n2"
                 simKey = "C2:${"%02X".format(c2)}:${"%02X".format(c1)}"
             }
             "E90C" -> {
@@ -96,10 +97,12 @@ object MagicClassifier {
                     body.contains("5D465BF00532374895") -> "Animation: Lightning Pulse"
                     body.contains("B1B9B5B1A2307B7DB0") -> "Animation: 5-Color Cycle"
                     body.contains("5D465BF005323748B0") -> "Animation: Taste the Rainbow"
-                    else -> "Animation: Complex (E90C)"
+                    else -> "Animation (E90C)"
                 }
                 typeInfo = "e90c"
-                colors = ""
+                // body[3], body[4] are colour bytes (flag 010) in every E90C seen, park or public.
+                colors = if (e.length >= 5 && (e.byte(3) ?: 0) shr 5 == 2)
+                    "${StarlightColors.nameFor(palette(3))} / ${StarlightColors.nameFor(palette(4))}" else ""
                 simKey = when {
                     body.contains("5D465BF00532374895") -> "A:LIGHTNING"
                     body.contains("5D465BF005323748B0") -> "A:RAINBOW"
@@ -107,9 +110,15 @@ object MagicClassifier {
                 }
             }
             "E90F" -> {
-                label = "Animation: Alternating Strobe"
+                // Same template throughout; body[11] picks the mode (public listener: 2A candles,
+                // 02 centre pulse). body[3] = centre colour, body[4] = corners.
+                label = when (e.byte(11)) {
+                    0x2A -> "Candle Flicker (E90F)"
+                    0x02 -> "Centre Pulse (E90F)"
+                    else -> "Animation (E90F)"
+                }
                 typeInfo = "e90f"
-                colors = ""
+                colors = if (e.length >= 5) "${StarlightColors.nameFor(palette(3))} centre / ${StarlightColors.nameFor(palette(4))} corners" else ""
                 simKey = "A:E90F:${fromHead.take(16)}"
             }
             "E90B" -> {
@@ -119,7 +128,7 @@ object MagicClassifier {
                 simKey = "A:CIRCLE"
             }
             "E909" -> {
-                label = "Effect: 5-LED Rainbow"
+                label = "5-Zone Colors"
                 typeInfo = "e909"
                 colors = if (e.length >= 8) (3..7).joinToString(" / ") { StarlightColors.nameFor(palette(it)) } else ""
                 simKey = "A:E909"
@@ -128,7 +137,8 @@ object MagicClassifier {
                 // The captured Pirate Cannon packet is exactly 17 body bytes and ends ...0508.
                 // The old signature had a trailing B0 that no real packet carries.
                 val pirate = body.contains("55515BF00F10374894D13D0508")
-                label = if (pirate) "Show: Pirate Cannon" else "Animation: Palette Cross-Fade"
+                label = if (pirate) "Show: Pirate Cannon"
+                    else "Cross-Fade: ${StarlightColors.nameFor(palette(3))} / ${StarlightColors.nameFor(palette(4))}"
                 typeInfo = "e911"
                 // Fade from/to live at value[3]/value[4] — not "the byte before a trailing B0",
                 // which two of the nine real E911 packets do not even have.
@@ -147,7 +157,12 @@ object MagicClassifier {
                 colors = if (e.length >= 8) (3..7).joinToString(" / ") { StarlightColors.nameFor(palette(it)) } else ""
                 simKey = "S:$funcCode"
             }
-            "E910" -> { label = "Alternating (E910)"; typeInfo = "e910"; colors = ""; simKey = "S:$funcCode" }
+            // Public listener renders this template as a comet chase; body[6] is its colour.
+            "E910" -> {
+                label = "Comet (E910)"; typeInfo = "e910"
+                colors = if (e.length >= 7) StarlightColors.nameFor(palette(6)) else ""
+                simKey = "S:$funcCode"
+            }
             "E912" -> {
                 label = if (e.byte(2) == 0x0F) "Rotating Colors (E912)" else "Two-Color Toggle (E912)"
                 typeInfo = "e912"

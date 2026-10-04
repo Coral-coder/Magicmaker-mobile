@@ -221,9 +221,27 @@ private fun ledColor(m: BandEffectModel, z: Int, t: Float): Color? {
             pal(m.colors.getOrNull(step))
         }
         BandEffectModel.Kind.RGB -> Color(0xFF9E9E9E).copy(alpha = breathe())
+        BandEffectModel.Kind.FLICKER -> {
+            // Listener: corners and centre flicker independently every ~60 ms.
+            val r = sin((z + 1) * 78.233f + (t * 40f).toInt() * 12.9898f) * 43758.5453f
+            val v = 0.25f + 0.75f * (r - kotlin.math.floor(r))
+            rest?.copy(alpha = v)
+        }
+        BandEffectModel.Kind.CENTRE_PULSE -> {
+            if (z != Z3) return rest?.copy(alpha = 0.35f)
+            rest?.copy(alpha = 0.2f + 0.8f * (0.5f + 0.5f * sin(2 * PI * t).toFloat()))
+        }
+        BandEffectModel.Kind.COMET -> {
+            if (z == Z3) return rest?.copy(alpha = 0.12f)
+            val corners = listOf(0, 1, 3, 4)
+            val d = (corners.indexOf(z) - (t * 8).toInt() % 4 + 4) % 4
+            when (d) { 0 -> rest; 3 -> rest?.copy(alpha = 0.45f); else -> rest?.copy(alpha = 0.08f) }
+        }
         BandEffectModel.Kind.COMPLEX -> {
             val v = 0.5f + 0.5f * sin(2 * PI * t + z * 1.3f).toFloat()
-            lerp(rest ?: labSwatchColor(0x15), labSwatchColor(0x0F), v)
+            val a = m.colors.getOrNull(0)?.let { labSwatchColor(it) } ?: rest ?: labSwatchColor(0x15)
+            val b = m.colors.getOrNull(1)?.let { labSwatchColor(it) } ?: labSwatchColor(0x0F)
+            lerp(a, b, v)
         }
     }
 }

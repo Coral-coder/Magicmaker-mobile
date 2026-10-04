@@ -53,6 +53,22 @@ enum LabPacketBuilder {
         // The captured packet is 17 body bytes ending ...0508; the old copy had a spurious trailing B0.
         ("Pirate Cannon", "8301E100E9110003240F55515BF00F10374894D13D0508"),
         ("Show Off", "8301CC03000100E100E90500090E1DB0"),
+        // Captured at a show on 2026-10-03, replayed byte-for-byte.
+        ("Oct 3 · Pink/cyan animation", "8301E100E90C00010F4D575A940705488BB0"),
+        ("Oct 3 · Pink animation", "8301E100E90C00410F4D4E5A940F1B488BB0"),
+        ("Oct 3 · Pink comet", "8301E100E91000194897D00E8ED146060F30D04E1FB0"),
+        ("Oct 3 · Cyan pulse fade", "8301E100E911002B0F405D58F44882D146040FD0650AB0"),
+        ("Oct 3 · Pink/cyan cross-fade", "8301E200E911002F0F4D5758F44882D1460407D06532B0"),
+        ("Oct 3 · Cyan/pink twinkle", "8301E100E90E00040FB7A8B6ADA059190248AEB0"),
+        ("Oct 3 · White/cyan twinkle", "8301E100E90E00730FBBBBB8BBB859190248AEB0"),
+        ("Oct 3 · Yellow twinkle", "8301E100E90E00020FB1B1B1B1B159190248AEB0"),
+        ("Oct 3 · White centre, cyan corners", "8301E100E90600220F5C57B0"),
+        ("Oct 3 · Yellow/purple/orange", "8301E200E90900210FB1A1B3B3A1B0"),
+        ("Oct 3 · Repeating fade", "8301E100E9140054D037F0D23D021E180EF38983510EF10C49B0"),
+        ("Oct 3 · Cyan candles", "8301E200E90F00120F40565813488DD2462A1317B0"),
+        ("Oct 3 · Blue centre pulse", "8301E100E90F00020F43445801488DD246020100B0"),
+        ("Oct 3 · White flash", "8301E200E90500110EFBB0"),
+        ("Oct 3 · Lights off", "8301E200E90500010EFDB0"),
     ]
 
     static let vibrationPatterns: [VibrationPattern] = (0...15).map { id in

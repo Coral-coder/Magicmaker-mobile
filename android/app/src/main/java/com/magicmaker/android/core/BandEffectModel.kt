@@ -32,6 +32,7 @@ data class BandEffectModel(
     enum class Kind {
         NONE, SINGLE, DUAL, RAINBOW, CROSSFADE, PULSE_BURST, CIRCLE, ROTATE, TOGGLE, TWINKLE,
         ALTERNATE, REPEAT_FADE, LIGHTNING, STROBE, STEPPER, COMPLEX, PING, WAND, RGB,
+        FLICKER, CENTRE_PULSE, COMET,
     }
 
     companion object {
@@ -94,18 +95,33 @@ data class BandEffectModel(
                 }
                 0x06 -> model(Kind.DUAL, palette(2), centreCorners(pal(3), pal(4)), false, "Centre / corners")
                 0x08 -> model(Kind.RGB, emptyList(), OFF, true, "Custom RGB (6-bit per channel) — colour shown approximately")
-                0x09 -> model(Kind.RAINBOW, palette(5), (0 until 5).map { pal(3 + it) }, true, "One colour per LED — slot→LED order disputed")
+                0x09 -> model(Kind.RAINBOW, palette(5), (0 until 5).map { pal(3 + it) }, true, "Five zone colours — slot→LED order disputed")
                 0x0B -> model(Kind.CIRCLE, palette(7), all(0x19), true, "Chase round the corners (\"green double comet\"); no public decoder reads colours from this body")
                 0x0C -> when {
                     body.contains("5D465B") && tail == 0x95 -> model(Kind.LIGHTNING, listOf(0x1B), all(0x1B), true, "White flash / fade")
                     body.contains("5D465B") -> model(Kind.RAINBOW, listOf(0x15, 0x0F, 0x19, 0x02, 0x01), listOf(0x15, 0x0F, 0x19, 0x02, 0x01), true, "Rainbow hue cycle")
                     body.contains("4F4F5B") -> model(Kind.STROBE, listOf(0x11, 0x13), all(0x11), true, "Yellow/orange strobe")
                     body.contains("B1B9B5") -> model(Kind.STEPPER, listOf(0x15, 0x19, 0x11, 0x02), all(0x15), true, "Random palette stepper")
+                    // Unnamed E90C: body[3], body[4] are still colour bytes; the motion is not decoded.
+                    (e.byte(3) ?: 0) shr 5 == 2 -> {
+                        val a = pal(3); val b = pal(4)
+                        model(Kind.COMPLEX, listOfNotNull(a, b), centreCorners(a, b), true, "Two-colour animation — motion not decoded")
+                    }
                     else -> model(Kind.COMPLEX, emptyList(), OFF, true, "Complex animation — bytes undecoded")
                 }
                 0x0E -> model(Kind.TWINKLE, palette(5), (0 until 5).map { pal(3 + it) }, true, "Per-zone twinkle / flash")
-                0x0F -> model(Kind.COMPLEX, emptyList(), all(0x02), true, "Candles / centre pulse — signature-matched")
-                0x10 -> model(Kind.COMPLEX, emptyList(), all(0x13), true, "Alternating — signature-matched")
+                0x0F -> {
+                    val centre = pal(3); val corners = pal(4)
+                    when (e.byte(11)) {
+                        0x2A -> model(Kind.FLICKER, listOfNotNull(centre, corners), centreCorners(centre, corners), true, "Candle flicker: centre / corners")
+                        0x02 -> model(Kind.CENTRE_PULSE, listOfNotNull(centre, corners), centreCorners(centre, corners), true, "Centre pulses, corners steady")
+                        else -> model(Kind.COMPLEX, listOfNotNull(centre, corners), centreCorners(centre, corners), true, "E90F variant — mode not decoded")
+                    }
+                }
+                0x10 -> {
+                    val c = pal(6)
+                    model(Kind.COMET, listOfNotNull(c), all(c), true, "Comet chase round the corners")
+                }
                 0x11 -> if (body.contains("F44882")) {
                     model(Kind.CROSSFADE, palette(2), centreCorners(pal(4), pal(3)), true, "Two-colour fade, centre out of phase")
                 } else {

@@ -13,7 +13,8 @@ import Foundation
 struct BandEffectModel: Equatable {
     enum Kind: String {
         case none, single, dual, rainbow, crossfade, pulseBurst, circle, rotate, toggle, twinkle,
-             alternate, repeatFade, lightning, strobe, stepper, complex, ping, wand, rgb
+             alternate, repeatFade, lightning, strobe, stepper, complex, ping, wand, rgb,
+             flicker, centrePulse, comet
     }
 
     let kind: Kind
@@ -102,17 +103,29 @@ struct BandEffectModel: Equatable {
             return model(.single, c.map { [$0] } ?? [], leds, !allZones, allZones ? "Solid colour, all LEDs" : "Solid colour, zone mask \(mask) (mapping disputed)")
         case 0x06: return model(.dual, palette(2), centreCorners(pal(3), pal(4)), false, "Centre / corners")
         case 0x08: return model(.rgb, [], off, true, "Custom RGB (6-bit per channel) — colour shown approximately")
-        case 0x09: return model(.rainbow, palette(5), (0..<5).map { pal(3 + $0) }, true, "One colour per LED — slot→LED order disputed")
+        case 0x09: return model(.rainbow, palette(5), (0..<5).map { pal(3 + $0) }, true, "Five zone colours — slot→LED order disputed")
         case 0x0B: return model(.circle, palette(7), all(0x19), true, "Chase round the corners (\"green double comet\"); no public decoder reads colours from this body")
         case 0x0C:
             if body.contains("5D465B") && tail == 0x95 { return model(.lightning, [0x1B], all(0x1B), true, "White flash / fade") }
             if body.contains("5D465B") { return model(.rainbow, [0x15, 0x0F, 0x19, 0x02, 0x01], [0x15, 0x0F, 0x19, 0x02, 0x01], true, "Rainbow hue cycle") }
             if body.contains("4F4F5B") { return model(.strobe, [0x11, 0x13], all(0x11), true, "Yellow/orange strobe") }
             if body.contains("B1B9B5") { return model(.stepper, [0x15, 0x19, 0x11, 0x02], all(0x15), true, "Random palette stepper") }
+            if e.value.count > 4, (Int(e.value[3]) >> 5) == 2 {
+                let a = pal(3), b = pal(4)
+                return model(.complex, [a, b].compactMap { $0 }, centreCorners(a, b), true, "Two-colour animation — motion not decoded")
+            }
             return model(.complex, [], off, true, "Complex animation — bytes undecoded")
         case 0x0E: return model(.twinkle, palette(5), (0..<5).map { pal(3 + $0) }, true, "Per-zone twinkle / flash")
-        case 0x0F: return model(.complex, [], all(0x02), true, "Candles / centre pulse — signature-matched")
-        case 0x10: return model(.complex, [], all(0x13), true, "Alternating — signature-matched")
+        case 0x0F:
+            let centre = pal(3), corners = pal(4)
+            let cols = [centre, corners].compactMap { $0 }
+            let mode = e.value.count > 11 ? Int(e.value[11]) : -1
+            if mode == 0x2A { return model(.flicker, cols, centreCorners(centre, corners), true, "Candle flicker: centre / corners") }
+            if mode == 0x02 { return model(.centrePulse, cols, centreCorners(centre, corners), true, "Centre pulses, corners steady") }
+            return model(.complex, cols, centreCorners(centre, corners), true, "E90F variant — mode not decoded")
+        case 0x10:
+            let c = pal(6)
+            return model(.comet, c.map { [$0] } ?? [], all(c), true, "Comet chase round the corners")
         case 0x11:
             if body.contains("F44882") { return model(.crossfade, palette(2), centreCorners(pal(4), pal(3)), true, "Two-colour fade, centre out of phase") }
             return model(.pulseBurst, palette(2), centreCorners(pal(3), pal(4)), true, "Pulse burst: centre / corners")

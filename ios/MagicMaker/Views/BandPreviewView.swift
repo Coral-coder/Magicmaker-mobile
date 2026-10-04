@@ -95,6 +95,7 @@ struct BandPreviewView: View {
         switch k {
         case .pulseBurst: return "PULSE BURST"
         case .repeatFade: return "REPEAT FADE"
+        case .centrePulse: return "CENTRE PULSE"
         default: return k.rawValue.uppercased()
         }
     }
@@ -168,9 +169,22 @@ struct BandPreviewView: View {
             let step = (Int(t * 4.8) + z) % m.colors.count
             return pal(m.colors[step])
         case .rgb: return Color(white: 0.62).opacity(breathe)
+        case .flicker:
+            let r = sin(Double(z + 1) * 78.233 + Double(Int(t * 40)) * 12.9898) * 43758.5453
+            return rest?.opacity(0.25 + 0.75 * (r - floor(r)))
+        case .centrePulse:
+            if z != z3 { return rest?.opacity(0.35) }
+            return rest?.opacity(0.2 + 0.8 * (0.5 + 0.5 * sin(2 * Double.pi * t)))
+        case .comet:
+            if z == z3 { return rest?.opacity(0.12) }
+            let corners = [0, 1, 3, 4]
+            let d = ((corners.firstIndex(of: z) ?? 0) - Int(t * 8) % 4 + 4) % 4
+            return d == 0 ? rest : (d == 3 ? rest?.opacity(0.45) : rest?.opacity(0.08))
         case .complex:
             let v = 0.5 + 0.5 * sin(2 * Double.pi * t + Double(z) * 1.3)
-            return blend(rest ?? starlightGlowColor(0x15), starlightGlowColor(0x0F), v)
+            let a = m.colors.first.map { starlightGlowColor($0) } ?? rest ?? starlightGlowColor(0x15)
+            let b = m.colors.count > 1 ? starlightGlowColor(m.colors[1]) : starlightGlowColor(0x0F)
+            return blend(a, b, v)
         }
     }
 
