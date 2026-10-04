@@ -125,23 +125,23 @@ enum LabPacketBuilder {
     struct Experiment { let name: String; let hex: String; let watch: String }
 
     static let experiments: [Experiment] = [
-        Experiment(name: "E907 \u00b7 three colours? (red/green/blue)", hex: "8301E200E90700220F555942B0", watch: "E907 has dual's 00 22 0F header plus a third colour. Watch where each colour lands."),
-        Experiment(name: "E907 \u00b7 Flipper sample #1", hex: "8301E200E90700220F434341B0", watch: "Captured by someone else, purpose unknown. Midnight blue \u00d72 + purple."),
-        Experiment(name: "E907 \u00b7 Flipper sample #2", hex: "8301E200E90700220F444441B0", watch: "Like #1 with blue instead of midnight blue."),
+        Experiment(name: "E907 · three colours? (red/green/blue)", hex: "8301E200E90700220F555942B0", watch: "E907 has dual's 00 22 0F header plus a third colour. Watch where each colour lands."),
+        Experiment(name: "E907 · Flipper sample #1", hex: "8301E200E90700220F434341B0", watch: "Captured by someone else, purpose unknown. Midnight blue ×2 + purple."),
+        Experiment(name: "E907 · Flipper sample #2", hex: "8301E200E90700220F444441B0", watch: "Like #1 with blue instead of midnight blue."),
         Experiment(name: "Random colour on every LED", hex: "8301E909002E0FBFBFBFBFBFB0", watch: "Palette 0x1F on all five. Same random colour, or one each?"),
         Experiment(name: "'Unique' colour (0x1E)", hex: "8301E905002E0EFEB0", watch: "The colour your show's Repeating Fade used. Nobody knows what it is."),
         Experiment(name: "Channel 3 (E3) red", hex: "8301E300E905002E0EF5B0", watch: "Same red as a normal preset but on channel 3. Does the band answer every channel?"),
         Experiment(name: "Always-on red (timing 8F)", hex: "8301E905008F0EF5B0", watch: "Bit 7 of the timing byte. Does it stay lit until another command?"),
-        Experiment(name: "46-second red (timing 4F)", hex: "8301E905004F0EF5B0", watch: "Bit 6 = \u00d73.1 s multiplier, 15 \u00d7 3.1 \u2248 46 s. Time it."),
+        Experiment(name: "46-second red (timing 4F)", hex: "8301E905004F0EF5B0", watch: "Bit 6 = ×3.1 s multiplier, 15 × 3.1 ≈ 46 s. Time it."),
         Experiment(name: "Dual, park flags (4x)", hex: "8301E90600220F5542B0", watch: "Red centre, blue corners, colour bytes flagged like real park duals."),
         Experiment(name: "Dual, builder flags (8x)", hex: "8301E90600220F9582B0", watch: "Same colours, flagged like the app's Dual builder. Any difference from 4x?"),
         Experiment(name: "Buzz, other encoding (5B)", hex: "8301E905002E0EF55B", watch: "Red with the tail byte read the Flipper way (pattern in the high nibble)."),
-        Experiment(name: "Candles, mode 2B", hex: "8301E200E90F00120F40565813488DD2462B1317B0", watch: "Your Oct 3 candles with mode byte 2A \u2192 2B."),
-        Experiment(name: "Candles, mode 03", hex: "8301E200E90F00120F40565813488DD246031317B0", watch: "Mode byte 2A \u2192 03. 02 is centre pulse; is 03 something else?"),
-        Experiment(name: "Twinkle, slow mode (0B)", hex: "8301E100E90E00040FB7A8B6ADA059190B48AEB0", watch: "Your Oct 3 twinkle with 02 \u2192 0B near the end: slow twinkle per the listener."),
+        Experiment(name: "Candles, mode 2B", hex: "8301E200E90F00120F40565813488DD2462B1317B0", watch: "Your Oct 3 candles with mode byte 2A → 2B."),
+        Experiment(name: "Candles, mode 03", hex: "8301E200E90F00120F40565813488DD246031317B0", watch: "Mode byte 2A → 03. 02 is centre pulse; is 03 something else?"),
+        Experiment(name: "Twinkle, slow mode (0B)", hex: "8301E100E90E00040FB7A8B6ADA059190B48AEB0", watch: "Your Oct 3 twinkle with 02 → 0B near the end: slow twinkle per the listener."),
         Experiment(name: "Unseen length E90A", hex: "8301E90A002E0FB5B9A2A1B5B9B0", watch: "An E9 length nobody has captured, six colour bytes. Probably ignored."),
-        Experiment(name: "Pink/cyan anim, 2nd pair changed", hex: "8301E100E90C00010F4D575A941519488BB0", watch: "Your most-played pattern with bytes 07 05 \u2192 15 19. Does a second colour change?"),
-        Experiment(name: "'RRC' ping (CC03 132000)", hex: "8301E100CC03132000", watch: "A ping variant from the Flipper list. No light expected \u2014 watch for anything."),
+        Experiment(name: "Pink/cyan anim, 2nd pair changed", hex: "8301E100E90C00010F4D575A941519488BB0", watch: "Your most-played pattern with bytes 07 05 → 15 19. Does a second colour change?"),
+        Experiment(name: "'RRC' ping (CC03 132000)", hex: "8301E100CC03132000", watch: "A ping variant from the Flipper list. No light expected — watch for anything."),
     ]
 
     /// E905 zone-mask options. 3 and 4 are agreed by both public decoders; the rest disagree.
