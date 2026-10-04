@@ -55,6 +55,11 @@ class MagicMakerForegroundService : Service() {
         const val ACTION_SET_STARLIGHT_LOOP = "com.magicmaker.android.SET_STARLIGHT_LOOP"
         const val ACTION_SET_TX_LOOP = "com.magicmaker.android.SET_TX_LOOP"
         const val ACTION_SET_RANDOM_SHOW = "com.magicmaker.android.SET_RANDOM_SHOW"
+        const val ACTION_SET_KEEP_AWAKE = "com.magicmaker.android.SET_KEEP_AWAKE"
+        const val EXTRA_KEEP_AWAKE_ENABLED = "keep_awake_enabled"
+        const val EXTRA_KEEP_AWAKE_HEX = "keep_awake_hex"
+        /** One wake slice. Short, because a manual SEND waits for the slice in flight to end. */
+        private const val KEEP_AWAKE_SLICE_MS = 600
         const val ACTION_REFRESH_RELAY_CACHE = "com.magicmaker.android.REFRESH_RELAY_CACHE"
         const val ACTION_REPLAY = "com.magicmaker.android.REPLAY"
         const val ACTION_REPLAY_STOP = "com.magicmaker.android.REPLAY_STOP"
@@ -123,6 +128,18 @@ class MagicMakerForegroundService : Service() {
                 putExtra(EXTRA_TX_LOOP_ENABLED, enabled)
                 packetId?.let { putExtra(EXTRA_TX_LOOP_PACKET_ID, it) }
                 intervalMs?.let { putExtra(EXTRA_TX_LOOP_INTERVAL_MS, it) }
+            }
+        }
+
+        /**
+         * Keep the band awake: pause scanning and stream [hex] (a wake/control ping) continuously.
+         * A SEND while this is on goes out for the command interval with no wake preamble —
+         * the band is already listening — and then the pings resume.
+         */
+        fun setKeepAwake(context: Context, enabled: Boolean, hex: String = PacketBuilder.WAKEUP_PING) {
+            launch(context, ACTION_SET_KEEP_AWAKE) {
+                putExtra(EXTRA_KEEP_AWAKE_ENABLED, enabled)
+                putExtra(EXTRA_KEEP_AWAKE_HEX, hex)
             }
         }
 
@@ -227,6 +244,10 @@ class MagicMakerForegroundService : Service() {
     private var randomShowIntervalMs = 3000L
     private var randomShowLabel = ""
     private var randomShowRunnable: Runnable? = null
+    private var keepAwakeEnabled = false
+    private var keepAwakeHex = PacketBuilder.WAKEUP_PING
+    /** A keep-awake slice is sitting in the radio queue; prevents stacking duplicates. */
+    private var keepAwakeQueued = false
     private var screenOn = true
     private var userWantsScan = true
     private var txRunning = false
@@ -432,6 +453,14 @@ class MagicMakerForegroundService : Service() {
                     stopRandomShow()
                 }
                 publishRandomShowState()
+                return START_STICKY
+            }
+            ACTION_SET_KEEP_AWAKE -> {
+                if (!booted) boot()
+                setKeepAwakeInternal(
+                    intent.getBooleanExtra(EXTRA_KEEP_AWAKE_ENABLED, false),
+                    intent.getStringExtra(EXTRA_KEEP_AWAKE_HEX),
+                )
                 return START_STICKY
             }
             ACTION_REFRESH_RELAY_CACHE -> {
@@ -674,6 +703,7 @@ class MagicMakerForegroundService : Service() {
                 // A new manual command supersedes anything pending/in-flight: drop the queued
                 // backlog and signal the running transmission to abort at its next slice.
                 txQueue.clear()
+                keepAwakeQueued = false
                 transmitter?.cancel()
             }
             txQueue.addLast(work)
@@ -729,7 +759,62 @@ class MagicMakerForegroundService : Service() {
 
     /** Restart the scan only if it isn't currently running — avoids the startScan throttle. */
     private fun ensureScanning() {
-        if (userWantsScan && bleScanner?.isScanning != true) startScanNow()
+        if (userWantsScan && !keepAwakeEnabled && bleScanner?.isScanning != true) startScanNow()
+    }
+
+    // ---- Keep-awake ------------------------------------------------------------------------
+
+    private fun setKeepAwakeInternal(enabled: Boolean, hex: String?) {
+        mainHandler.post {
+            hex?.let { HexUtils.canonicalHex(it) }?.takeIf { it.length >= 8 }?.let { keepAwakeHex = it }
+            if (enabled == keepAwakeEnabled) {
+                publishKeepAwakeState()
+                return@post
+            }
+            keepAwakeEnabled = enabled
+            if (enabled) {
+                // One transmit loop at a time — the others would fight it for the radio.
+                stopRandomShow(); publishRandomShowState()
+                stopTxLoop()
+                stopStarlightLoop()
+                pauseScanNow()
+                pauseGattForManufacturerTx()
+                scheduleKeepAwake()
+            } else {
+                // The slice in flight finishes on its own and does not re-arm.
+                keepAwakeQueued = false
+                resumeGattAfterManufacturerTx()
+                if (userWantsScan) scheduleResumeScan()
+            }
+            publishKeepAwakeState()
+        }
+    }
+
+    private fun scheduleKeepAwake() {
+        if (!keepAwakeEnabled || keepAwakeQueued) return
+        keepAwakeQueued = true
+        enqueueRadioWork {
+            keepAwakeQueued = false
+            val adv = bleAdvertiser
+            if (!keepAwakeEnabled || adv == null) {
+                finishRadioWork()
+                return@enqueueRadioWork
+            }
+            adv.burst(keepAwakeHex, KEEP_AWAKE_SLICE_MS) {
+                finishRadioWork()
+                scheduleKeepAwake()
+            }
+        }
+    }
+
+    private fun publishKeepAwakeState() {
+        publishState {
+            it.copy(
+                keepAwakeActive = keepAwakeEnabled,
+                keepAwakeHex = keepAwakeHex,
+                status = if (keepAwakeEnabled) "Keeping band awake" else it.status,
+            )
+        }
     }
 
     private fun queueSend(hex: String) {
@@ -748,14 +833,19 @@ class MagicMakerForegroundService : Service() {
         }
         runManufacturerTx(
             status = if (starlight) "Wand TX…" else "TX…",
-            onCompleteStatus = doneStatus,
+            onCompleteStatus = if (keepAwakeEnabled) "Keeping band awake" else doneStatus,
             send = { onDone ->
-                if (transmitter != null) transmitter?.send(txHex, onDone) else onDone()
+                val adv = bleAdvertiser
+                if (keepAwakeEnabled && !starlight && adv != null) {
+                    // The band is already awake: the packet alone, for the full command interval.
+                    adv.burst(txHex, store.getCommandBurstMs(), onDone)
+                } else if (transmitter != null) transmitter?.send(txHex, onDone) else onDone()
             },
             afterComplete = {
                 // The preempt below may have dropped a queued show burst — put the show back
                 // on the clock so a manual send never silently kills the loop.
                 if (randomShowEnabled) scheduleRandomShowBurst(immediate = false)
+                if (keepAwakeEnabled) scheduleKeepAwake()
             },
             // A tap supersedes whatever is in flight or queued, so it goes out right away.
             preempt = true,
@@ -1108,6 +1198,7 @@ class MagicMakerForegroundService : Service() {
     }
 
     private fun relayCommandHandlers(): RelayCommands.Handlers = RelayCommands.Handlers(
+        setKeepAwake = { enabled, hex -> setKeepAwakeInternal(enabled, hex) },
         transmit = { hex -> queueSend(hex) },
         vibrate = { queueVibrate() },
         interrogate = { queueSend(PacketBuilder.WAKEUP_PING) },
@@ -1319,6 +1410,8 @@ class MagicMakerForegroundService : Service() {
         val cb = scanCallback ?: return
         val scanner = bleScanner ?: return
         if (!userWantsScan) return
+        // Keep-awake owns the radio; screen/Bluetooth/transmit restarts must not resume the scan.
+        if (keepAwakeEnabled) return
         runCatching {
             runCatching { s.stopScan(cb) }
             scanner.markStopped()

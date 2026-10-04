@@ -47,6 +47,9 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
     // What the preview animates: the builder's live packet, or the hex field when it is edited
     // directly. Starts from the saved Lab hex so the band lights up the moment the tab opens.
     var previewHex by remember(labLoadTick) { mutableStateOf(app.store.getLabHex()) }
+    var extended by remember {
+        mutableStateOf(runCatching { ctx.getSharedPreferences("magicmaker_ui", Context.MODE_PRIVATE).getBoolean("lab_extended", false) }.getOrDefault(false))
+    }
 
     Column(Modifier.fillMaxSize()) {
         // Pinned: always visible, never scrolls with the Lab, follows every packet change.
@@ -59,6 +62,12 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
                 .padding(AppDimens.pad),
             verticalArrangement = Arrangement.spacedBy(AppDimens.gap),
         ) {
+        LabModeBar(ctx, extended, onExtendedChange = { on ->
+            extended = on
+            runCatching { ctx.getSharedPreferences("magicmaker_ui", Context.MODE_PRIVATE).edit().putBoolean("lab_extended", on).apply() }
+        })
+        HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
+
         Text("PACKET BUILDER", style = techHeader())
         Text(
             "Pick what the band should do, set the colors, and the card below tells you exactly what you're sending.",
@@ -67,6 +76,7 @@ fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTic
         )
 
         LabPacketBuilderPanel(
+            extended = extended,
             loadedHex = hex,
             loadTick = labLoadTick,
             onHexChanged = { previewHex = it },
@@ -445,6 +455,7 @@ private fun TransmissionSettingsSection(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LabPacketBuilderPanel(
+    extended: Boolean,
     loadedHex: String,
     loadTick: Int,
     onHexChanged: (String) -> Unit = {},
@@ -461,6 +472,8 @@ private fun LabPacketBuilderPanel(
     var rawHex by remember { mutableStateOf("") }
     var framing by remember { mutableStateOf(LabPacketBuilder.defaultFraming(LabPacketBuilder.LabPacketType.PRESET)) }
     var showIndex by remember { mutableIntStateOf(0) }
+    /** Extended only: E905 zone mask (high 3 bits of the colour byte). 7 = all LEDs. */
+    var ledMask by remember { mutableIntStateOf(7) }
     var loadMsg by remember { mutableStateOf<String?>(null) }
 
     fun applyDecoded(d: LabPacketBuilder.Decoded) {
@@ -492,9 +505,18 @@ private fun LabPacketBuilderPanel(
         loadMsg = null
     }
 
-    val currentHex = remember(selectedType, colors, vibEnabled, vibPattern, rawHex, framing, showIndex) {
+    // Leaving Extended drops back to a Standard type rather than keep building an experiment.
+    LaunchedEffect(extended) {
+        if (!extended && selectedType.experimental) selectType(LabPacketBuilder.LabPacketType.PRESET)
+        if (!extended) ledMask = 7
+    }
+
+    val currentHex = remember(selectedType, colors, vibEnabled, vibPattern, rawHex, framing, showIndex, ledMask, extended) {
         runCatching {
-            LabPacketBuilder.build(selectedType, colors, vibEnabled, vibPattern, rawHex, framing, showIndex)
+            LabPacketBuilder.build(selectedType, colors, vibEnabled, vibPattern, rawHex, framing, showIndex).let {
+                if (extended && selectedType == LabPacketBuilder.LabPacketType.PRESET && ledMask != 7)
+                    PacketBuilder.withZoneMask(it, ledMask) else it
+            }
         }.getOrDefault("")
     }
     // Keep the pinned band preview on whatever the builder currently describes.
@@ -503,7 +525,7 @@ private fun LabPacketBuilderPanel(
     Column(verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
         // ---- What kind of packet -------------------------------------------------------------
         Text("WHAT DO YOU WANT THE BAND TO DO?", style = techLabel(), color = AppColors.CyanDim)
-        TypeChips(selected = selectedType, onSelect = { selectType(it) })
+        TypeChips(selected = selectedType, extended = extended, onSelect = { selectType(it) })
         Text(selectedType.blurb, style = techLabel(), color = AppColors.TextDim)
         loadMsg?.let { Text(it, style = techLabel(), color = AppColors.Cyan) }
 
@@ -530,6 +552,22 @@ private fun LabPacketBuilderPanel(
                     style = techLabel(), color = AppColors.TextDim,
                 )
             }
+            LabPacketBuilder.LabPacketType.RGB -> {
+                RgbSliders(colors) { colors = it }
+                BuzzRow(vibEnabled, vibPattern, { vibEnabled = it }, { vibPattern = it })
+            }
+            LabPacketBuilder.LabPacketType.EXPERIMENT -> {
+                val exp = LabPacketBuilder.experiments.getOrElse(showIndex) { LabPacketBuilder.experiments.first() }
+                PaletteDropdown(
+                    label = "TEST",
+                    selectedId = showIndex,
+                    options = LabPacketBuilder.experiments.mapIndexed { i, e -> i to e.name },
+                    onSelect = { showIndex = it; colors = emptyList() },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("WATCH FOR: ${exp.watch}", style = techLabel(), color = AppColors.Amber)
+                SlotPickers(currentHex) { colors = it }
+            }
             LabPacketBuilder.LabPacketType.SHOW -> {
                 PaletteDropdown(
                     label = "SHOW",
@@ -545,6 +583,19 @@ private fun LabPacketBuilderPanel(
                 SlotPickers(currentHex) { colors = it }
             }
             else -> {
+                if (extended && selectedType == LabPacketBuilder.LabPacketType.PRESET) {
+                    PaletteDropdown(
+                        label = "LEDS",
+                        selectedId = ledMask,
+                        options = LED_MASKS,
+                        onSelect = { ledMask = it },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "Experimental: the top 3 bits of the colour byte pick which LEDs light. Two values are agreed; tell me what the rest do.",
+                        style = techLabel(), color = AppColors.Amber,
+                    )
+                }
                 if (selectedType.colorSlots > 0) {
                     Text(
                         if (selectedType.colorSlots == 1) "COLOR" else "COLORS",
@@ -637,13 +688,14 @@ private fun LabPacketBuilderPanel(
 @Composable
 private fun TypeChips(
     selected: LabPacketBuilder.LabPacketType,
+    extended: Boolean,
     onSelect: (LabPacketBuilder.LabPacketType) -> Unit,
 ) {
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        LabPacketBuilder.LabPacketType.entries.forEach { type ->
+        LabPacketBuilder.LabPacketType.entries.filter { extended || !it.experimental }.forEach { type ->
             val isSel = type == selected
             if (isSel) {
                 Button(
@@ -656,6 +708,109 @@ private fun TypeChips(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                 ) { Text(type.label.uppercase(), style = techLabel(), color = AppColors.Cyan) }
             }
+        }
+    }
+}
+
+/** E905 zone-mask options. 3 and 4 are agreed by both public decoders; the rest disagree. */
+private val LED_MASKS: List<Pair<Int, String>> = listOf(
+    7 to "All LEDs",
+    3 to "Bottom-left (agreed)",
+    4 to "Top-left (agreed)",
+    1 to "Mask 1 (top-right or centre?)",
+    2 to "Mask 2 (bottom-right or top-right?)",
+    5 to "Mask 5 (unknown)",
+    6 to "Mask 6 (centre?)",
+    0 to "Mask 0 (all?)",
+)
+
+/** Lab header: Standard / Extended, and the keep-awake transmit mode. */
+@Composable
+private fun LabModeBar(ctx: Context, extended: Boolean, onExtendedChange: (Boolean) -> Unit) {
+    val svc by ServiceState.state.collectAsState()
+    var pingHex by remember { mutableStateOf(com.magicmaker.android.core.PacketBuilder.WAKEUP_PING) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(if (extended) "EXTENDED · EXPERIMENTAL" else "STANDARD · KNOWN & TESTED", style = techHeader(),
+                    color = if (extended) AppColors.Amber else AppColors.Cyan)
+                Text(
+                    if (extended) "Adds RGB sliders, single-LED masks and the Experiments list. Untested on a band."
+                    else "Everything here has been seen working.",
+                    style = techLabel(), color = AppColors.TextDim,
+                )
+            }
+            Switch(extended, onExtendedChange)
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("KEEP BAND AWAKE", style = techHeader(), color = if (svc.keepAwakeActive) AppColors.Cyan else AppColors.TextPrimary)
+                Text(
+                    if (svc.keepAwakeActive) "Scanning paused · streaming pings · SEND goes out for the command interval, then pings resume"
+                    else "Pause scanning and stream wake pings so the band stays listening between sends.",
+                    style = techLabel(), color = AppColors.TextDim,
+                )
+            }
+            Switch(svc.keepAwakeActive, { on -> MagicMakerForegroundService.setKeepAwake(ctx, on, pingHex) })
+        }
+        if (svc.keepAwakeActive || extended) {
+            PaletteDropdown(
+                label = "PING",
+                selectedId = if (pingHex == "8301CC03000000") 1 else 0,
+                options = listOf(0 to "Wake ping (CC03 000100)", 1 to "Beacon ping (CC03 000000)"),
+                onSelect = { i ->
+                    pingHex = if (i == 1) "8301CC03000000" else com.magicmaker.android.core.PacketBuilder.WAKEUP_PING
+                    if (svc.keepAwakeActive) MagicMakerForegroundService.setKeepAwake(ctx, true, pingHex)
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/** Red / green / blue sliders, 0-63 each (E908 is six bits per channel), with a live swatch. */
+@Composable
+private fun RgbSliders(values: List<Int>, onChange: (List<Int>) -> Unit) {
+    val rgb = List(3) { values.getOrElse(it) { 0 }.coerceIn(0, 63) }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(
+            Modifier.size(28.dp).clip(RoundedCornerShape(4.dp))
+                .background(androidx.compose.ui.graphics.Color(rgb[0] * 255 / 63, rgb[1] * 255 / 63, rgb[2] * 255 / 63)),
+        )
+        Text(
+            "R %d · G %d · B %d  (#%02X%02X%02X)".format(rgb[0], rgb[1], rgb[2], rgb[0] * 255 / 63, rgb[1] * 255 / 63, rgb[2] * 255 / 63),
+            style = techLabel(), color = AppColors.TextDim,
+        )
+    }
+    listOf("RED" to androidx.compose.ui.graphics.Color(0xFFFF5252), "GREEN" to androidx.compose.ui.graphics.Color(0xFF69F0AE), "BLUE" to androidx.compose.ui.graphics.Color(0xFF448AFF))
+        .forEachIndexed { i, (name, tint) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(name, style = techLabel(), color = tint, modifier = Modifier.width(52.dp))
+                Slider(
+                    value = rgb[i].toFloat(),
+                    onValueChange = { v -> onChange(rgb.toMutableList().also { it[i] = v.toInt() }) },
+                    valueRange = 0f..63f,
+                    steps = 62,
+                    colors = SliderDefaults.colors(thumbColor = tint, activeTrackColor = tint),
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+}
+
+@Composable
+private fun BuzzRow(enabled: Boolean, pattern: Int, onEnabled: (Boolean) -> Unit, onPattern: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AppDimens.gap), verticalAlignment = Alignment.CenterVertically) {
+        Text("BUZZ", style = techLabel(), color = AppColors.CyanDim)
+        Switch(enabled, onEnabled, modifier = Modifier.height(24.dp))
+        if (enabled) {
+            PaletteDropdown(
+                label = "PATTERN",
+                selectedId = pattern,
+                options = LabPacketBuilder.vibrationPatterns.map { it.id to it.label },
+                onSelect = onPattern,
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }

@@ -107,6 +107,25 @@ enum PacketBuilder {
         return h.replacingCharacters(in: start..<end, with: String(format: "%02X", timing & 0xFF))
     }
 
+    /// E908 custom RGB — six bits per channel (0-63), each shifted left one bit. From the Flipper
+    /// app's builder; no captured example exists yet, so this is experimental.
+    static func rgb(_ r6: Int, _ g6: Int, _ b6: Int, vib: Int = 0) -> String {
+        pkt([0x83, 0x01, 0xE1, 0x00, 0xE9, 0x08, 0x00, 0x0E, 0xD2, 0x55,
+             (r6 & 0x3F) << 1, (g6 & 0x3F) << 1, (b6 & 0x3F) << 1, tail(vib: vib)])
+    }
+
+    /// Set the zone mask (high 3 bits of the single-colour byte) on an E905 packet.
+    static func withZoneMask(_ hex: String, _ mask: Int) -> String {
+        let h = HexUtils.canonicalHex(hex)
+        guard let r = h.range(of: "E905") else { return h }
+        let pos = h.distance(from: h.startIndex, to: r.lowerBound) + 4 + 6   // body[3]
+        guard pos + 2 <= h.count else { return h }
+        var chars = Array(h)
+        guard let old = Int(String(chars[pos..<(pos + 2)]), radix: 16) else { return h }
+        chars.replaceSubrange(pos..<(pos + 2), with: Array(String(format: "%02X", ((mask & 7) << 5) | (old & 0x1F))))
+        return String(chars)
+    }
+
     static func crossfade(c1: Int = Color.red, c2: Int = Color.blue, vib: Int = 0) -> String {
         pkt([
             0x83, 0x01, 0xE1, 0x00, 0xE9, 0x11, 0x00, 0x6F, 0x0F,

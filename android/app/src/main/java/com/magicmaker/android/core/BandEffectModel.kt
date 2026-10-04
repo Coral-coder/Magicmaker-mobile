@@ -28,6 +28,8 @@ data class BandEffectModel(
     val alwaysOn: Boolean,
     val approximate: Boolean,
     val note: String,
+    /** E908 only: the 24-bit colour the packet asks for, scaled from 6-bit channels. */
+    val rgb: Int? = null,
 ) {
     enum class Kind {
         NONE, SINGLE, DUAL, RAINBOW, CROSSFADE, PULSE_BURST, CIRCLE, ROTATE, TOGGLE, TWINKLE,
@@ -94,7 +96,13 @@ data class BandEffectModel(
                     model(Kind.SINGLE, listOfNotNull(c), leds, mask !in listOf(0, 7), if (mask in listOf(0, 7)) "Solid colour, all LEDs" else "Solid colour, zone mask $mask (mapping disputed)")
                 }
                 0x06 -> model(Kind.DUAL, palette(2), centreCorners(pal(3), pal(4)), false, "Centre / corners")
-                0x08 -> model(Kind.RGB, emptyList(), OFF, true, "Custom RGB (6-bit per channel) — colour shown approximately")
+                0x08 -> {
+                    fun ch(i: Int) = (((e.byte(i) ?: 0) shr 1) and 0x3F) * 255 / 63
+                    BandEffectModel(
+                        Kind.RGB, emptyList(), OFF, buzz, t.durationMs, t.fadeMs, t.alwaysOn, true,
+                        "Custom RGB — untested on a band", rgb = (ch(4) shl 16) or (ch(5) shl 8) or ch(6),
+                    )
+                }
                 0x09 -> model(Kind.RAINBOW, palette(5), (0 until 5).map { pal(3 + it) }, true, "Five zone colours — slot→LED order disputed")
                 0x0B -> model(Kind.CIRCLE, palette(7), all(0x19), true, "Chase round the corners (\"green double comet\"); no public decoder reads colours from this body")
                 0x0C -> when {

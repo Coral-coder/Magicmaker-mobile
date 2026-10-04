@@ -89,6 +89,8 @@ object ServiceState {
         val replayLabel: String = "",
         val cloudSyncStatus: String = "",
         val labLoadTick: Int = 0,
+        val keepAwakeActive: Boolean = false,
+        val keepAwakeHex: String = "",
     )
 
     fun setCloudSyncStatus(status: String) {
@@ -294,6 +296,7 @@ object ServiceState {
         put("packetsHeard", _state.value.packetsHeard)
         put("autoResponsesSent", _state.value.autoResponsesSent)
         put("lastHeardHex", _state.value.lastHeardHex)
+        put("keepAwake", _state.value.keepAwakeActive)
         put("lastHeardLabel", _state.value.lastHeardLabel)
         put("lastTransmitHex", _state.value.lastTransmitHex)
         put("starlightLoopEnabled", _state.value.starlightLoopEnabled)

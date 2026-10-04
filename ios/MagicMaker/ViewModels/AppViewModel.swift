@@ -624,6 +624,21 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// Keep-awake runs on the relay (Android or ESP32): it pauses scanning there and streams a
+    /// wake/control ping; a send goes out for the command interval with no preamble, then the
+    /// pings resume. iOS can't broadcast manufacturer data itself.
+    @Published var keepAwakeActive = false
+
+    func setKeepAwake(_ enabled: Bool, hex: String = PacketBuilder.wakeupPing) {
+        keepAwakeActive = enabled
+        remote.sendCommand("keep_awake", params: ["enabled": enabled, "hex": HexUtils.canonicalHex(hex)], central: ble.bleCentral) { [weak self] ok in
+            Task { @MainActor in
+                if !ok { self?.keepAwakeActive = !enabled }
+                self?.statusMessage = ok ? (enabled ? "Keeping band awake" : "Keep-awake off") : "Keep-awake command failed"
+            }
+        }
+    }
+
     func transmitAndroidHex(_ hex: String) {
         if let idx = starlightDisplayIndex(for: hex) {
             applyWandDisplayColorIndex(idx)

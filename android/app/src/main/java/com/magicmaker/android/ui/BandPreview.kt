@@ -220,7 +220,7 @@ private fun ledColor(m: BandEffectModel, z: Int, t: Float): Color? {
             val step = ((t * 4.8f).toInt() + z) % m.colors.size.coerceAtLeast(1)
             pal(m.colors.getOrNull(step))
         }
-        BandEffectModel.Kind.RGB -> Color(0xFF9E9E9E).copy(alpha = breathe())
+        BandEffectModel.Kind.RGB -> Color(0xFF000000L or (m.rgb ?: 0x9E9E9E).toLong()).copy(alpha = breathe())
         BandEffectModel.Kind.FLICKER -> {
             // Listener: corners and centre flicker independently every ~60 ms.
             val r = sin((z + 1) * 78.233f + (t * 40f).toInt() * 12.9898f) * 43758.5453f

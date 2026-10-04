@@ -123,6 +123,18 @@ static bool isStandalonePing(const uint8_t* b, size_t len) {
   return true;
 }
 
+// ---- Keep-awake ----------------------------------------------------------------------
+// Between sends, stream a wake/control ping so the band stays listening. Requested over the
+// command char from the BLE task; applied in loop() through this small mailbox.
+static bool     gKeepAwake = false;        // loop-owned
+static bool     gKeepOn = false;           // keep-awake beacon currently on air
+static uint8_t  gKeepBytes[31];
+static size_t   gKeepLen = 0;
+static volatile bool gKeepReq = false;     // mailbox: a request is waiting
+static bool     gKeepReqEnabled = false;
+static uint8_t  gKeepReqBytes[31];
+static size_t   gKeepReqLen = 0;
+
 // ---- Advertising ---------------------------------------------------------------------
 static void startIdleAdvertising() {
   gAdv->stop();
@@ -172,8 +184,10 @@ static void beginTransmit(const uint8_t* bytes, size_t len, uint32_t cmdMs) {
   memcpy(gCmdBytes, bytes, len);
   gCmdLen = len;
   gCmdMs = (cmdMs >= MIN_CMD_MS && cmdMs <= MAX_CMD_MS) ? cmdMs : DEFAULT_CMD_MS;
+  gKeepOn = false; // the command takes the advertising slot
 
-  if (isStarlight(bytes, len) || isStandalonePing(bytes, len)) {
+  // Keep-awake has the band listening already: send the command alone, no wake phase.
+  if (isStarlight(bytes, len) || isStandalonePing(bytes, len) || gKeepAwake) {
     gCmdNeedsWake = false;
     startBeacon(gCmdBytes, gCmdLen);
     gPhase = TX_COMMAND;
@@ -189,7 +203,34 @@ static void beginTransmit(const uint8_t* bytes, size_t len, uint32_t cmdMs) {
   gPhaseEndMs = millis() + WAKE_MS;
 }
 
+static void applyKeepAwakeRequest() {
+  if (!gKeepReq) return;
+  portENTER_CRITICAL(&gPendingMux);
+  bool en = gKeepReqEnabled;
+  size_t n = gKeepReqLen;
+  if (n > 0) memcpy(gKeepBytes, gKeepReqBytes, n);
+  gKeepReq = false;
+  portEXIT_CRITICAL(&gPendingMux);
+  if (n > 0) gKeepLen = n;
+  gKeepAwake = en && gKeepLen >= 2;
+  if (gPhase != TX_IDLE) return; // picked up when the transmit in flight ends
+  if (gKeepAwake) { startBeacon(gKeepBytes, gKeepLen); gKeepOn = true; }
+  else if (gKeepOn) { gKeepOn = false; stopBeacon(); }
+}
+
+static void requestKeepAwake(bool enabled, const char* hex, size_t hexLen) {
+  uint8_t bytes[31];
+  size_t len = hex ? hexToBytes(hex, hexLen, bytes, sizeof(bytes)) : 0;
+  portENTER_CRITICAL(&gPendingMux);
+  gKeepReqEnabled = enabled;
+  gKeepReqLen = len;
+  if (len > 0) memcpy(gKeepReqBytes, bytes, len);
+  gKeepReq = true;
+  portEXIT_CRITICAL(&gPendingMux);
+}
+
 static void serviceTransmit() {
+  applyKeepAwakeRequest();
   // A newer request always wins (matches the app's "a fresh tap preempts" behaviour).
   if (gHasPending) {
     uint8_t bytes[31]; size_t len; uint32_t cmdMs;
@@ -210,7 +251,8 @@ static void serviceTransmit() {
     gPhaseEndMs = millis() + gCmdMs;
   } else { // TX_COMMAND finished
     gPhase = TX_IDLE;
-    stopBeacon();
+    if (gKeepAwake) { startBeacon(gKeepBytes, gKeepLen); gKeepOn = true; } // back to pinging
+    else stopBeacon();
   }
 }
 
@@ -257,6 +299,9 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
   void onDisconnect(NimBLEServer* s, ble_gap_conn_desc* desc) override {
     gConnected = false;
+    // Keep-awake needs a linked phone to turn it off again; drop it with the link so the
+    // board goes back to being connectable.
+    requestKeepAwake(false, nullptr, 0);
     if (gPhase == TX_IDLE) { digitalWrite(STATUS_LED, LOW); startIdleAdvertising(); }
     else startIdleAdvertising(); // resume connectable adv; beacon keeps running if mid-burst
   }
@@ -284,6 +329,12 @@ class CommandCallbacks : public NimBLECharacteristicCallbacks {
       char hex[96];
       size_t n = jsonStringValue(v, "hex", hex, sizeof(hex));
       if (n >= 4) queueTransmit(hex, n, DEFAULT_CMD_MS);
+    } else if (v.find("\"action\":\"keep_awake\"") != std::string::npos) {
+      bool en = v.find("\"enabled\":true") != std::string::npos;
+      char hex[96];
+      size_t n = jsonStringValue(v, "hex", hex, sizeof(hex));
+      if (n >= 4) requestKeepAwake(en, hex, n);
+      else requestKeepAwake(en, WAKEUP_PING_HEX, strlen(WAKEUP_PING_HEX));
     } else if (v.find("\"action\":\"vibrate\"") != std::string::npos) {
       queueTransmit(VIBRATE_HEX, strlen(VIBRATE_HEX), DEFAULT_CMD_MS);
     }

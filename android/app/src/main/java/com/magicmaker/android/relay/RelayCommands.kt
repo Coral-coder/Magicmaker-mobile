@@ -36,6 +36,8 @@ object RelayCommands {
         val liveJson: () -> JSONObject,
         val pairingJson: () -> JSONObject,
         val mbleTap: (tokenHex: String, durationMs: Int) -> Unit,
+        /** Keep-awake: pause scanning, stream a wake ping, sends go out without a preamble. */
+        val setKeepAwake: (enabled: Boolean, hex: String?) -> Unit = { _, _ -> },
     )
 
     fun execute(body: JSONObject, handlers: Handlers): JSONObject {
@@ -45,6 +47,12 @@ object RelayCommands {
                     val hex = body.getString("hex")
                     handlers.transmit(hex)
                     ok().put("hex", hex)
+                }
+                "keep_awake", "keepawake" -> {
+                    val enabled = body.optBoolean("enabled", false)
+                    val hex = body.optString("hex", "").ifBlank { null }
+                    handlers.setKeepAwake(enabled, hex)
+                    ok().put("enabled", enabled)
                 }
                 "vibrate", "vib" -> {
                     handlers.vibrate()

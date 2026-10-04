@@ -6,6 +6,7 @@ import SwiftUI
 /// band should do, set the colours, read the summary, then send when you are ready.
 struct LabBuilderPanel: View {
     let enabled: Bool
+    var extended: Bool = false
     let loadedHex: String
     let onHexBuilt: (String) -> Void
 
@@ -15,12 +16,15 @@ struct LabBuilderPanel: View {
     @State private var vibPattern = PacketBuilder.Vibration.triple
     @State private var framing: LabPacketBuilder.Framing = LabPacketBuilder.defaultFraming(.preset)
     @State private var showIndex = 0
+    /// Extended only: E905 zone mask (high 3 bits of the colour byte). 7 = all LEDs.
+    @State private var ledMask = 7
 
     private var builtHex: String {
-        LabPacketBuilder.build(
+        let h = LabPacketBuilder.build(
             type: type, colors: colors, vibEnabled: vibEnabled, vibPattern: vibPattern,
             rawHex: loadedHex, framing: framing, showIndex: showIndex
         )
+        return (extended && type == .preset && ledMask != 7) ? PacketBuilder.withZoneMask(h, ledMask) : h
     }
 
     var body: some View {
@@ -46,6 +50,19 @@ struct LabBuilderPanel: View {
                 Text("Nothing to set. Send this just before a command if a band isn't reacting.")
                     .font(MMTheme.techLabel(9))
                     .foregroundStyle(MMTheme.textDim)
+            case .rgb:
+                rgbSliders
+            case .experiment:
+                let exp = LabPacketBuilder.experiments.indices.contains(showIndex) ? LabPacketBuilder.experiments[showIndex] : LabPacketBuilder.experiments[0]
+                LabPalettePicker(
+                    label: "TEST",
+                    selection: $showIndex,
+                    options: LabPacketBuilder.experiments.enumerated().map { ($0.offset, $0.element.name) }
+                )
+                Text("WATCH FOR: \(exp.watch)")
+                    .font(MMTheme.techLabel(9))
+                    .foregroundStyle(MMTheme.amber)
+                slotPickers(for: builtHex) { colors = $0 }
             case .show:
                 LabPalettePicker(
                     label: "SHOW",
@@ -57,6 +74,12 @@ struct LabBuilderPanel: View {
                     .foregroundStyle(MMTheme.textDim)
                 slotPickers(for: builtHex) { colors = $0 }
             default:
+                if extended && type == .preset {
+                    LabPalettePicker(label: "LEDS", selection: $ledMask, options: LabPacketBuilder.ledMasks)
+                    Text("Experimental: the top 3 bits of the colour byte pick which LEDs light. Two values are agreed; tell me what the rest do.")
+                        .font(MMTheme.techLabel(9))
+                        .foregroundStyle(MMTheme.amber)
+                }
                 if type.colorSlots > 0 {
                     labSection(type.colorSlots == 1 ? "COLOR" : "COLORS") {
                         colorSlots
@@ -107,7 +130,11 @@ struct LabBuilderPanel: View {
         // The builder's only output: whatever it currently describes goes into the hex field.
         .onChange(of: builtHex) { _, hex in if type != .raw { onHexBuilt(hex) } }
         // A different show starts from its captured colours.
-        .onChange(of: showIndex) { _, _ in if type == .show { colors = [] } }
+        .onChange(of: showIndex) { _, _ in if type == .show || type == .experiment { colors = [] } }
+        // Leaving Extended drops back to a Standard type rather than keep building an experiment.
+        .onChange(of: extended) { _, on in
+            if !on { ledMask = 7; if LabPacketBuilder.isExperimental(type) { select(.preset) } }
+        }
         // A packet loaded from outside (Scan → "to Lab", a library row) must not be clobbered by
         // the builder's defaults: switch to Raw Hex so the loaded packet is what gets sent.
         .onChange(of: loadedHex) { _, hex in
@@ -127,7 +154,7 @@ struct LabBuilderPanel: View {
     private var typeChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(LabPacketBuilder.LabPacketType.allCases) { t in
+                ForEach(LabPacketBuilder.LabPacketType.allCases.filter { extended || !LabPacketBuilder.isExperimental($0) }) { t in
                     Button(t.label.uppercased()) { select(t) }
                         .font(MMTheme.techLabel(9))
                         .buttonStyle(.bordered)
@@ -214,6 +241,47 @@ struct LabBuilderPanel: View {
                     )
                     Spacer()
                 }
+            }
+        }
+    }
+
+    /// Red / green / blue sliders, 0-63 each (E908 is six bits per channel), with a live swatch.
+    private var rgbSliders: some View {
+        let rgb = (0..<3).map { colors.indices.contains($0) ? max(0, min(63, colors[$0])) : 0 }
+        let swatch = Color(red: Double(rgb[0]) / 63, green: Double(rgb[1]) / 63, blue: Double(rgb[2]) / 63)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 4).fill(swatch).frame(width: 28, height: 28)
+                Text("R \(rgb[0]) · G \(rgb[1]) · B \(rgb[2])")
+                    .font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+            }
+            ForEach(0..<3, id: \.self) { i in
+                HStack(spacing: 6) {
+                    Text(["RED", "GREEN", "BLUE"][i])
+                        .font(MMTheme.techLabel(9))
+                        .foregroundStyle([Color.red, Color.green, Color.blue][i])
+                        .frame(width: 48, alignment: .leading)
+                    Slider(
+                        value: Binding(
+                            get: { Double(rgb[i]) },
+                            set: { v in
+                                var c = rgb
+                                c[i] = Int(v.rounded())
+                                colors = c
+                            }
+                        ),
+                        in: 0...63, step: 1
+                    )
+                    .tint([Color.red, Color.green, Color.blue][i])
+                }
+            }
+            HStack(spacing: 8) {
+                Text("BUZZ").font(MMTheme.techLabel()).foregroundStyle(MMTheme.cyanDim)
+                Toggle("", isOn: $vibEnabled).labelsHidden().tint(MMTheme.cyan)
+                if vibEnabled {
+                    LabPalettePicker(label: "PATTERN", selection: $vibPattern, options: LabPacketBuilder.vibrationPatterns.map { ($0.id, $0.label) })
+                }
+                Spacer()
             }
         }
     }

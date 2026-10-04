@@ -766,6 +766,9 @@ struct RemoteLabView: View {
     @EnvironmentObject var vm: AppViewModel
     @EnvironmentObject var remoteUI: RemoteUIState
     @State private var mbleToken = ""
+    /// Standard (known & tested) vs Extended (experimental) Lab.
+    @AppStorage("lab_extended") private var extended = false
+    @State private var keepAwakePing = PacketBuilder.wakeupPing
 
     var body: some View {
         GeometryReader { geo in
@@ -790,8 +793,12 @@ struct RemoteLabView: View {
 
                 // The builder never transmits. It only fills the hex field; SEND below is the
                 // single thing on this screen that puts a packet on the air.
+                labModeBar
+                Rectangle().fill(MMTheme.panelLine).frame(height: 0.5)
+
                 LabBuilderPanel(
                     enabled: vm.remoteLinkReady,
+                    extended: extended,
                     loadedHex: vm.androidLabHex,
                     onHexBuilt: { vm.androidLabHex = $0 }
                 )
@@ -869,6 +876,49 @@ struct RemoteLabView: View {
         }
         .scrollDisabled(remoteUI.sliderDragging)
         .background(MMTheme.navy)
+    }
+
+    /// Lab header: Standard / Extended, and the keep-awake transmit mode on the relay.
+    private var labModeBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(extended ? "EXTENDED · EXPERIMENTAL" : "STANDARD · KNOWN & TESTED")
+                        .font(MMTheme.techHeader())
+                        .foregroundStyle(extended ? MMTheme.amber : MMTheme.cyan)
+                    Text(extended ? "Adds RGB sliders, single-LED masks and the Experiments list. Untested on a band."
+                                  : "Everything here has been seen working.")
+                        .font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+                }
+                Spacer()
+                Toggle("", isOn: $extended).labelsHidden().tint(MMTheme.amber)
+            }
+            HStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("KEEP BAND AWAKE")
+                        .font(MMTheme.techHeader())
+                        .foregroundStyle(vm.keepAwakeActive ? MMTheme.cyan : MMTheme.textPrimary)
+                    Text(vm.keepAwakeActive
+                         ? "Relay scanning paused · streaming pings · SEND goes out for the command interval, then pings resume"
+                         : "The relay pauses scanning and streams wake pings so the band stays listening between sends.")
+                        .font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(get: { vm.keepAwakeActive }, set: { vm.setKeepAwake($0, hex: keepAwakePing) }))
+                    .labelsHidden().tint(MMTheme.cyan)
+                    .disabled(!vm.remoteLinkReady)
+            }
+            if vm.keepAwakeActive || extended {
+                Picker("PING", selection: Binding(
+                    get: { keepAwakePing },
+                    set: { keepAwakePing = $0; if vm.keepAwakeActive { vm.setKeepAwake(true, hex: $0) } }
+                )) {
+                    Text("Wake ping (CC03 000100)").tag(PacketBuilder.wakeupPing)
+                    Text("Beacon ping (CC03 000000)").tag("8301CC03000000")
+                }
+                .pickerStyle(.segmented)
+            }
+        }
     }
 
     private var labMbleSection: some View {

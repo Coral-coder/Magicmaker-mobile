@@ -135,6 +135,8 @@ object LabPacketBuilder {
         val blurb: String,
         val colorSlots: Int,
         val supportsVib: Boolean,
+        /** Only offered when the Lab's Extended switch is on. */
+        val experimental: Boolean = false,
     ) {
         PRESET("Single Color", "One solid band color.", 1, true),
         DUAL("Dual Color", "Two colors — inner / outer ring.", 2, true),
@@ -146,7 +148,32 @@ object LabPacketBuilder {
         SHOW("Park Show", "A real show effect captured in the park — lightning, sparkle, cannon…", 0, false),
         PING("Wake Ping", "Wakes nearby bands so they hear the next command.", 0, false),
         RAW("Raw Hex", "Type any payload by hand for total control.", 0, false),
+        RGB("Custom RGB", "Any colour from red/green/blue sliders (E908, 6 bits each). Untested on a band.", 0, true, experimental = true),
+        EXPERIMENT("Experiments", "Packets that test something we don't know yet. Each says what to watch for.", 0, false, experimental = true),
     }
+
+    /** An experimental packet and the question it answers. */
+    data class Experiment(val name: String, val hex: String, val watch: String)
+
+    val experiments: List<Experiment> = listOf(
+        Experiment("E907 · three colours? (red/green/blue)", "8301E200E90700220F555942B0", "E907 has dual's 00 22 0F header plus a third colour. Watch where each colour lands."),
+        Experiment("E907 · Flipper sample #1", "8301E200E90700220F434341B0", "Captured by someone else, purpose unknown. Midnight blue ×2 + purple."),
+        Experiment("E907 · Flipper sample #2", "8301E200E90700220F444441B0", "Like #1 with blue instead of midnight blue."),
+        Experiment("Random colour on every LED", "8301E909002E0FBFBFBFBFBFB0", "Palette 0x1F on all five. Same random colour, or one each?"),
+        Experiment("'Unique' colour (0x1E)", "8301E905002E0EFEB0", "The colour your show's Repeating Fade used. Nobody knows what it is."),
+        Experiment("Channel 3 (E3) red", "8301E300E905002E0EF5B0", "Same red as a normal preset but on channel 3. Does the band answer every channel?"),
+        Experiment("Always-on red (timing 8F)", "8301E905008F0EF5B0", "Bit 7 of the timing byte. Does it stay lit until another command?"),
+        Experiment("46-second red (timing 4F)", "8301E905004F0EF5B0", "Bit 6 = ×3.1 s multiplier, 15 × 3.1 ≈ 46 s. Time it."),
+        Experiment("Dual, park flags (4x)", "8301E90600220F5542B0", "Red centre, blue corners, colour bytes flagged like real park duals."),
+        Experiment("Dual, builder flags (8x)", "8301E90600220F9582B0", "Same colours, flagged like the app's Dual builder. Any difference from 4x?"),
+        Experiment("Buzz, other encoding (5B)", "8301E905002E0EF55B", "Red with the tail byte read the Flipper way (pattern in the high nibble)."),
+        Experiment("Candles, mode 2B", "8301E200E90F00120F40565813488DD2462B1317B0", "Your Oct 3 candles with mode byte 2A → 2B."),
+        Experiment("Candles, mode 03", "8301E200E90F00120F40565813488DD246031317B0", "Mode byte 2A → 03. 02 is centre pulse; is 03 something else?"),
+        Experiment("Twinkle, slow mode (0B)", "8301E100E90E00040FB7A8B6ADA059190B48AEB0", "Your Oct 3 twinkle with 02 → 0B near the end: slow twinkle per the listener."),
+        Experiment("Unseen length E90A", "8301E90A002E0FB5B9A2A1B5B9B0", "An E9 length nobody has captured, six colour bytes. Probably ignored."),
+        Experiment("Pink/cyan anim, 2nd pair changed", "8301E100E90C00010F4D575A941519488BB0", "Your most-played pattern with bytes 07 05 → 15 19. Does a second colour change?"),
+        Experiment("'RRC' ping (CC03 132000)", "8301E100CC03132000", "A ping variant from the Flipper list. No light expected — watch for anything."),
+    )
 
     /** Default color slots for a freshly selected type (sensible starting palette). */
     fun defaultColors(type: LabPacketType): List<Int> = when (type) {
@@ -162,6 +189,7 @@ object LabPacketBuilder {
         )
         LabPacketType.CIRCLE -> PacketBuilder.CIRCLE_PATTERN.map { it and 0x1F }
         LabPacketType.ROTATE -> listOf(PacketBuilder.Color.BLUE, PacketBuilder.Color.BLUE, PacketBuilder.Color.BLUE, 0x04, 0x04)
+        LabPacketType.RGB -> listOf(63, 20, 0)
         else -> emptyList()
     }
 
@@ -180,13 +208,14 @@ object LabPacketBuilder {
 
     /** Framing that reproduces what each type has always produced — so defaults change nothing. */
     fun defaultFraming(type: LabPacketType): Framing = when (type) {
-        LabPacketType.CROSSFADE, LabPacketType.ROTATE -> Framing(channelMarker = true, wakePrefix = false)
+        LabPacketType.CROSSFADE, LabPacketType.ROTATE, LabPacketType.RGB -> Framing(channelMarker = true, wakePrefix = false)
         else -> Framing(channelMarker = false, wakePrefix = false)
     }
 
     /** Types whose framing the user can change. Shows/pings/raw are sent exactly as given. */
     fun framingApplies(type: LabPacketType): Boolean =
-        type != LabPacketType.SHOW && type != LabPacketType.PING && type != LabPacketType.RAW
+        type != LabPacketType.SHOW && type != LabPacketType.PING && type != LabPacketType.RAW &&
+            type != LabPacketType.EXPERIMENT
 
     private const val CHANNEL_1 = "E100"
     private const val WAKE_PREFIX = "CC03000100"
@@ -224,6 +253,9 @@ object LabPacketBuilder {
             LabPacketType.SHOW -> showEffects.getOrElse(showIndex) { showEffects.first() }.second
                 .let { if (colors.isEmpty()) it else withColors(it, colors) }
             LabPacketType.PING -> buildPing()
+            LabPacketType.RGB -> PacketBuilder.rgb(c(0, 63), c(1, 20), c(2, 0), vib(vibEnabled, vibPattern))
+            LabPacketType.EXPERIMENT -> experiments.getOrElse(showIndex) { experiments.first() }.hex
+                .let { if (colors.isEmpty()) it else withColors(it, colors) }
             LabPacketType.RAW -> HexUtils.canonicalHex(rawHex)
         }
         if (!framingApplies(type)) return base
@@ -411,6 +443,12 @@ object LabPacketBuilder {
             0x06 -> colorsAt(2)?.let { Decoded(LabPacketType.DUAL, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             0x09 -> colorsAt(5)?.let { Decoded(LabPacketType.RAINBOW, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             0x0B -> colorsAt(7)?.let { Decoded(LabPacketType.CIRCLE, it, vibEnabled, vibPattern, h, framing) } ?: raw()
+            // E908 custom RGB: six-bit channels shifted left one, at body[4..6].
+            0x08 -> if (effect.length >= 7) Decoded(
+                LabPacketType.RGB,
+                (4..6).map { ((effect.byte(it) ?: 0) shr 1) and 0x3F },
+                vibEnabled, vibPattern, h, framing,
+            ) else raw()
             0x11 -> colorsAt(2)?.let { Decoded(LabPacketType.CROSSFADE, it, vibEnabled, vibPattern, h, framing) } ?: raw()
             // E912 colour bytes are in zone order Z2, Z3, Z4, Z5, Z1 — present them as Z1..Z5.
             0x12 -> colorsAt(5)?.let { c -> Decoded(LabPacketType.ROTATE, listOf(c[4], c[0], c[1], c[2], c[3]), vibEnabled, vibPattern, h, framing) } ?: raw()

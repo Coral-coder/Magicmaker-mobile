@@ -168,7 +168,9 @@ struct BandPreviewView: View {
             guard !m.colors.isEmpty else { return rest }
             let step = (Int(t * 4.8) + z) % m.colors.count
             return pal(m.colors[step])
-        case .rgb: return Color(white: 0.62).opacity(breathe)
+        case .rgb:
+            let v = m.rgb ?? 0x9E9E9E
+            return Color(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255).opacity(breathe)
         case .flicker:
             let r = sin(Double(z + 1) * 78.233 + Double(Int(t * 40)) * 12.9898) * 43758.5453
             return rest?.opacity(0.25 + 0.75 * (r - floor(r)))

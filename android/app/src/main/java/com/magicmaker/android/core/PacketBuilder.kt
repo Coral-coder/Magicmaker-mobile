@@ -152,6 +152,26 @@ object PacketBuilder {
         return h.substring(0, pos) + "%02X".format(timing and 0xFF) + h.substring(pos + 2)
     }
 
+    /**
+     * E908 custom RGB — six bits per channel (0-63), each stored shifted left one bit. From the
+     * Flipper app's builder; no captured example exists yet, so this is experimental.
+     */
+    fun rgb(r6: Int, g6: Int, b6: Int, vib: Int = Vibration.OFF): String = pkt(
+        0x83, 0x01, 0xE1, 0x00, 0xE9, 0x08, 0x00, 0x0E, 0xD2, 0x55,
+        (r6 and 0x3F) shl 1, (g6 and 0x3F) shl 1, (b6 and 0x3F) shl 1,
+        tail(vib),
+    )
+
+    /** Set the zone mask (high 3 bits of the single-colour byte) on an E905 packet. */
+    fun withZoneMask(hex: String, mask: Int): String {
+        val h = HexUtils.canonicalHex(hex)
+        val i = h.indexOf("E905")
+        if (i < 0 || i + 12 > h.length) return h
+        val pos = i + 4 + 6                      // body[3]
+        val old = h.substring(pos, pos + 2).toIntOrNull(16) ?: return h
+        return h.substring(0, pos) + "%02X".format(((mask and 7) shl 5) or (old and 0x1F)) + h.substring(pos + 2)
+    }
+
     /** Park-captured rainbow finale (CC03 wrapper) — strong haptic show packet. */
     fun rainbowFinale(): String =
         "8301CC03000100E100E90C000F0F5D465BF005323748B0"

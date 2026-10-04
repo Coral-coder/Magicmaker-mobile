@@ -29,6 +29,8 @@ struct BandEffectModel: Equatable {
     let alwaysOn: Bool
     let approximate: Bool
     let note: String
+    /// E908 only: the 24-bit colour the packet asks for, scaled from 6-bit channels.
+    var rgb: Int? = nil
 
     static let off: [Int?] = [nil, nil, nil, nil, nil]
     static let empty = BandEffectModel(kind: .none, colors: [], perLed: off, buzz: 0, durationMs: 0, fadeMs: 0, alwaysOn: false, approximate: false, note: "No packet")
@@ -102,7 +104,11 @@ struct BandEffectModel: Equatable {
             let allZones = mask == 0 || mask == 7
             return model(.single, c.map { [$0] } ?? [], leds, !allZones, allZones ? "Solid colour, all LEDs" : "Solid colour, zone mask \(mask) (mapping disputed)")
         case 0x06: return model(.dual, palette(2), centreCorners(pal(3), pal(4)), false, "Centre / corners")
-        case 0x08: return model(.rgb, [], off, true, "Custom RGB (6-bit per channel) — colour shown approximately")
+        case 0x08:
+            func ch(_ i: Int) -> Int { e.value.indices.contains(i) ? ((Int(e.value[i]) >> 1) & 0x3F) * 255 / 63 : 0 }
+            return BandEffectModel(kind: .rgb, colors: [], perLed: off, buzz: buzz, durationMs: t.durationMs, fadeMs: t.fadeMs,
+                                   alwaysOn: t.alwaysOn, approximate: true, note: "Custom RGB — untested on a band",
+                                   rgb: (ch(4) << 16) | (ch(5) << 8) | ch(6))
         case 0x09: return model(.rainbow, palette(5), (0..<5).map { pal(3 + $0) }, true, "Five zone colours — slot→LED order disputed")
         case 0x0B: return model(.circle, palette(7), all(0x19), true, "Chase round the corners (\"green double comet\"); no public decoder reads colours from this body")
         case 0x0C:
