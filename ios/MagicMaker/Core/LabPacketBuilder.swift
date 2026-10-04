@@ -116,6 +116,63 @@ enum LabPacketBuilder {
         PacketBuilder.vibrateBand(vib: vib(enabled: vibEnabled, pattern: vibPattern))
     }
 
+    // MARK: - Editable colour slots (mirrors Android LabPacketBuilder.editableSlots)
+
+    /// One recolourable byte: its label on the band and its index in the canonical hex string.
+    struct ColorSlot { let label: String; let hexIndex: Int }
+
+    private static let zones = ["BOT-L", "TOP-L", "CENTRE", "TOP-R", "BOT-R"]
+
+    /// Recolourable bytes in any effect packet. Only the low 5 bits are ever rewritten.
+    static func editableSlots(_ hexRaw: String) -> [ColorSlot] {
+        let h = HexUtils.canonicalHex(hexRaw)
+        let b = HexUtils.hexToBytes(h)
+        guard b.count >= 2, b[0] == 0x83, b[1] == 0x01 else { return [] }
+        var i = 2
+        var vStart = -1, declared = 0, length = 0
+        while i + 1 < b.count {
+            let type = Int(b[i]), len = Int(b[i + 1])
+            if type == 0xE9 { vStart = i + 2; declared = len; length = min(len, b.count - vStart); break }
+            if type == 0xCF && len == 0x9B { break }
+            i += 2 + len
+        }
+        guard vStart >= 0 else { return [] }
+        func byte(_ k: Int) -> Int? { k < length ? Int(b[vStart + k]) : nil }
+        func at(_ k: Int, _ label: String) -> ColorSlot? { k < length ? ColorSlot(label: label, hexIndex: (vStart + k) * 2) : nil }
+        let body = HexUtils.bytesToHex(Array(b[vStart..<(vStart + length)]))
+        let slots: [ColorSlot?]
+        switch declared {
+        case 0x05: slots = [at(3, "COLOR")]
+        case 0x06, 0x0F: slots = [at(3, "CENTRE"), at(4, "CORNERS")]
+        case 0x09, 0x0E: slots = (0..<5).map { at(3 + $0, zones[$0]) }
+        case 0x0C: slots = ((byte(3) ?? 0) >> 5) == 2 ? [at(3, "COLOR 1"), at(4, "COLOR 2")] : []
+        case 0x10: slots = [at(6, "COMET")]
+        case 0x11: slots = body.contains("55515BF00F10374894D13D0508") ? [] : [at(3, "FROM"), at(4, "TO")]
+        case 0x12: slots = [1, 2, 3, 4, 0].enumerated().map { at(3 + $0.offset, zones[$0.element]) }
+        case 0x13: slots = [at(3, "CENTRE"), at(4, "PAIR B"), at(5, "PAIR A")]
+        case 0x14: slots = (byte(7) == 0x02 || byte(7) == 0x05) ? [at(8, "COLOR")] : []
+        default: slots = []
+        }
+        return slots.compactMap { $0 }
+    }
+
+    static func slotColors(_ hexRaw: String) -> [Int] {
+        let chars = Array(HexUtils.canonicalHex(hexRaw))
+        return editableSlots(hexRaw).map { s in (Int(String(chars[s.hexIndex..<(s.hexIndex + 2)]), radix: 16) ?? 0) & 0x1F }
+    }
+
+    /// Rewrite each slot's palette index from `colors` (in slot order), keeping its flag bits.
+    static func withColors(_ hexRaw: String, _ colors: [Int]) -> String {
+        let h = HexUtils.canonicalHex(hexRaw)
+        var chars = Array(h)
+        for (i, s) in editableSlots(h).enumerated() where i < colors.count {
+            guard let old = Int(String(chars[s.hexIndex..<(s.hexIndex + 2)]), radix: 16) else { continue }
+            let v = String(format: "%02X", (old & 0xE0) | (colors[i] & 0x1F))
+            chars.replaceSubrange(s.hexIndex..<(s.hexIndex + 2), with: Array(v))
+        }
+        return String(chars)
+    }
+
     static func paletteLabel(_ id: Int) -> String {
         paletteColors.first(where: { $0.id == (id & 0x1F) })?.label ?? labLabel(id)
     }
@@ -235,7 +292,9 @@ enum LabPacketBuilder {
         case .circle: base = buildCircle(vibEnabled: vibEnabled, vibPattern: vibPattern, colors: colors)
         case .rotate: base = PacketBuilder.rotate(c(0, 0x02), c(1, 0x02), c(2, 0x02), c(3, 0x04), c(4, 0x04), vib: vib(enabled: vibEnabled, pattern: vibPattern))
         case .vibrate: base = buildVibrate(vibEnabled: vibEnabled, vibPattern: vibPattern)
-        case .show: base = showEffects.indices.contains(showIndex) ? showEffects[showIndex].1 : showEffects[0].1
+        case .show:
+            let show = showEffects.indices.contains(showIndex) ? showEffects[showIndex].1 : showEffects[0].1
+            base = colors.isEmpty ? show : withColors(show, colors)
         case .ping: base = PacketBuilder.wakeupPing
         case .raw: return HexUtils.canonicalHex(rawHex)
         }

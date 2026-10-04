@@ -40,6 +40,8 @@ struct LabBuilderPanel: View {
                 Text("Edit the hex field below directly. The summary updates as you type.")
                     .font(MMTheme.techLabel(9))
                     .foregroundStyle(MMTheme.textDim)
+                // Any loaded packet whose shape we understand gets its colours as pickers too.
+                slotPickers(for: HexUtils.canonicalHex(loadedHex)) { onHexBuilt(LabPacketBuilder.withColors(loadedHex, $0)) }
             case .ping:
                 Text("Nothing to set. Send this just before a command if a band isn't reacting.")
                     .font(MMTheme.techLabel(9))
@@ -50,9 +52,10 @@ struct LabBuilderPanel: View {
                     selection: $showIndex,
                     options: LabPacketBuilder.showEffects.enumerated().map { ($0.offset, $0.element.0) }
                 )
-                Text("Recorded in the park and replayed byte-for-byte.")
+                Text("Recorded in the park. Change any colour below; everything else is replayed byte-for-byte.")
                     .font(MMTheme.techLabel(9))
                     .foregroundStyle(MMTheme.textDim)
+                slotPickers(for: builtHex) { colors = $0 }
             default:
                 if type.colorSlots > 0 {
                     labSection(type.colorSlots == 1 ? "COLOR" : "COLORS") {
@@ -103,6 +106,8 @@ struct LabBuilderPanel: View {
         }
         // The builder's only output: whatever it currently describes goes into the hex field.
         .onChange(of: builtHex) { _, hex in if type != .raw { onHexBuilt(hex) } }
+        // A different show starts from its captured colours.
+        .onChange(of: showIndex) { _, _ in if type == .show { colors = [] } }
         // A packet loaded from outside (Scan → "to Lab", a library row) must not be clobbered by
         // the builder's defaults: switch to Raw Hex so the loaded packet is what gets sent.
         .onChange(of: loadedHex) { _, hex in
@@ -208,6 +213,28 @@ struct LabBuilderPanel: View {
                         options: LabPacketBuilder.paletteColors.map { ($0.id, $0.label) }
                     )
                     Spacer()
+                }
+            }
+        }
+    }
+
+    /// Colour pickers for whatever recolourable bytes `hex` carries, labelled by where they land.
+    @ViewBuilder
+    private func slotPickers(for hex: String, onChange: @escaping ([Int]) -> Void) -> some View {
+        let slots = LabPacketBuilder.editableSlots(hex)
+        let values = LabPacketBuilder.slotColors(hex)
+        if !slots.isEmpty && values.count == slots.count {
+            labSection("COLORS") {
+                ForEach(Array(slots.enumerated()), id: \.offset) { i, slot in
+                    HStack(spacing: 6) {
+                        Circle().fill(starlightGlowColor(values[i])).frame(width: 10, height: 10)
+                        LabPalettePicker(
+                            label: slot.label,
+                            selection: Binding(get: { values[i] }, set: { v in var nv = values; nv[i] = v; onChange(nv) }),
+                            options: LabPacketBuilder.paletteColors.map { ($0.id, $0.label) }
+                        )
+                        Spacer()
+                    }
                 }
             }
         }

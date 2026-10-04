@@ -521,6 +521,8 @@ private fun LabPacketBuilderPanel(
                     singleLine = true,
                     textStyle = techLabel().copy(color = AppColors.CyanDim),
                 )
+                // Any loaded packet whose shape we understand gets its colours as pickers too.
+                SlotPickers(currentHex) { rawHex = LabPacketBuilder.withColors(rawHex, it) }
             }
             LabPacketBuilder.LabPacketType.PING -> {
                 Text(
@@ -533,13 +535,14 @@ private fun LabPacketBuilderPanel(
                     label = "SHOW",
                     selectedId = showIndex,
                     options = LabPacketBuilder.showEffects.mapIndexed { i, (name, _) -> i to name },
-                    onSelect = { showIndex = it },
+                    onSelect = { showIndex = it; colors = emptyList() },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "Recorded in the park and replayed byte-for-byte. Framing is part of the recording.",
+                    "Recorded in the park. Change any colour below; everything else is replayed byte-for-byte.",
                     style = techLabel(), color = AppColors.TextDim,
                 )
+                SlotPickers(currentHex) { colors = it }
             }
             else -> {
                 if (selectedType.colorSlots > 0) {
@@ -668,6 +671,30 @@ private fun FramingToggle(title: String, detail: String, checked: Boolean, onCha
         Column(Modifier.weight(1f)) {
             Text(title.uppercase(), style = techLabel())
             Text(detail, style = techLabel(), color = AppColors.TextDim)
+        }
+    }
+}
+
+/**
+ * Colour pickers for whatever recolourable bytes [hex] carries (see LabPacketBuilder.editableSlots),
+ * each labelled by where it lands on the band. [onChange] gets the full list in slot order.
+ */
+@Composable
+private fun SlotPickers(hex: String, onChange: (List<Int>) -> Unit) {
+    val slots = remember(hex) { runCatching { LabPacketBuilder.editableSlots(hex) }.getOrDefault(emptyList()) }
+    val values = remember(hex) { runCatching { LabPacketBuilder.slotColors(hex) }.getOrDefault(emptyList()) }
+    if (slots.isNotEmpty() && values.size == slots.size) {
+        Text("COLORS", style = techLabel(), color = AppColors.CyanDim)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            slots.forEachIndexed { i, slot ->
+                PaletteDropdown(
+                    label = slot.label,
+                    selectedId = values[i],
+                    options = paletteOptions(),
+                    onSelect = { v -> onChange(values.toMutableList().also { it[i] = v }) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }

@@ -222,6 +222,7 @@ object LabPacketBuilder {
             LabPacketType.ROTATE -> PacketBuilder.rotate(c(0, 0x02), c(1, 0x02), c(2, 0x02), c(3, 0x04), c(4, 0x04), vib(vibEnabled, vibPattern))
             LabPacketType.VIBRATE -> buildVibrate(vibEnabled, vibPattern)
             LabPacketType.SHOW -> showEffects.getOrElse(showIndex) { showEffects.first() }.second
+                .let { if (colors.isEmpty()) it else withColors(it, colors) }
             LabPacketType.PING -> buildPing()
             LabPacketType.RAW -> HexUtils.canonicalHex(rawHex)
         }
@@ -281,6 +282,62 @@ object LabPacketBuilder {
         }
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Editable colour slots in any effect packet — what makes Park Shows and loaded packets
+    // recolourable. Positions come from docs/PROTOCOL.md §6a/§6b. Only the low 5 bits (the palette
+    // index) are rewritten; the high 3 bits (slot flag / zone mask) are kept as captured.
+    // ---------------------------------------------------------------------------------------------
+
+    /** One recolourable byte: its label on the band and its index in the canonical hex string. */
+    data class ColorSlot(val label: String, val hexIndex: Int)
+
+    private val ZONES = listOf("BOT-L", "TOP-L", "CENTRE", "TOP-R", "BOT-R")
+
+    fun editableSlots(hexRaw: String): List<ColorSlot> {
+        val h = HexUtils.canonicalHex(hexRaw)
+        val parsed = DisneyTlv.parse(h) ?: return emptyList()
+        var off = 4
+        var valueStart = -1
+        var rec: DisneyTlv.Record? = null
+        for (r in parsed.records) {
+            if (r.type == DisneyTlv.TYPE_EFFECT) { valueStart = off + 4; rec = r; break }
+            off += 4 + r.length * 2
+        }
+        val e = rec ?: return emptyList()
+        fun at(i: Int, label: String) = if (i < e.length) ColorSlot(label, valueStart + i * 2) else null
+        val slots: List<ColorSlot?> = when (e.declaredLength) {
+            0x05 -> listOf(at(3, "COLOR"))
+            0x06, 0x0F -> listOf(at(3, "CENTRE"), at(4, "CORNERS"))
+            0x09, 0x0E -> (0 until 5).map { at(3 + it, ZONES[it]) }
+            0x0C -> if ((e.byte(3) ?: 0) shr 5 == 2) listOf(at(3, "COLOR 1"), at(4, "COLOR 2")) else emptyList()
+            0x10 -> listOf(at(6, "COMET"))
+            0x11 -> if (e.valueHex().contains("55515BF00F10374894D13D0508")) emptyList() else listOf(at(3, "FROM"), at(4, "TO"))
+            // E912 colour bytes are in zone order Z2, Z3, Z4, Z5, Z1.
+            0x12 -> listOf(1, 2, 3, 4, 0).mapIndexed { i, z -> at(3 + i, ZONES[z]) }
+            0x13 -> listOf(at(3, "CENTRE"), at(4, "PAIR B"), at(5, "PAIR A"))
+            0x14 -> if (e.byte(7) == 0x02 || e.byte(7) == 0x05) listOf(at(8, "COLOR")) else emptyList()
+            else -> emptyList()
+        }
+        return slots.filterNotNull()
+    }
+
+    fun slotColors(hexRaw: String): List<Int> {
+        val h = HexUtils.canonicalHex(hexRaw)
+        return editableSlots(h).map { (h.substring(it.hexIndex, it.hexIndex + 2).toIntOrNull(16) ?: 0) and 0x1F }
+    }
+
+    /** Rewrite each slot's palette index from [colors] (in [editableSlots] order), keeping its flag bits. */
+    fun withColors(hexRaw: String, colors: List<Int>): String {
+        val h = HexUtils.canonicalHex(hexRaw)
+        val sb = StringBuilder(h)
+        editableSlots(h).forEachIndexed { i, s ->
+            val c = colors.getOrNull(i) ?: return@forEachIndexed
+            val old = h.substring(s.hexIndex, s.hexIndex + 2).toIntOrNull(16) ?: return@forEachIndexed
+            sb.replace(s.hexIndex, s.hexIndex + 2, "%02X".format((old and 0xE0) or (c and 0x1F)))
+        }
+        return sb.toString()
+    }
+
     /** Recovered builder state from a captured/loaded packet. */
     data class Decoded(
         val type: LabPacketType,
@@ -308,6 +365,17 @@ object LabPacketBuilder {
 
         fun raw() = Decoded(LabPacketType.RAW, emptyList(), vibEnabled, vibPattern, h)
 
+        // A show heard with different colours still loads as that show, with its colours editable.
+        val slotCount = editableSlots(h).size
+        if (slotCount > 0) {
+            val masked = withColors(h, List(slotCount) { 0 })
+            showEffects.indexOfFirst { (_, s) ->
+                s.length == h.length && !s.equals(h, ignoreCase = true) &&
+                    withColors(s, List(editableSlots(s).size) { 0 }) == masked
+            }.takeIf { it >= 0 }?.let { idx ->
+                return Decoded(LabPacketType.SHOW, slotColors(h), false, vibPattern, h, showIndex = idx)
+            }
+        }
         showEffects.indexOfFirst { it.second.equals(h, ignoreCase = true) }.takeIf { it >= 0 }?.let { idx ->
             return Decoded(LabPacketType.SHOW, emptyList(), false, vibPattern, h, showIndex = idx)
         }
