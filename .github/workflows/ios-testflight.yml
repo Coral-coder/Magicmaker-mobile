@@ -189,7 +189,7 @@ jobs:
       # links the debug dylib crashes at launch.
       - name: Archive
         run: |
-          set -o pipefail
+          mkdir -p build
           xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
             -destination 'generic/platform=iOS' -archivePath "build/$SCHEME.xcarchive" \
             -allowProvisioningUpdates \
@@ -200,7 +200,17 @@ jobs:
             PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             ENABLE_DEBUG_DYLIB=NO ENABLE_PREVIEWS=NO \
             MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-            archive | tail -60
+            archive > build/xcodebuild.log 2>&1 || {
+              # Surface compiler errors as annotations (readable without downloading the log).
+              grep -E ': error: ' build/xcodebuild.log | sort -u | head -30 | while IFS= read -r line; do
+                f=$(echo "$line" | sed -E 's#^.*/(ios/[^:]+):([0-9]+):.*$#\1#')
+                l=$(echo "$line" | sed -E 's#^[^:]+:([0-9]+):.*$#\1#')
+                echo "::error file=$f,line=$l::$(echo "$line" | sed -E 's#^.*: error: ##')"
+              done
+              tail -80 build/xcodebuild.log
+              exit 1
+            }
+            tail -60 build/xcodebuild.log
 
       - name: Upload to TestFlight
         if: env.UPLOAD == 'true'
