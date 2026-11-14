@@ -1,23 +1,42 @@
 import Foundation
 
+/// Built-in transmit presets (esp32_magicband + park captures). Port of Android `core/PresetCatalog.kt`.
 enum PresetCatalog {
-    static let wakeupPing = "8301CC03000100"
-    static let vibratePacket = "8301CC03000100E100E90C000F0F5D465BF005323748B0"
+    struct Preset: Equatable {
+        let label: String
+        let hex: String
+        let kind: Kind
 
-    static let showBlocks: [String: String] = [
-        "Show: Wakeup Ping": wakeupPing,
-        "Show: Ambient Blue": "8301CC03000100E100E90500090E02B0",
-        "Show: Ambient Lavender": "8301CC03000100E100E90500090E06B0",
-        "Show: Ambient Cyan": "8301CC03000100E100E90500090E00B0",
-        "Show: Lightning Burst": "8301CC03000100E100E90C000F0F5D465BF00532374895",
-        "Show: Rainbow Finale": "8301CC03000100E100E90C000F0F5D465BF005323748B0",
-        "Show: Fast Alt Response": "8301CC03000100E100E90F00110EF17AEC5C012814281448ABB0",
-        "Show: Outro / Off": "8301CC03000100E100E90500090E1DB0",
-        "Show: Pirate Cannon": "8301E100E9110003240F55515BF00F10374894D13D0508B0",
-        "Show: Slow Sparkle": "8301E100E90F00520EF17AEC5C021902190248ABB0",
-        "Show: Fast Sparkle": "8301E100E90F00520EF17AEC5C021B151B1548ABB0",
+        /// The raw value doubles as the preset's `typeInfo`.
+        enum Kind: String { case ping, vibrate, color, effect }
+    }
+
+    static let wakeupPing = "8301CC03000100"
+    /// "Vibrate band": white with the burst vibration pattern.
+    static let vibratePacket: String = PacketBuilder.vibrateBand()
+
+    private static let lightningHex = "8301CC03000100E100E90C000F0F5D465BF00532374895"
+
+    static let all: [Preset] = [
+        Preset(label: "Ping (wakeup)", hex: PacketBuilder.wakeupPing, kind: .ping),
+        Preset(label: "Vibrate band", hex: PacketBuilder.vibrateBand(), kind: .vibrate),
+        Preset(label: "Vibrate (rainbow FX)", hex: PacketBuilder.rainbowFinale, kind: .vibrate),
+        Preset(label: "Red", hex: PacketBuilder.preset(color: PacketBuilder.Color.red), kind: .color),
+        Preset(label: "Blue", hex: PacketBuilder.preset(color: PacketBuilder.Color.blue), kind: .color),
+        Preset(label: "Cyan", hex: PacketBuilder.preset(color: PacketBuilder.Color.cyan), kind: .color),
+        Preset(label: "Green", hex: PacketBuilder.preset(color: PacketBuilder.Color.green), kind: .color),
+        Preset(label: "Purple", hex: PacketBuilder.preset(color: PacketBuilder.Color.brightPurple), kind: .color),
+        Preset(label: "Pink", hex: PacketBuilder.preset(color: PacketBuilder.Color.pink), kind: .color),
+        Preset(label: "White", hex: PacketBuilder.preset(color: PacketBuilder.Color.white), kind: .color),
+        Preset(label: "Orange", hex: PacketBuilder.preset(color: PacketBuilder.Color.orange), kind: .color),
+        Preset(label: "Dual YO/Blue", hex: PacketBuilder.dual(PacketBuilder.Color.yellowOrange, PacketBuilder.Color.blue), kind: .effect),
+        Preset(label: "5-LED Rainbow", hex: PacketBuilder.rainbow5(), kind: .effect),
+        Preset(label: "Circle", hex: PacketBuilder.circle(), kind: .effect),
+        Preset(label: "Crossfade R/B", hex: PacketBuilder.crossfade(), kind: .effect),
+        Preset(label: "Lightning", hex: lightningHex, kind: .effect),
     ]
 
+    /// EMCOT 5-bit palette. The table lives here; `StarlightColors.palette` reads it.
     static let starlightColorNames: [Int: String] = [
         0x00: "Cyan", 0x01: "Purple", 0x02: "Blue", 0x03: "Midnight Blue",
         0x04: "Blue", 0x05: "Bright Purple", 0x06: "Lavender", 0x07: "Purple",
@@ -29,37 +48,42 @@ enum PresetCatalog {
         0x1E: "Unique", 0x1F: "Random",
     ]
 
-    static func legacyStarlightHex(colorIndex: Int, serial: String = StarlightSerial.defaultSerial) -> String {
-        StarlightSerial.buildHex(serial: serial, colorIndex: colorIndex)
-    }
+    static let showBlocks: [String: String] = [
+        "Lightning": lightningHex,
+        "Rainbow FX": PacketBuilder.rainbowFinale,
+    ]
 
     static func starlightSimKey(_ colorIndex: Int) -> String {
         "SL:\(String(format: "%02X", colorIndex & 0x1F))"
     }
 
-    static func animationPresets() -> [(String, String)] {
-        [
-            ("Animation: Lightning Pulse", "8301CC03000100E100E90C000F0F5D465BF00532374895"),
-            ("Animation: Taste the Rainbow", "8301CC03000100E100E90C000F0F5D465BF005323748B0"),
-            ("Animation: Alternating Strobe", "8301CC03000100E100E90F00110EF17AEC5C012814281448ABB0"),
-            ("Animation: Slow Sparkle", "8301E100E90F00520EF17AEC5C021902190248ABB0"),
-            ("Single Color: Blue", "8301CC03000100E100E90500090E02B0"),
-            ("Single Color: Lavender", "8301CC03000100E100E90500090E06B0"),
-        ]
+    static func legacyStarlightHex(colorIndex: Int, serial: String = StarlightSerial.defaultSerial) -> String {
+        StarlightSerial.buildHex(serial: serial, colorIndex: colorIndex)
     }
 
-    static func allPresets() -> [MagicPacket] {
+    static func asMagicPackets() -> [MagicPacket] {
         var out: [MagicPacket] = []
-        for (label, hex) in showBlocks {
-            if let c = MagicClassifier.classify(hex) {
-                out.append(MagicPacket(hex: c.hex, label: label, category: .show, typeInfo: c.typeInfo, colors: c.colors, simKey: c.simKey))
+        out.reserveCapacity(all.count)
+        for (i, p) in all.enumerated() {
+            let category: MagicCategory
+            switch p.kind {
+            case .color: category = .color
+            case .effect, .vibrate: category = .animation
+            case .ping: category = .show
             }
+            out.append(MagicPacket(
+                id: Int64(i + 1),
+                hex: p.hex,
+                label: p.label,
+                category: category,
+                typeInfo: p.kind.rawValue,
+                colors: "",
+                simKey: "P:\(p.label)"
+            ))
         }
-        for (label, hex) in animationPresets() {
-            if let c = MagicClassifier.classify(hex) {
-                out.append(MagicPacket(hex: c.hex, label: label, category: .animation, typeInfo: c.typeInfo, colors: c.colors, simKey: c.simKey))
-            }
-        }
-        return Array(Dictionary(grouping: out, by: \.simKey).compactMap(\.value.first).sorted { $0.label < $1.label })
+        return out
     }
+
+    /// Older name for `asMagicPackets()`.
+    static func allPresets() -> [MagicPacket] { asMagicPackets() }
 }

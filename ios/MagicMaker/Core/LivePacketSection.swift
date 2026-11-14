@@ -27,6 +27,7 @@ enum LivePacketSection: String, CaseIterable, Identifiable {
     }
 }
 
+/// Port of Android `core/LivePacketSort.kt`.
 enum LivePacketSort {
     static func liveDedupeKey(hex: String, classified: ClassifiedPacket?) -> String {
         let canonical = HexUtils.canonicalHex(hex)
@@ -39,96 +40,87 @@ enum LivePacketSort {
         return "RAW:\(canonical)"
     }
 
-    static func section(of packet: IScanLivePacket) -> LivePacketSection {
-        section(
-            of: AndroidRemotePacket(
-                id: packet.dedupeKey,
-                hex: packet.hex,
-                label: packet.label,
-                rssi: packet.rssi,
-                note: packet.note,
-                category: packet.category.rawValue,
-                typeInfo: packet.typeInfo,
-                dedupeKey: packet.dedupeKey,
-                timestampMs: packet.timestampMs
-            ),
-            typeInfo: packet.typeInfo
-        )
-    }
-
-    static func groupedIScan(_ packets: [IScanLivePacket]) -> [(LivePacketSection, [IScanLivePacket])] {
-        packets
-            .reduce(into: [LivePacketSection: [IScanLivePacket]]()) { dict, packet in
-                dict[section(of: packet), default: []].append(packet)
-            }
-            .sorted { $0.key.sortOrder < $1.key.sortOrder }
-            .map { ($0.key, $0.value.sorted { $0.timestampMs > $1.timestampMs }) }
-    }
-
-    static func section(of preset: AndroidRemotePreset) -> LivePacketSection {
-        let hex = HexUtils.canonicalHex(preset.hex)
-        switch preset.typeInfo {
-        case "starlight":
-            return .wand
-        case "single", "dual":
-            return .colors
-        default:
-            break
-        }
-        if preset.label.localizedCaseInsensitiveContains("Show Control")
-            || preset.typeInfo == "e90e" || preset.typeInfo == "e908" {
-            return .control
-        }
-        if preset.typeInfo == "ping", hex == PresetCatalog.wakeupPing {
-            return .interrogate
-        }
-        if preset.typeInfo == "ping" {
-            return .ping
-        }
-        if preset.category == MagicCategory.animation.rawValue {
-            return .animations
-        }
-        if preset.category == MagicCategory.show.rawValue || preset.typeInfo == "show_block" {
-            return .shows
-        }
-        return .unknown
-    }
-
-    static func section(of packet: AndroidRemotePacket, typeInfo: String = "") -> LivePacketSection {
-        let hex = HexUtils.canonicalHex(packet.hex)
+    /// The one rule set behind every `section(of:)` overload. `category` is a `MagicCategory` raw value.
+    private static func section(hex hexRaw: String, label: String, typeInfo: String, category: String) -> LivePacketSection {
+        let hex = HexUtils.canonicalHex(hexRaw)
         if typeInfo == "starlight" {
             return .wand
         }
         if typeInfo == "single" || typeInfo == "dual" {
             return .colors
         }
-        if packet.label.localizedCaseInsensitiveContains("Show Control")
+        if label.range(of: "Show Control", options: .caseInsensitive) != nil
             || typeInfo == "e90e" || typeInfo == "e908" {
             return .control
         }
-        if typeInfo == "ping", hex == PresetCatalog.wakeupPing {
+        if typeInfo == "ping" && hex == PacketBuilder.wakeupPing {
             return .interrogate
         }
         if typeInfo == "ping" {
             return .ping
         }
-        if packet.category == MagicCategory.animation.rawValue {
+        if category == MagicCategory.animation.rawValue {
             return .animations
         }
-        if packet.category == MagicCategory.show.rawValue || typeInfo == "show_block" {
+        if category == MagicCategory.show.rawValue || typeInfo == "show_block" {
             return .shows
         }
         return .unknown
     }
 
+    /// Every section, in display order.
+    private static let sectionsInOrder: [LivePacketSection] = LivePacketSection.allCases.sorted { $0.sortOrder < $1.sortOrder }
+
+    /// Kotlin `sortedBy { it.label }`: plain code-unit comparison, equal labels keep their order.
+    private static func sortedByLabel<T>(_ rows: [T], label: (T) -> String) -> [T] {
+        let keys: [[UInt16]] = rows.map { Array(label($0).utf16) }
+        let order: [Int] = Array(rows.indices).sorted { (a: Int, b: Int) -> Bool in
+            if keys[a].lexicographicallyPrecedes(keys[b]) { return true }
+            if keys[b].lexicographicallyPrecedes(keys[a]) { return false }
+            return a < b
+        }
+        return order.map { rows[$0] }
+    }
+
+    static func section(of packet: IScanLivePacket) -> LivePacketSection {
+        section(hex: packet.hex, label: packet.label, typeInfo: packet.typeInfo, category: packet.category.rawValue)
+    }
+
+    /// Grouped sections (in display order), newest first within each group.
+    static func groupedIScan(_ packets: [IScanLivePacket]) -> [(LivePacketSection, [IScanLivePacket])] {
+        var groups: [LivePacketSection: [IScanLivePacket]] = [:]
+        for packet in packets {
+            groups[section(of: packet), default: []].append(packet)
+        }
+        var out: [(LivePacketSection, [IScanLivePacket])] = []
+        for key in sectionsInOrder {
+            guard let rows = groups[key] else { continue }
+            let newestFirst = rows.sorted { $0.timestampMs > $1.timestampMs }
+            out.append((key, newestFirst))
+        }
+        return out
+    }
+
+    static func section(of preset: AndroidRemotePreset) -> LivePacketSection {
+        section(hex: preset.hex, label: preset.label, typeInfo: preset.typeInfo, category: preset.category)
+    }
+
+    static func section(of packet: AndroidRemotePacket, typeInfo: String = "") -> LivePacketSection {
+        section(hex: packet.hex, label: packet.label, typeInfo: typeInfo, category: packet.category)
+    }
+
     static func groupedPresets(_ presets: [AndroidRemotePreset]) -> [(LivePacketSection, [AndroidRemotePreset])] {
-        presets
-            .reduce(into: [LivePacketSection: [AndroidRemotePreset]]()) { dict, preset in
-                let section = section(of: preset)
-                dict[section, default: []].append(preset)
-            }
-            .sorted { $0.key.sortOrder < $1.key.sortOrder }
-            .map { ($0.key, $0.value.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }) }
+        var groups: [LivePacketSection: [AndroidRemotePreset]] = [:]
+        for preset in presets {
+            groups[section(of: preset), default: []].append(preset)
+        }
+        var out: [(LivePacketSection, [AndroidRemotePreset])] = []
+        for key in sectionsInOrder {
+            guard let rows = groups[key] else { continue }
+            let byLabel = sortedByLabel(rows, label: { $0.label })
+            out.append((key, byLabel))
+        }
+        return out
     }
 
     static func section(of packet: AndroidRemotePacket) -> LivePacketSection {
@@ -149,12 +141,34 @@ enum LivePacketSort {
     }
 
     static func groupedLive(_ packets: [AndroidRemotePacket]) -> [(LivePacketSection, [AndroidRemotePacket])] {
-        packets
-            .reduce(into: [LivePacketSection: [AndroidRemotePacket]]()) { dict, packet in
-                let section = section(of: packet)
-                dict[section, default: []].append(packet)
-            }
-            .sorted { $0.key.sortOrder < $1.key.sortOrder }
-            .map { ($0.key, $0.value) }
+        var groups: [LivePacketSection: [AndroidRemotePacket]] = [:]
+        for packet in packets {
+            groups[section(of: packet), default: []].append(packet)
+        }
+        var out: [(LivePacketSection, [AndroidRemotePacket])] = []
+        for key in sectionsInOrder {
+            guard let rows = groups[key] else { continue }
+            out.append((key, rows))
+        }
+        return out
+    }
+
+    static func section(of packet: MagicPacket) -> LivePacketSection {
+        section(hex: packet.hex, label: packet.label, typeInfo: packet.typeInfo, category: packet.category.rawValue)
+    }
+
+    /// Grouped sections (in display order), rows sorted by label within each group.
+    static func groupedMagicPackets(_ packets: [MagicPacket]) -> [(LivePacketSection, [MagicPacket])] {
+        var groups: [LivePacketSection: [MagicPacket]] = [:]
+        for packet in packets {
+            groups[section(of: packet), default: []].append(packet)
+        }
+        var out: [(LivePacketSection, [MagicPacket])] = []
+        for key in sectionsInOrder {
+            guard let rows = groups[key] else { continue }
+            let byLabel = sortedByLabel(rows, label: { $0.label })
+            out.append((key, byLabel))
+        }
+        return out
     }
 }
