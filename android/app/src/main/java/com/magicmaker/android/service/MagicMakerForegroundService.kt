@@ -1075,6 +1075,11 @@ class MagicMakerForegroundService : Service() {
             )
         }.onFailure { CrashLog.record(it, "processHeardPacket") }.getOrNull()
 
+        // The Scan strip follows only packets that light the band. Pings, beacons and wand colours
+        // arrive far more often than effects and would otherwise push the last real effect off it.
+        val lights = runCatching { BandEffectModel.from(hex).lightsBand }.getOrDefault(false)
+        val lightLabel = event?.packet?.label ?: classified?.label ?: "?"
+
         if (now - lastHeardUiAt > 250) {
             lastHeardUiAt = now
             val wandIdx = if (classified?.typeInfo == "starlight") {
@@ -1087,12 +1092,24 @@ class MagicMakerForegroundService : Service() {
                 it.copy(
                     packetsHeard = it.packetsHeard + 1,
                     lastHeardHex = hex,
-                    lastHeardLabel = event?.packet?.label ?: classified?.label ?: "?",
+                    lastHeardLabel = lightLabel,
+                    lastLightHex = if (lights) hex else it.lastLightHex,
+                    lastLightLabel = if (lights) lightLabel else it.lastLightLabel,
+                    lightsHeard = it.lightsHeard + if (lights) 1 else 0,
                     wandDisplayColorIndex = wandIdx ?: it.wandDisplayColorIndex,
                 )
             }
         } else {
-            ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
+            // Inside the throttle window a light effect still reaches the strip; only the
+            // heavier notification / relay-status refresh is skipped.
+            ServiceState.update {
+                it.copy(
+                    packetsHeard = it.packetsHeard + 1,
+                    lastLightHex = if (lights) hex else it.lastLightHex,
+                    lastLightLabel = if (lights) lightLabel else it.lastLightLabel,
+                    lightsHeard = it.lightsHeard + if (lights) 1 else 0,
+                )
+            }
         }
 
         if (!autoEnabled || classified == null) return

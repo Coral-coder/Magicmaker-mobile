@@ -31,6 +31,12 @@ data class BandEffectModel(
     /** E908 only: the 24-bit colour the packet asks for, scaled from 6-bit channels. */
     val rgb: Int? = null,
 ) {
+    /**
+     * True when the packet is expected to light the band's LEDs. Wake pings, beacons, wand colours
+     * and show-control records with no known light are false — the Scan strip only follows these.
+     */
+    val lightsBand: Boolean get() = kind != Kind.NONE && kind != Kind.PING && kind != Kind.WAND
+
     enum class Kind {
         NONE, SINGLE, DUAL, RAINBOW, CROSSFADE, PULSE_BURST, CIRCLE, ROTATE, TOGGLE, TWINKLE,
         ALTERNATE, REPEAT_FADE, LIGHTNING, STROBE, STEPPER, COMPLEX, PING, WAND, RGB,

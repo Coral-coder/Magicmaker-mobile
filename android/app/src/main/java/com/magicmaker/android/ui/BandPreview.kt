@@ -247,17 +247,19 @@ private fun ledColor(m: BandEffectModel, z: Int, t: Float): Color? {
 }
 
 /**
- * Scan page: the last packet heard, as the band would show it. Small — one row — and always at
- * the top, so you can watch what is arriving without reading hex.
+ * Scan page: the last heard packet that lights the band, as the band would show it. Small — one
+ * row — and always at the top. Pings, beacons and wand colours never appear here; [hex] is
+ * `UiState.lastLightHex`, which only light effects update, so the strip holds the last real
+ * effect while keep-alive traffic keeps arriving.
  */
 @Composable
-fun LastHeardStrip(hex: String, heard: Int, modifier: Modifier = Modifier) {
+fun LastHeardStrip(hex: String, lights: Int, modifier: Modifier = Modifier) {
     if (hex.isBlank()) {
         Row(
             modifier.fillMaxWidth().height(40.dp).background(AppColors.Navy).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-        ) { Text("LAST HEARD · NOTHING YET", style = techLabel(), color = AppColors.TextDim) }
+        ) { Text("LAST LIGHTS · NONE HEARD YET", style = techLabel(), color = AppColors.TextDim) }
     } else {
-        BandPreview(hex, modifier.height(40.dp), compact = true, title = "LAST HEARD · #$heard")
+        BandPreview(hex, modifier.height(40.dp), compact = true, title = "LAST LIGHTS · #$lights")
     }
 }

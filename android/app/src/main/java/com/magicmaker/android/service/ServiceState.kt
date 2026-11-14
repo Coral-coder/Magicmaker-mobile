@@ -50,6 +50,10 @@ object ServiceState {
         val status: String = "Idle",
         val lastHeardHex: String = "",
         val lastHeardLabel: String = "",
+        /** Last heard packet that lights the band (see BandEffectModel.lightsBand) — the Scan strip. */
+        val lastLightHex: String = "",
+        val lastLightLabel: String = "",
+        val lightsHeard: Int = 0,
         val lastTransmitHex: String = "",
         val scanActive: Boolean = false,
         val recordSessionActive: Boolean = false,
@@ -298,6 +302,9 @@ object ServiceState {
         put("lastHeardHex", _state.value.lastHeardHex)
         put("keepAwake", _state.value.keepAwakeActive)
         put("lastHeardLabel", _state.value.lastHeardLabel)
+        put("lastLightHex", _state.value.lastLightHex)
+        put("lastLightLabel", _state.value.lastLightLabel)
+        put("lightsHeard", _state.value.lightsHeard)
         put("lastTransmitHex", _state.value.lastTransmitHex)
         put("starlightLoopEnabled", _state.value.starlightLoopEnabled)
         put("starlightLoopLabel", _state.value.starlightLoopLabel)
