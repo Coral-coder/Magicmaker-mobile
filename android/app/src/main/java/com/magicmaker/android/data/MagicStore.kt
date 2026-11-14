@@ -229,8 +229,11 @@ class MagicStore(context: Context) {
         state.uiSettings?.let { restorePrefs(PREFS_UI, it) }
     }
 
+    // Recordings are not written to the library file. The CSV session log is their durable
+    // record, and a recording made without a GPS fix carries NaN lat/lng, which Gson refuses
+    // to serialise — one such row in memory made every library save and export fail.
     private fun buildState(): PersistedState = PersistedState(
-        presets, learnedColors, learnedLibrary, learnedRaw, recordings, autoRules,
+        presets, learnedColors, learnedLibrary, learnedRaw, emptyList(), autoRules,
         nextPacketId, nextRecordingId, nextRuleId,
         getStarlightSerial(), getLabHex(), getLabLabel(),
         settings = snapshotPrefs(PREFS_MAIN),
