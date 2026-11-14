@@ -437,15 +437,3 @@ final class MagicStore: ObservableObject {
         }
     }
 }
-
-private extension ClassifiedPacket {
-    func toPacket(userRecorded: Bool = false) -> MagicPacket {
-        MagicPacket(hex: hex, label: label, category: category, typeInfo: typeInfo, colors: colors, simKey: simKey, userRecorded: userRecorded)
-    }
-}
-
-private extension MagicPacket {
-    func toClassified() -> ClassifiedPacket {
-        ClassifiedPacket(hex: hex, label: label, category: category, typeInfo: typeInfo, colors: colors, simKey: simKey)
-    }
-}

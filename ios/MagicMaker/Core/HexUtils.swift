@@ -8,8 +8,18 @@ enum HexUtils {
     static let maxMfgPayloadBytes = 27
     static let magicMakerLocalNamePrefix = "MM:"
 
+    private static let hexDigits: [Character] = Array("0123456789ABCDEF")
+    private static let markerCF9B: [UInt8] = Array("CF9B".utf8)
+    private static let markerCF0B: [UInt8] = Array("CF0B".utf8)
+
     static func bytesToHex(_ bytes: [UInt8]) -> String {
-        bytes.map { String(format: "%02X", $0) }.joined()
+        var out = ""
+        out.reserveCapacity(bytes.count * 2)
+        for b in bytes {
+            out.append(hexDigits[Int(b >> 4)])
+            out.append(hexDigits[Int(b & 0x0F)])
+        }
+        return out
     }
 
     static func hexToBytes(_ hex: String) -> [UInt8] {
@@ -38,6 +48,7 @@ enum HexUtils {
         return h.contains("CF9B") || h.contains("CF0B")
     }
 
+    /// True when a starlight ADV includes the serial + color byte (not a truncated UUID slice).
     static func hasCompleteStarlightPayload(_ hex: String) -> Bool {
         let h = canonicalHex(hex)
         guard isStarlightPacket(h) else { return false }
@@ -70,11 +81,19 @@ enum HexUtils {
     }
 
     static func canonicalFromMfgData(_ data: Data) -> String {
-        let bytes = [UInt8](data)
+        canonicalFromMfgBytes([UInt8](data))
+    }
+
+    static func canonicalFromMfgBytes(_ bytes: [UInt8]) -> String {
         if bytes.count >= 2, bytes[0] == 0x83, bytes[1] == 0x01 {
             return bytesToHex(bytes)
         }
         return "8301" + bytesToHex(bytes)
+    }
+
+    /// Manufacturer payload as an advertiser takes it: without the company ID bytes.
+    static func disneyAdvertisePayload(_ hex: String) -> Data {
+        iosMfgPayload(hex)
     }
 
     /// Manufacturer block for CoreBluetooth relay: company ID + payload.
@@ -87,7 +106,7 @@ enum HexUtils {
     /// Full AD structure for raw HCI LE Set Advertising Data.
     static func disneyLeAdvertisingBytes(_ hex: String) -> Data {
         let mfg = disneyManufacturerBlock(hex)
-        let adLen = UInt8(1 + mfg.count)
+        let adLen = UInt8(clamping: 1 + mfg.count)
         var ad = Data([adLen, 0xFF])
         ad.append(mfg)
         return ad
@@ -99,10 +118,9 @@ enum HexUtils {
         if payload.count > maxMfgPayloadBytes {
             return "Packet too long for BLE ADV (\(payload.count) bytes, max \(maxMfgPayloadBytes))"
         }
-        let ad = disneyLeAdvertisingBytes(hex)
-        if ad.count > 31 {
-            return "Packet too long for BLE ADV (\(ad.count) bytes, max 31)"
-        }
+        // AD structure: type byte + company ID + payload, and its own length byte on top.
+        let adLen = 1 + 2 + payload.count
+        if adLen + 1 > 31 { return "Packet too long for BLE ADV" }
         return nil
     }
 
@@ -119,11 +137,128 @@ enum HexUtils {
     }
     #endif
 
+    /// Starlight / Disney packets embedded in a BLE service UUID (iOS path).
     static func hexFromAdvertisementUUIDBytes(_ bytes: [UInt8]) -> String? {
-        guard bytes.count >= 3, bytes[0] == 0x83, bytes[1] == 0x01 else { return nil }
-        let length = Int(bytes[2])
-        guard length > 0, length <= maxMfgPayloadBytes + 2, 3 + length <= bytes.count else { return nil }
-        return bytesToHex(Array(bytes[0..<(3 + length)]))
+        if bytes.count >= 3, bytes[0] == 0x83, bytes[1] == 0x01 {
+            let length = Int(bytes[2])
+            if length > 0, length <= maxMfgPayloadBytes + 2, 3 + length <= bytes.count {
+                return bytesToHex(Array(bytes[0..<(3 + length)]))
+            }
+        }
+        return scanForDisneyMarker(bytes)
+    }
+
+    static func hexFromServiceData(_ bytes: [UInt8]) -> String? {
+        if bytes.count >= 2, bytes[0] == 0x83, bytes[1] == 0x01 {
+            return bytesToHex(bytes)
+        }
+        return scanForDisneyMarker(bytes)
+    }
+
+    /// A blob with a wand marker (CF9B / CF0B) somewhere inside it: everything from the earliest
+    /// marker on, as canonical hex. The search runs over the hex text, so a marker that straddles
+    /// a byte boundary is found too and yields an odd-length result; `pickBestDisneyHex` drops those.
+    static func scanForDisneyMarker(_ bytes: [UInt8]) -> String? {
+        if bytes.count < 4 { return nil }
+        let hex = bytesToHex(bytes)
+        let text = Array(hex.utf8)
+        let cf9b = indexOf(markerCF9B, in: text)
+        let cf0b = indexOf(markerCF0B, in: text)
+        let idx: Int
+        if cf9b >= 0 && cf0b >= 0 {
+            idx = min(cf9b, cf0b)
+        } else if cf9b >= 0 {
+            idx = cf9b
+        } else if cf0b >= 0 {
+            idx = cf0b
+        } else {
+            return nil
+        }
+        return canonicalHex(String(hex.dropFirst(idx)))
+    }
+
+    /// Offset of the first `needle` in `haystack`, or -1.
+    private static func indexOf(_ needle: [UInt8], in haystack: [UInt8]) -> Int {
+        if needle.isEmpty { return 0 }
+        if haystack.count < needle.count { return -1 }
+        let last = haystack.count - needle.count
+        var start = 0
+        while start <= last {
+            var j = 0
+            while j < needle.count && haystack[start + j] == needle[j] { j += 1 }
+            if j == needle.count { return start }
+            start += 1
+        }
+        return -1
+    }
+
+    /// Ranks payload candidates: longer is better, a wand packet beats anything else, and a wand
+    /// packet that still has its serial and colour byte beats a truncated one.
+    static func disneyHexScore(_ hex: String) -> Int {
+        let h = canonicalHex(hex)
+        var score = h.count
+        if isStarlightPacket(h) { score += 200 }
+        if hasCompleteStarlightPayload(h) { score += 150 }
+        if StarlightSerial.extractSerial(h) != nil { score += 50 }
+        return score
+    }
+
+    /// The highest-scoring valid candidate; the earliest one wins a tie.
+    static func pickBestDisneyHex(_ candidates: [String]) -> String? {
+        var seen = Set<String>()
+        var best: String? = nil
+        var bestScore = 0
+        for raw in candidates {
+            let hex = canonicalHex(raw)
+            if !isDisneyBlePacket(hex) { continue }
+            if !seen.insert(hex).inserted { continue }
+            let score = disneyHexScore(hex)
+            if best == nil || score > bestScore {
+                best = hex
+                bestScore = score
+            }
+        }
+        return best
+    }
+
+    static func bestDisneyHex(candidates: [String]) -> String? {
+        pickBestDisneyHex(candidates)
+    }
+
+    /// Every Disney payload one advertisement carries, for `bestDisneyHex(candidates:)`.
+    ///
+    /// `manufacturerData` is the blob as CoreBluetooth delivers it, company ID bytes first. Only
+    /// what CoreBluetooth exposes can be searched: one manufacturer entry, the service UUIDs, the
+    /// service data and the local name. The raw advertisement bytes are not available here.
+    static func extractDisneyCandidates(
+        manufacturerData: [UInt8]?,
+        serviceData: [[UInt8]],
+        serviceUUIDBytes: [[UInt8]],
+        localName: String?
+    ) -> [String] {
+        var out: [String] = []
+
+        if let mfg = manufacturerData, mfg.count > 2 {
+            let payload = Array(mfg[2...])
+            if mfg[0] == 0x83, mfg[1] == 0x01 {
+                let hex = canonicalFromMfgBytes(payload)
+                if isDisneyBlePacket(hex) { out.append(hex) }
+            }
+            // Any company's data can still wrap a Disney payload or a wand marker.
+            if let hex = hexFromServiceData(payload) { out.append(hex) }
+        }
+
+        if let name = localName, let hex = hexFromMagicMakerLocalName(name) {
+            out.append(hex)
+        }
+
+        for bytes in serviceUUIDBytes {
+            if let hex = hexFromAdvertisementUUIDBytes(bytes) { out.append(hex) }
+        }
+        for bytes in serviceData {
+            if let hex = hexFromServiceData(bytes) { out.append(hex) }
+        }
+        return out
     }
 
     static func extractDisneyPayload(ad: [UInt8]) -> String? {
@@ -138,9 +273,11 @@ enum HexUtils {
             let dataEnd = i + 1 + len
             if dataEnd > ad.count { break }
             if type == 0xFF, dataEnd - dataStart >= 2 {
-                if ad[dataStart] == 0x83, ad[dataStart + 1] == 0x01 {
-                    return bytesToHex(Array(ad[dataStart..<dataEnd]))
+                let data = Array(ad[dataStart..<dataEnd])
+                if data[0] == 0x83, data[1] == 0x01 {
+                    return bytesToHex(data)
                 }
+                if let hex = scanForDisneyMarker(data) { return hex }
             }
             i += len + 1
         }
