@@ -1,4 +1,6 @@
+#if canImport(CoreBluetooth)
 import CoreBluetooth
+#endif
 import Foundation
 
 enum HexUtils {
@@ -11,13 +13,16 @@ enum HexUtils {
     }
 
     static func hexToBytes(_ hex: String) -> [UInt8] {
-        let clean = hex.uppercased().filter { "0123456789ABCDEF".contains($0) }
-        precondition(clean.count % 2 == 0, "Invalid hex length")
-        return stride(from: 0, to: clean.count, by: 2).map { i in
-            let start = clean.index(clean.startIndex, offsetBy: i)
-            let end = clean.index(start, offsetBy: 2)
-            return UInt8(clean[start..<end], radix: 16) ?? 0
+        let clean = Array(hex.uppercased().filter { "0123456789ABCDEF".contains($0) })
+        // Tolerate an odd trailing nibble (e.g. mid-edit in the Lab hex field) by dropping it,
+        // rather than trapping — callers run on every keystroke and must not crash.
+        let byteCount = clean.count / 2
+        var out: [UInt8] = []
+        out.reserveCapacity(byteCount)
+        for i in 0..<byteCount {
+            out.append(UInt8(String(clean[(i * 2)..<(i * 2 + 2)]), radix: 16) ?? 0)
         }
+        return out
     }
 
     static func canonicalHex(_ hex: String) -> String {
@@ -108,8 +113,13 @@ enum HexUtils {
         return canonicalHex(hex)
     }
 
+    #if canImport(CoreBluetooth)
     static func hexFromAdvertisementUUID(_ uuid: CBUUID) -> String? {
-        let bytes = [UInt8](uuid.data)
+        hexFromAdvertisementUUIDBytes([UInt8](uuid.data))
+    }
+    #endif
+
+    static func hexFromAdvertisementUUIDBytes(_ bytes: [UInt8]) -> String? {
         guard bytes.count >= 3, bytes[0] == 0x83, bytes[1] == 0x01 else { return nil }
         let length = Int(bytes[2])
         guard length > 0, length <= maxMfgPayloadBytes + 2, 3 + length <= bytes.count else { return nil }
