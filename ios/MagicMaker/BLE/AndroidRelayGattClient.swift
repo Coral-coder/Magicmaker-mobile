@@ -869,12 +869,53 @@ extension AndroidRelayGattClient: CBPeripheralDelegate {
         if isStatusReadBlocked { return }
         let done = pendingStatusCompletion
         pendingStatusCompletion = nil
-        guard error == nil, let data = characteristic.value,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard error == nil, let data = characteristic.value else {
+            done?(nil)
+            return
+        }
+        let whole: Any? = try? JSONSerialization.jsonObject(with: data)
+        guard let json = (whole as? [String: Any]) ?? Self.leadingFields(ofTruncatedObject: data) else {
             done?(nil)
             return
         }
         done?(AndroidRemoteStatus.parse(json))
+    }
+
+    /// One GATT value carries at most 512 bytes, so a longer status arrives cut off mid-field.
+    /// Keeps the complete fields before the cut; the relay sends the short ones first.
+    static func leadingFields(ofTruncatedObject data: Data) -> [String: Any]? {
+        let bytes = [UInt8](data)
+        guard let first = bytes.first, first == 0x7B else { return nil }
+        var inString = false
+        var escaped = false
+        var depth = 0
+        var lastComma = -1
+        for (index, byte) in bytes.enumerated() {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if byte == 0x5C {
+                    escaped = true
+                } else if byte == 0x22 {
+                    inString = false
+                }
+                continue
+            }
+            if byte == 0x22 {
+                inString = true
+            } else if byte == 0x7B || byte == 0x5B {
+                depth += 1
+            } else if byte == 0x7D || byte == 0x5D {
+                depth -= 1
+            } else if byte == 0x2C && depth == 1 {
+                lastComma = index
+            }
+        }
+        guard lastComma > 0 else { return nil }
+        var repaired: [UInt8] = Array(bytes[0..<lastComma])
+        repaired.append(0x7D)
+        let object: Any? = try? JSONSerialization.jsonObject(with: Data(repaired))
+        return object as? [String: Any]
     }
 
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {

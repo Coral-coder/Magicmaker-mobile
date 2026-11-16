@@ -1028,11 +1028,19 @@ class MagicMakerForegroundService : Service() {
         }
     }
 
-    /** Relay status plus the settings that live in the store rather than in [ServiceState]. */
-    private fun relayStatusJson(): org.json.JSONObject = ServiceState.statusJson()
-        .put("txPowerLevel", store.getTxPowerLevel())
-        .put("txInterleave", store.getTxInterleave())
-        .put("showControlOnly", store.getShowControlOnly())
+    /**
+     * Relay status plus the settings that live in the store rather than in [ServiceState]. The
+     * settings go first so they are still inside the part a truncated BLE read delivers.
+     */
+    private fun relayStatusJson(): org.json.JSONObject {
+        val out = org.json.JSONObject()
+            .put("txPowerLevel", store.getTxPowerLevel())
+            .put("txInterleave", store.getTxInterleave())
+            .put("showControlOnly", store.getShowControlOnly())
+        val status = ServiceState.statusJson()
+        for (key in status.keys()) out.put(key, status.get(key))
+        return out
+    }
 
     private fun publishTimingState() {
         publishState {
