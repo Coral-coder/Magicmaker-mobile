@@ -160,7 +160,9 @@ struct BandEffectModel: Equatable {
             // Colour bytes are in zone order Z2, Z3, Z4, Z5, Z1.
             let leds: [Int?] = [pal(7), pal(3), pal(4), pal(5), pal(6)]
             let rotate = e.byte(2) == 0x0F
-            return model(rotate ? .rotate : .toggle, palette(5), leds, true, rotate ? "Colours rotate around the band" : "Two-colour toggle")
+            let kind: Kind = rotate ? .rotate : .toggle
+            let note: String = rotate ? "Colours rotate around the band" : "Two-colour toggle"
+            return model(kind, palette(5), leds, true, note)
         case 0x13:
             let leds: [Int?] = [pal(5), pal(4), pal(3), pal(5), pal(4)]
             return model(.alternate, palette(3), leds, true, "Corner pairs alternate, centre steady")

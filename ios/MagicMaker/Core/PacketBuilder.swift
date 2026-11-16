@@ -1,6 +1,8 @@
 import Foundation
 
 /// Disney MagicBand+ packet builders — mirrors Android `PacketBuilder.kt` / esp32_magicband.
+///
+/// Tail byte: `0xB0 | (vibration & 0x0F)`.
 enum PacketBuilder {
     enum Color {
         static let cyan = 0x00
@@ -20,6 +22,7 @@ enum PacketBuilder {
         static let random = 0x1F
     }
 
+    /// esp32 frontend vibration patterns (0–15).
     enum Vibration {
         static let off = 0
         static let short = 1
@@ -30,26 +33,31 @@ enum PacketBuilder {
     }
 
     static let wakeupPing = "8301CC03000100"
+    /// Park-captured rainbow finale (CC03 wrapper) — strong haptic show packet.
     static let rainbowFinale = "8301CC03000100E100E90C000F0F5D465BF005323748B0"
 
     private static func pkt(_ bytes: [Int]) -> String {
-        bytes.map { String(format: "%02X", $0 & 0xFF) }.joined()
+        HexUtils.bytesToHex(bytes.map { UInt8(truncatingIfNeeded: $0) })
     }
 
     private static func tail(vib: Int) -> Int { 0xB0 | (vib & 0x0F) }
 
+    /// action=preset — single band color + optional vibration.
     static func preset(color: Int, vib: Int = 0) -> String {
         pkt([0x83, 0x01, 0xE9, 0x05, 0x00, 0x2E, 0x0E, 0xE0 | (color & 0x1F), tail(vib: vib)])
     }
 
+    /// Primary vibrate: white + burst vibration (esp32 preset + vib=5).
     static func vibrateBand(vib: Int = Vibration.burst) -> String {
         preset(color: Color.white, vib: vib)
     }
 
+    /// action=dual
     static func dual(_ c1: Int, _ c2: Int, vib: Int = 0) -> String {
         pkt([0x83, 0x01, 0xE9, 0x06, 0x00, 0x22, 0x0F, 0x80 | (c1 & 0x1F), 0x80 | (c2 & 0x1F), tail(vib: vib)])
     }
 
+    /// action=rainbow — 5-LED palette (E909).
     static func rainbow5(
         c1: Int = Color.yellowOrange,
         c2: Int = Color.red,
@@ -68,16 +76,23 @@ enum PacketBuilder {
     /// The seven pattern bytes of the circle body. Each decodes like every other colour byte: low
     /// 5 bits a palette index, high bits a slot flag (White, Off, Pink, Bright Purple, Yellow
     /// Orange, Bright Purple, Lime). Figment's rotating two-colour effect is this same shape.
-    static let circlePattern = [0x5C, 0x5D, 0x48, 0xA5, 0xD1, 0x45, 0x32]
+    static let circlePattern: [Int] = [0x5C, 0x5D, 0x48, 0xA5, 0xD1, 0x45, 0x32]
 
+    /// action=circle — rotating ring (E90B), default pattern colours.
     static func circle(vib: Int = 0) -> String { circle(colors: [], vib: vib) }
 
     /// Circle with the pattern bytes' palette indexes replaced; each byte keeps its own flag bits.
     static func circle(colors: [Int], vib: Int) -> String {
-        let pattern = circlePattern.enumerated().map { i, b in
-            colors.indices.contains(i) ? (b & 0xE0) | (colors[i] & 0x1F) : b
+        var bytes: [Int] = [0x83, 0x01, 0xE9, 0x0B, 0x0B, 0x0F, 0x0F]
+        for (i, b) in circlePattern.enumerated() {
+            if i < colors.count {
+                bytes.append((b & 0xE0) | (colors[i] & 0x1F))
+            } else {
+                bytes.append(b)
+            }
         }
-        return pkt([0x83, 0x01, 0xE9, 0x0B, 0x0B, 0x0F, 0x0F] + pattern + [tail(vib: vib)])
+        bytes.append(tail(vib: vib))
+        return pkt(bytes)
     }
 
     /// E912 "rotating colours": five per-zone colours the band rotates around its face. Template is
@@ -91,20 +106,31 @@ enum PacketBuilder {
 
     /// Named values for the effect body's timing byte (body[1]). See docs/PROTOCOL.md §6a.
     enum Timing {
+        /// Keep the template's own byte.
         static let `default` = -1
         static let alwaysOn = 0x8F
+        static let s20 = 0x09
+        static let s10 = 0x06
+        static let s5 = 0x04
+        static let s3 = 0x03
         static let options: [(Int, String)] = [(-1, "Default"), (0x8F, "Always on"), (0x09, "~20 s"), (0x06, "~10 s"), (0x04, "~5 s"), (0x03, "~3 s")]
     }
 
     /// Replace the timing byte (body[1]) of the first E9 record. No-op for `Timing.default`.
     static func withTiming(_ hex: String, _ timing: Int) -> String {
-        guard timing != Timing.default else { return hex }
+        if timing == Timing.default { return hex }
+        guard let parsed = DisneyTlv.parse(hex), let e = parsed.effect else { return hex }
+        if e.length < 2 { return hex }
+        // Locate the record in the hex: "E9" + length byte, then body.
+        let head = "E9" + DisneyTlv.hex2(e.declaredLength)
         let h = HexUtils.canonicalHex(hex)
-        guard let r = h.range(of: "E9"), h.distance(from: r.upperBound, to: h.endIndex) >= 6 else { return hex }
-        // "E9" + len (2) + body[0] (2) → body[1] starts 6 chars after the "E9" start.
-        let start = h.index(r.lowerBound, offsetBy: 6)
-        let end = h.index(start, offsetBy: 2)
-        return h.replacingCharacters(in: start..<end, with: String(format: "%02X", timing & 0xFF))
+        guard let found = h.range(of: head) else { return hex }
+        let idx = h.distance(from: h.startIndex, to: found.lowerBound)
+        let pos = idx + 4 + 2          // after head (4 chars) + body[0] (2 chars)
+        var chars: [Character] = Array(h)
+        if pos + 2 > chars.count { return hex }
+        chars.replaceSubrange(pos..<(pos + 2), with: Array(DisneyTlv.hex2(timing)))
+        return String(chars)
     }
 
     /// E908 custom RGB — six bits per channel (0-63), each shifted left one bit. From the Flipper
@@ -120,12 +146,13 @@ enum PacketBuilder {
         guard let r = h.range(of: "E905") else { return h }
         let pos = h.distance(from: h.startIndex, to: r.lowerBound) + 4 + 6   // body[3]
         guard pos + 2 <= h.count else { return h }
-        var chars = Array(h)
+        var chars: [Character] = Array(h)
         guard let old = Int(String(chars[pos..<(pos + 2)]), radix: 16) else { return h }
-        chars.replaceSubrange(pos..<(pos + 2), with: Array(String(format: "%02X", ((mask & 7) << 5) | (old & 0x1F))))
+        chars.replaceSubrange(pos..<(pos + 2), with: Array(DisneyTlv.hex2(((mask & 7) << 5) | (old & 0x1F))))
         return String(chars)
     }
 
+    /// action=crossfade
     static func crossfade(c1: Int = Color.red, c2: Int = Color.blue, vib: Int = 0) -> String {
         pkt([
             0x83, 0x01, 0xE1, 0x00, 0xE9, 0x11, 0x00, 0x6F, 0x0F,
@@ -135,16 +162,27 @@ enum PacketBuilder {
         ])
     }
 
+    /// Kotlin reads these numbers as 32-bit: anything wider is not a number there.
+    private static func int32(fromHex text: String) -> Int? {
+        guard let value = Int(text, radix: 16) else { return nil }
+        if value < Int(Int32.min) || value > Int(Int32.max) { return nil }
+        return value
+    }
+
+    /// A palette index from "#1B", a bare two-digit hex index, or a colour name. White when unknown.
     static func colorFromName(_ name: String) -> Int {
         let raw = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if raw.hasPrefix("#") {
-            return Int(raw.dropFirst(), radix: 16).map { $0 & 0x1F } ?? Color.white
+            guard let value = int32(fromHex: String(raw.dropFirst())) else { return Color.white }
+            return value & 0x1F
         }
         let hexOnly = raw.replacingOccurrences(of: " ", with: "").uppercased()
         if hexOnly.count == 2, let value = Int(hexOnly, radix: 16) {
             return value & 0x1F
         }
-        switch raw.lowercased().replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ") {
+        let lowered = raw.lowercased()
+        let key = lowered.replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ")
+        switch key {
         case "red": return Color.red
         case "blue": return Color.blue
         case "cyan": return Color.cyan
@@ -162,8 +200,12 @@ enum PacketBuilder {
         case "random": return Color.random
         case "red orange", "red-orange": return Color.orange
         default:
-            if let match = PresetCatalog.starlightColorNames.first(where: { $0.value.caseInsensitiveCompare(raw) == .orderedSame }) {
-                return match.key
+            // Any other palette name; the lowest index wins when a name repeats.
+            let palette = StarlightColors.palette
+            for index in palette.keys.sorted() {
+                if let paletteName = palette[index], paletteName.lowercased() == lowered {
+                    return index
+                }
             }
             return Color.white
         }

@@ -95,12 +95,21 @@ enum LivePacketSort {
         var out: [(LivePacketSection, [IScanLivePacket])] = []
         for key in sectionsInOrder {
             guard let rows = groups[key] else { continue }
-            let newestFirst = rows.sorted { $0.timestampMs > $1.timestampMs }
+            // Packets heard in the same millisecond keep their arrival order.
+            let order: [Int] = Array(rows.indices).sorted { (a: Int, b: Int) -> Bool in
+                let ta: Int64 = rows[a].timestampMs
+                let tb: Int64 = rows[b].timestampMs
+                if ta != tb { return ta > tb }
+                return a < b
+            }
+            let newestFirst: [IScanLivePacket] = order.map { rows[$0] }
             out.append((key, newestFirst))
         }
         return out
     }
 
+    // The relay types live in BLE/, which is only part of the app build.
+    #if canImport(CoreBluetooth)
     static func section(of preset: AndroidRemotePreset) -> LivePacketSection {
         section(hex: preset.hex, label: preset.label, typeInfo: preset.typeInfo, category: preset.category)
     }
@@ -152,6 +161,7 @@ enum LivePacketSort {
         }
         return out
     }
+    #endif
 
     static func section(of packet: MagicPacket) -> LivePacketSection {
         section(hex: packet.hex, label: packet.label, typeInfo: packet.typeInfo, category: packet.category.rawValue)

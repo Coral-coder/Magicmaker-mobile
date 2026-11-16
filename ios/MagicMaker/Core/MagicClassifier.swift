@@ -12,9 +12,10 @@ enum MagicClassifier {
         let value: ClassifiedPacket?
     }
 
-    /// Every caller is on the main thread, so the cache is a plain dictionary with no locking.
-    /// It is emptied when full instead of evicting one entry at a time.
+    /// Guarded by `classifyCacheLock`: classify() may be reached from more than one thread.
+    /// The cache is emptied when full instead of evicting one entry at a time.
     private static var classifyCache: [String: Memo] = [:]
+    private static let classifyCacheLock = NSLock()
 
     /// classify() is pure: the same hex always yields the same result. It is also the single
     /// hottest function in the app — the scan path, the library writer, the automation matcher
@@ -22,14 +23,20 @@ enum MagicClassifier {
     /// wand is broadcasting. Memoize it so the TLV walk and the show-block scan run once per
     /// distinct packet instead of once per sighting.
     static func classify(_ hexRaw: String) -> ClassifiedPacket? {
-        if let hit = classifyCache[hexRaw] {
+        classifyCacheLock.lock()
+        let hit: Memo? = classifyCache[hexRaw]
+        classifyCacheLock.unlock()
+        if let hit {
             return hit.value
         }
+        // Classified outside the lock: it is pure, so two threads racing on one hex agree.
         let result = classifyUncached(hexRaw)
+        classifyCacheLock.lock()
         if classifyCache.count >= classifyCacheMax {
             classifyCache.removeAll(keepingCapacity: true)
         }
         classifyCache[hexRaw] = Memo(value: result)
+        classifyCacheLock.unlock()
         return result
     }
 
