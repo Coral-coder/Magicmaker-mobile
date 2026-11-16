@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		403F46F7CAEC5B0C1A46BE47 /* CrashLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7CD22C5F4DF44B51A2290C0 /* CrashLog.swift */; };
+		834AD2611AEBA5C52A039BD5 /* LocationTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91EAB618875B6CF9EA21C986 /* LocationTracker.swift */; };
+		2D8A7F377FE8DB0F76386D26 /* TransmitTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E2B7DE3B3BCF81E0210229C /* TransmitTiming.swift */; };
+		EF03FB96C9537133CC97CC95 /* SessionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E791A1FB5AF54EB8BDB1A7D /* SessionLog.swift */; };
 		CB4D2B69F079BDA1F75AF900 /* LabPacketTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 777143C288CEE2E8F408CF2C /* LabPacketTools.swift */; };
 		A8752C66B23E20A10189C17E /* StarlightColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89015FFEB8C47C7060397C7 /* StarlightColors.swift */; };
 		77446AC1EA21D5896416EEFA /* DisneyTlv.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB7125DDA9E1BD776199D3 /* DisneyTlv.swift */; };
@@ -47,6 +51,10 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A7CD22C5F4DF44B51A2290C0 /* CrashLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashLog.swift; sourceTree = "<group>"; };
+		91EAB618875B6CF9EA21C986 /* LocationTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationTracker.swift; sourceTree = "<group>"; };
+		3E2B7DE3B3BCF81E0210229C /* TransmitTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransmitTiming.swift; sourceTree = "<group>"; };
+		6E791A1FB5AF54EB8BDB1A7D /* SessionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionLog.swift; sourceTree = "<group>"; };
 		777143C288CEE2E8F408CF2C /* LabPacketTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabPacketTools.swift; sourceTree = "<group>"; };
 		B89015FFEB8C47C7060397C7 /* StarlightColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarlightColors.swift; sourceTree = "<group>"; };
 		2EDB7125DDA9E1BD776199D3 /* DisneyTlv.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisneyTlv.swift; sourceTree = "<group>"; };
@@ -99,6 +107,8 @@
 		9BDA14E78FD22C6E6275609C /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				3E2B7DE3B3BCF81E0210229C /* TransmitTiming.swift */,
+				6E791A1FB5AF54EB8BDB1A7D /* SessionLog.swift */,
 				777143C288CEE2E8F408CF2C /* LabPacketTools.swift */,
 				B89015FFEB8C47C7060397C7 /* StarlightColors.swift */,
 				2EDB7125DDA9E1BD776199D3 /* DisneyTlv.swift */,
@@ -122,6 +132,7 @@
 		9D434489A5D76027E15694FC /* BLE */ = {
 			isa = PBXGroup;
 			children = (
+				91EAB618875B6CF9EA21C986 /* LocationTracker.swift */,
 				213E2CED2AADA68CBCBE83FC /* AndroidRelayGattClient.swift */,
 				6636D2A512568C7BCA2BFA76 /* AndroidRemoteClient.swift */,
 				F1E2D3C4B5A6978865544332 /* AndroidRemoteCatalog.swift */,
@@ -138,6 +149,7 @@
 		B82F0ED1387D3E7164DC7CEE /* Data */ = {
 			isa = PBXGroup;
 			children = (
+				A7CD22C5F4DF44B51A2290C0 /* CrashLog.swift */,
 				1F8D4718D1C32F409174A115 /* MagicStore.swift */,
 			);
 			path = Data;
@@ -258,6 +270,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				403F46F7CAEC5B0C1A46BE47 /* CrashLog.swift in Sources */,
+				834AD2611AEBA5C52A039BD5 /* LocationTracker.swift in Sources */,
+				2D8A7F377FE8DB0F76386D26 /* TransmitTiming.swift in Sources */,
+				EF03FB96C9537133CC97CC95 /* SessionLog.swift in Sources */,
 				CB4D2B69F079BDA1F75AF900 /* LabPacketTools.swift in Sources */,
 				A8752C66B23E20A10189C17E /* StarlightColors.swift in Sources */,
 				77446AC1EA21D5896416EEFA /* DisneyTlv.swift in Sources */,

@@ -83,8 +83,10 @@ jobs:
             ios/MagicMaker/Core/PacketBuilder.swift \
             ios/MagicMaker/Core/PacketPatterns.swift \
             ios/MagicMaker/Core/PresetCatalog.swift \
+            ios/MagicMaker/Core/SessionLog.swift \
             ios/MagicMaker/Core/StarlightColors.swift \
             ios/MagicMaker/Core/StarlightSerial.swift \
+            ios/MagicMaker/Core/TransmitTiming.swift \
             ios/ParityCheck/main.swift 2>&1 | tee /tmp/parity-compile.log
           then
             grep -E "error:" /tmp/parity-compile.log > /tmp/parity-problems.txt || true
