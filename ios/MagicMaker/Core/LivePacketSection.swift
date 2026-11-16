@@ -82,6 +82,32 @@ enum LivePacketSort {
         return order.map { rows[$0] }
     }
 
+    static func section(of packet: LivePacket) -> LivePacketSection {
+        section(hex: packet.hex, label: packet.label, typeInfo: packet.typeInfo, category: packet.category.rawValue)
+    }
+
+    /// Grouped sections (in display order), newest first within each group.
+    static func grouped(_ packets: [LivePacket]) -> [(LivePacketSection, [LivePacket])] {
+        var groups: [LivePacketSection: [LivePacket]] = [:]
+        for packet in packets {
+            groups[section(of: packet), default: []].append(packet)
+        }
+        var out: [(LivePacketSection, [LivePacket])] = []
+        for key in sectionsInOrder {
+            guard let rows = groups[key] else { continue }
+            // Packets heard in the same millisecond keep their arrival order.
+            let order: [Int] = Array(rows.indices).sorted { (a: Int, b: Int) -> Bool in
+                let ta: Int64 = rows[a].timestampMs
+                let tb: Int64 = rows[b].timestampMs
+                if ta != tb { return ta > tb }
+                return a < b
+            }
+            let newestFirst: [LivePacket] = order.map { rows[$0] }
+            out.append((key, newestFirst))
+        }
+        return out
+    }
+
     static func section(of packet: IScanLivePacket) -> LivePacketSection {
         section(hex: packet.hex, label: packet.label, typeInfo: packet.typeInfo, category: packet.category.rawValue)
     }

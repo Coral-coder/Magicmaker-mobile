@@ -102,3 +102,23 @@ Android's shared composables. Existing pieces in `Views/AppTheme.swift` (`MMThem
   background queue, then assign on the main actor.
 - Private helper types in different files must not share a name unless they are `private`/`fileprivate`.
   Prefix file-local helpers with the screen name (`ScanRow`, `LogsFilterBar`) to avoid module-level clashes.
+
+## Facts about the engines as built (read the real files for signatures)
+
+- `ScanEngine` and `MagicStore` each publish only `revision`; read `scan.revision` / `store.revision` in
+  `body` so the view refreshes, then read the plain properties.
+- Live feed grouping: `LivePacketSort.section(of: LivePacket)` and `LivePacketSort.grouped(_ packets: [LivePacket])`
+  exist in `Core/LivePacketSection.swift`.
+- `vm.loadInLab(hex:label:)` stores the packet, bumps `vm.labLoadTick` and sets `vm.requestedTab` to
+  `AppViewModel.labTabId` (`"lab"`). The root view switches tab and clears `requestedTab`.
+- `tx.status` is the service-status text (Android `state.status`): "Scanning", "Idle", "TX …",
+  `TxEngine.notLinkedStatus` when no relay is linked.
+- Deleting the wand colour that is looping: Android moves the loop to the next learned colour. The Wand
+  screen does the same itself after `store.deleteLearnedColor(id:)` (call `tx.setStarlightLoop` with the
+  next learned colour, or stop the loop when none is left).
+- On the WiFi relay backend `tx.radioReady` depends on the 2 s relay status poll in `ContentView`; the
+  root view must keep polling.
+- `vm.legacyFeedEnabled` must be set to `false` (or the legacy feed removed) once no screen shows
+  `iscanUniqueLive` / `iscanRawLive`.
+- Packets are dropped while a replay runs and the relay's own broadcast is ignored (echo guard) — screens
+  do nothing about this.
