@@ -1,0 +1,141 @@
+name: iOS core parity
+
+# The Android Kotlin core is the reference for packet logic; the Swift core in
+# ios/MagicMaker/Core must return the same answers.
+#
+#   parity   compiles the Swift core with ios/ParityCheck/main.swift on Linux and runs it
+#            against ios/ParityCheck/vectors.json (what the Android core returns).
+#   vectors  regenerates vectors.json from the Android sources (tools/parity) and fails if the
+#            committed file is out of date, so the Swift core is never checked against old answers.
+#
+# Regenerate the vectors after changing the Android core:
+#   cd tools/parity && ../../android/gradlew --no-daemon -q run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ios/MagicMaker/Core/**"
+      - "ios/ParityCheck/**"
+      - "android/app/src/main/java/com/magicmaker/android/core/**"
+      - "tools/parity/**"
+      # The generator also reads these two: the E905 zone-mask list and the packets in the notes.
+      - "android/app/src/main/java/com/magicmaker/android/ui/LabPacketBuilderPanel.kt"
+      - "docs/PROTOCOL.md"
+      - ".github/workflows/ios-core-parity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-core-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    name: Swift core matches Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      # GitHub shows at most 10 annotations per step. This packs the first 60 problem lines
+      # into at most 8 ::error:: commands, with %0A standing in for the newlines inside each.
+      - name: Annotation helper
+        run: |
+          cat > /tmp/annotate.sh <<'EOF'
+          #!/usr/bin/env bash
+          # usage: annotate.sh <title> <file with one problem per line>
+          head -n 60 "$2" | awk -v title="$1" '
+            {
+              gsub(/%/, "%25")
+              gsub(/\r/, "%0D")
+              block = (count % 8 == 0) ? $0 : block "%0A" $0
+              count++
+              if (count % 8 == 0) { printf "::error title=%s::%s\n", title, block; block = "" }
+            }
+            END { if (count % 8 != 0) printf "::error title=%s::%s\n", title, block }
+          '
+          EOF
+          chmod +x /tmp/annotate.sh
+
+      # Every Core file is listed: they are one module (LabPacketBuilder.swift extends a type
+      # declared in MdeThemeCatalog.swift), and a new file must be added here on purpose.
+      # Swift 5 mode, as in the app target.
+      - name: Compile the Swift core with the parity checker
+        run: |
+          set -o pipefail
+          if ! swiftc -O -swift-version 5 -o /tmp/parity \
+            ios/MagicMaker/Core/BandEffectModel.swift \
+            ios/MagicMaker/Core/DisneyTlv.swift \
+            ios/MagicMaker/Core/HexUtils.swift \
+            ios/MagicMaker/Core/ISCanBackupLogger.swift \
+            ios/MagicMaker/Core/LabPacketBuilder.swift \
+            ios/MagicMaker/Core/LabPacketTools.swift \
+            ios/MagicMaker/Core/LivePacketSection.swift \
+            ios/MagicMaker/Core/MagicClassifier.swift \
+            ios/MagicMaker/Core/MagicModels.swift \
+            ios/MagicMaker/Core/MdeLightSequence.swift \
+            ios/MagicMaker/Core/MdeThemeCatalog.swift \
+            ios/MagicMaker/Core/PacketBuilder.swift \
+            ios/MagicMaker/Core/PacketPatterns.swift \
+            ios/MagicMaker/Core/PresetCatalog.swift \
+            ios/MagicMaker/Core/StarlightColors.swift \
+            ios/MagicMaker/Core/StarlightSerial.swift \
+            ios/ParityCheck/main.swift 2>&1 | tee /tmp/parity-compile.log
+          then
+            grep -E "error:" /tmp/parity-compile.log > /tmp/parity-problems.txt || true
+            if [ ! -s /tmp/parity-problems.txt ]; then
+              tail -n 60 /tmp/parity-compile.log > /tmp/parity-problems.txt
+            fi
+            /tmp/annotate.sh "Swift core does not compile on Linux" /tmp/parity-problems.txt
+            exit 1
+          fi
+
+      - name: Compare the Swift core with the Android vectors
+        run: |
+          set -o pipefail
+          if ! /tmp/parity ios/ParityCheck/vectors.json 2>&1 | tee /tmp/parity-run.log
+          then
+            # The summary first, then the mismatches. If the checker died before printing
+            # either, fall back to the end of its output.
+            grep -E "^PARITY:" /tmp/parity-run.log > /tmp/parity-problems.txt || true
+            grep -E "^MISMATCH " /tmp/parity-run.log >> /tmp/parity-problems.txt || true
+            if [ ! -s /tmp/parity-problems.txt ]; then
+              tail -n 60 /tmp/parity-run.log > /tmp/parity-problems.txt
+            fi
+            /tmp/annotate.sh "Swift core differs from Android" /tmp/parity-problems.txt
+            exit 1
+          fi
+          grep -E "^(NOTE|PARITY):" /tmp/parity-run.log >> "$GITHUB_STEP_SUMMARY" || true
+
+  vectors:
+    name: Committed vectors are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # The Android project's Gradle wrapper, pointed at the generator project.
+      - name: Regenerate vectors from the Android core
+        run: |
+          if ! ./android/gradlew -p tools/parity --no-daemon -q run; then
+            echo "::error title=Parity vector generator failed::tools/parity did not build or run against the Android core. See the log of this step."
+            exit 1
+          fi
+
+      - name: Committed vectors match the Android core
+        run: |
+          if ! git diff --exit-code --stat -- ios/ParityCheck/vectors.json; then
+            echo "::error file=ios/ParityCheck/vectors.json,title=Parity vectors are stale::ios/ParityCheck/vectors.json does not match the Android core. Regenerate it with 'cd tools/parity && ../../android/gradlew --no-daemon -q run' and commit the result."
+            exit 1
+          fi

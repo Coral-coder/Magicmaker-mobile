@@ -137,8 +137,25 @@ enum HexUtils {
     }
     #endif
 
+    /// A 16- or 32-bit service UUID in its full 128-bit form (Bluetooth base UUID), which is the
+    /// form Android searches. Anything else is returned unchanged.
+    private static func fullUUIDBytes(_ bytes: [UInt8]) -> [UInt8] {
+        let baseTail: [UInt8] = [0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB]
+        var out: [UInt8] = []
+        if bytes.count == 2 {
+            out.append(0x00)
+            out.append(0x00)
+        } else if bytes.count != 4 {
+            return bytes
+        }
+        out.append(contentsOf: bytes)
+        out.append(contentsOf: baseTail)
+        return out
+    }
+
     /// Starlight / Disney packets embedded in a BLE service UUID (iOS path).
-    static func hexFromAdvertisementUUIDBytes(_ bytes: [UInt8]) -> String? {
+    static func hexFromAdvertisementUUIDBytes(_ uuidBytes: [UInt8]) -> String? {
+        let bytes = fullUUIDBytes(uuidBytes)
         if bytes.count >= 3, bytes[0] == 0x83, bytes[1] == 0x01 {
             let length = Int(bytes[2])
             if length > 0, length <= maxMfgPayloadBytes + 2, 3 + length <= bytes.count {
@@ -258,7 +275,20 @@ enum HexUtils {
         for bytes in serviceData {
             if let hex = hexFromServiceData(bytes) { out.append(hex) }
         }
+
+        // Android also reads the manufacturer structure straight from the raw advertisement,
+        // company ID bytes included.
+        if let mfg = manufacturerData, let hex = hexFromManufacturerStructure(mfg) {
+            out.append(hex)
+        }
         return out
+    }
+
+    /// What `extractDisneyPayload(ad:)` returns for one manufacturer structure, company ID first.
+    private static func hexFromManufacturerStructure(_ data: [UInt8]) -> String? {
+        if data.count < 2 { return nil }
+        if data[0] == 0x83, data[1] == 0x01 { return bytesToHex(data) }
+        return scanForDisneyMarker(data)
     }
 
     static func extractDisneyPayload(ad: [UInt8]) -> String? {

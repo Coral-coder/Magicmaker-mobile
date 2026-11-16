@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CB4D2B69F079BDA1F75AF900 /* LabPacketTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 777143C288CEE2E8F408CF2C /* LabPacketTools.swift */; };
+		A8752C66B23E20A10189C17E /* StarlightColors.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89015FFEB8C47C7060397C7 /* StarlightColors.swift */; };
+		77446AC1EA21D5896416EEFA /* DisneyTlv.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB7125DDA9E1BD776199D3 /* DisneyTlv.swift */; };
 		0051E14CCE3250E47ED71C12 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3E37DEFFC05D2AC1FAC1C8F2 /* Assets.xcassets */; };
-		00ADE34E861B8BC525DEE5BB /* LabTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B5D5D1BB282E9379A64C059 /* LabTab.swift */; };
 		067642A8DF0AA15C500A67B2 /* AndroidWifiRelayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBF319C3D2D6BF86B6762B38 /* AndroidWifiRelayClient.swift */; };
 		0C5BBFD07F367DBC7D8F271F /* StarlightSerial.swift in Sources */ = {isa = PBXBuildFile; fileRef = C365CE46A5482E7EB62D3AA6 /* StarlightSerial.swift */; };
-		13ED847A3907582B3F86C03E /* FilesTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFFA361D2DA0BFB300EF8E81 /* FilesTab.swift */; };
 		26065E0EF70C275B647C94A1 /* MagicModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A86BDA15A2093E44B9ED49B /* MagicModels.swift */; };
-		2E186C71435FE90EB40F6C50 /* PresetsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBFD04FCA1753CCAB1E505AE /* PresetsTab.swift */; };
 		3D235FD8A7E0CCA68D6E2351 /* MagicClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CC59911D43C3D35D2EDAD60 /* MagicClassifier.swift */; };
 		43605EC3435703159F0C02D4 /* MagicMakerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8602255608055BB152278E8A /* MagicMakerApp.swift */; };
 		471F3EB6D283694928E1B72E /* RemoteTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ECD54B4DC2714422A767DC3 /* RemoteTab.swift */; };
@@ -21,7 +21,6 @@
 		A9B8C7D6E5F403020100FFEE /* LaunchBootstrapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C7D6E5F403020100FFEEDD /* LaunchBootstrapView.swift */; };
 		B2C3D4E5F60718293A4B5D6 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F60718293A4B5D6E7 /* AppTheme.swift */; };
 		C4D5E6F708293A4B5C6D7E8 /* LivePacketSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5E6F708293A4B5C6D7E8F9 /* LivePacketSection.swift */; };
-		4C27A5A64F18313417536099 /* AutoTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = DECD1B0A604D2BD2BDF3BAE1 /* AutoTab.swift */; };
 		4C8ABE2D1614482EE2406DFE /* BleCentral.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBAD0117D0BA807379D558E4 /* BleCentral.swift */; };
 		644CF3770FD5346280CE69BD /* RelayBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA30A2BC703D02716C2AEF30 /* RelayBackend.swift */; };
 		7209E17F865EB2A327697A9D /* MagicStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F8D4718D1C32F409174A115 /* MagicStore.swift */; };
@@ -38,7 +37,6 @@
 		C5C229718F3284FD0D5B7EBA /* BleCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FB774FD8510B3F1D53F2DFC /* BleCoordinator.swift */; };
 		D8EEC22124CF91483BC66929 /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57497AC2B0AB09D609071290 /* AppViewModel.swift */; };
 		DA53F758A231F40FB5C1E043 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C870FCFC0BAC29CCD65CAC5F /* ContentView.swift */; };
-		E1C4972DEF6C0CAB05331A15 /* RecordTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FED21B7C54E94E689A93AAC /* RecordTab.swift */; };
 		E3CE91BD6A2B8E29DC99E3BE /* AndroidRemoteClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6636D2A512568C7BCA2BFA76 /* AndroidRemoteClient.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* AndroidRemoteCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2D3C4B5A6978865544332 /* AndroidRemoteCatalog.swift */; };
 		EB5F227DCD2210C964B29AF3 /* HexUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35812CDFB538AD038EA5AC98 /* HexUtils.swift */; };
@@ -49,9 +47,11 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		777143C288CEE2E8F408CF2C /* LabPacketTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabPacketTools.swift; sourceTree = "<group>"; };
+		B89015FFEB8C47C7060397C7 /* StarlightColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarlightColors.swift; sourceTree = "<group>"; };
+		2EDB7125DDA9E1BD776199D3 /* DisneyTlv.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisneyTlv.swift; sourceTree = "<group>"; };
 		010D54AEFEDAF45A7708C89F /* PacketPatterns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketPatterns.swift; sourceTree = "<group>"; };
 		0718293A4B5C6D7E8FB011 /* PairingQRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingQRScannerView.swift; sourceTree = "<group>"; };
-		0FED21B7C54E94E689A93AAC /* RecordTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordTab.swift; sourceTree = "<group>"; };
 		1A86BDA15A2093E44B9ED49B /* MagicModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagicModels.swift; sourceTree = "<group>"; };
 		1DE2091CB8C5ACAEC915DF23 /* PresetCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetCatalog.swift; sourceTree = "<group>"; };
 		AABB0022CCDD2233EEFF4455 /* PacketBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketBuilder.swift; sourceTree = "<group>"; };
@@ -66,7 +66,6 @@
 		35812CDFB538AD038EA5AC98 /* HexUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HexUtils.swift; sourceTree = "<group>"; };
 		3CC59911D43C3D35D2EDAD60 /* MagicClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagicClassifier.swift; sourceTree = "<group>"; };
 		3E37DEFFC05D2AC1FAC1C8F2 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		4B5D5D1BB282E9379A64C059 /* LabTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabTab.swift; sourceTree = "<group>"; };
 		4FB774FD8510B3F1D53F2DFC /* BleCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BleCoordinator.swift; sourceTree = "<group>"; };
 		57497AC2B0AB09D609071290 /* AppViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppViewModel.swift; sourceTree = "<group>"; };
 		6636D2A512568C7BCA2BFA76 /* AndroidRemoteClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidRemoteClient.swift; sourceTree = "<group>"; };
@@ -83,12 +82,9 @@
 		C365CE46A5482E7EB62D3AA6 /* StarlightSerial.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarlightSerial.swift; sourceTree = "<group>"; };
 		C3D4E5F60718293A4B5D6F8 /* ISCanBackupLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISCanBackupLogger.swift; sourceTree = "<group>"; };
 		C870FCFC0BAC29CCD65CAC5F /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		CBFD04FCA1753CCAB1E505AE /* PresetsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetsTab.swift; sourceTree = "<group>"; };
 		DBAD0117D0BA807379D558E4 /* BleCentral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BleCentral.swift; sourceTree = "<group>"; };
-		DECD1B0A604D2BD2BDF3BAE1 /* AutoTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoTab.swift; sourceTree = "<group>"; };
 		E5F60718293A4B5C6D7E8FA /* WiFiJoiner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiJoiner.swift; sourceTree = "<group>"; };
 		EA6EB75A746632BB6EDE3608 /* MagicMaker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MagicMaker.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		FFFA361D2DA0BFB300EF8E81 /* FilesTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTab.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -103,6 +99,9 @@
 		9BDA14E78FD22C6E6275609C /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				777143C288CEE2E8F408CF2C /* LabPacketTools.swift */,
+				B89015FFEB8C47C7060397C7 /* StarlightColors.swift */,
+				2EDB7125DDA9E1BD776199D3 /* DisneyTlv.swift */,
 				35812CDFB538AD038EA5AC98 /* HexUtils.swift */,
 				3CC59911D43C3D35D2EDAD60 /* MagicClassifier.swift */,
 				1A86BDA15A2093E44B9ED49B /* MagicModels.swift */,
@@ -178,15 +177,10 @@
 			isa = PBXGroup;
 			children = (
 				C3D4E5F60718293A4B5D6E7 /* AppTheme.swift */,
-				DECD1B0A604D2BD2BDF3BAE1 /* AutoTab.swift */,
 				C870FCFC0BAC29CCD65CAC5F /* ContentView.swift */,
 				B8C7D6E5F403020100FFEEDD /* LaunchBootstrapView.swift */,
-				FFFA361D2DA0BFB300EF8E81 /* FilesTab.swift */,
-				4B5D5D1BB282E9379A64C059 /* LabTab.swift */,
 				D2D3D4E5F60718293A4B5D6E /* LabBuilderPanel.swift */,
 				BA11D000E5F60718293A4B04 /* BandPreviewView.swift */,
-				CBFD04FCA1753CCAB1E505AE /* PresetsTab.swift */,
-				0FED21B7C54E94E689A93AAC /* RecordTab.swift */,
 				9ECD54B4DC2714422A767DC3 /* RemoteTab.swift */,
 				B1B2B3B4C5D6E7F809012345 /* StarlightWandView.swift */,
 				0718293A4B5C6D7E8FB011 /* PairingQRScannerView.swift */,
@@ -264,23 +258,23 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CB4D2B69F079BDA1F75AF900 /* LabPacketTools.swift in Sources */,
+				A8752C66B23E20A10189C17E /* StarlightColors.swift in Sources */,
+				77446AC1EA21D5896416EEFA /* DisneyTlv.swift in Sources */,
 				F664819506FB77F20D176969 /* AndroidRelayGattClient.swift in Sources */,
 				E3CE91BD6A2B8E29DC99E3BE /* AndroidRemoteClient.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* AndroidRemoteCatalog.swift in Sources */,
 				067642A8DF0AA15C500A67B2 /* AndroidWifiRelayClient.swift in Sources */,
 				D8EEC22124CF91483BC66929 /* AppViewModel.swift in Sources */,
-				4C27A5A64F18313417536099 /* AutoTab.swift in Sources */,
 				4C8ABE2D1614482EE2406DFE /* BleCentral.swift in Sources */,
 				C5C229718F3284FD0D5B7EBA /* BleCoordinator.swift in Sources */,
 				91791A5B2D195121B1A97B4B /* BleTransmitter.swift in Sources */,
 				DA53F758A231F40FB5C1E043 /* ContentView.swift in Sources */,
 				A9B8C7D6E5F403020100FFEE /* LaunchBootstrapView.swift in Sources */,
-				13ED847A3907582B3F86C03E /* FilesTab.swift in Sources */,
 				EB5F227DCD2210C964B29AF3 /* HexUtils.swift in Sources */,
 				B2C3D4E5F60718293A4B5D7 /* ISCanBackupLogger.swift in Sources */,
 				D4E5F60718293A4B5C6D7E9 /* WiFiJoiner.swift in Sources */,
 				F60718293A4B5C6D7E8FB0 /* PairingQRScannerView.swift in Sources */,
-				00ADE34E861B8BC525DEE5BB /* LabTab.swift in Sources */,
 				3D235FD8A7E0CCA68D6E2351 /* MagicClassifier.swift in Sources */,
 				43605EC3435703159F0C02D4 /* MagicMakerApp.swift in Sources */,
 				26065E0EF70C275B647C94A1 /* MagicModels.swift in Sources */,
@@ -296,8 +290,6 @@
 				AABB0033CCDD2233EEFF4455 /* MdeLightSequence.swift in Sources */,
 				AABB0055CCDD2233EEFF4455 /* MdeThemeCatalog.swift in Sources */,
 				9EA2E8AC01B035D09C9BEF90 /* PresetCatalog.swift in Sources */,
-				2E186C71435FE90EB40F6C50 /* PresetsTab.swift in Sources */,
-				E1C4972DEF6C0CAB05331A15 /* RecordTab.swift in Sources */,
 				644CF3770FD5346280CE69BD /* RelayBackend.swift in Sources */,
 				471F3EB6D283694928E1B72E /* RemoteTab.swift in Sources */,
 				A1A2A3A4B5C6D7E8F9012345 /* StarlightWandView.swift in Sources */,
