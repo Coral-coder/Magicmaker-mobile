@@ -457,8 +457,11 @@ enum MagicClassifier {
         let h = HexUtils.canonicalHex(hexRaw)
         if h.hasPrefix("8301C0") { return true }       // guest MagicBand telemetry
         if h.hasPrefix("83010F11") { return true }     // rolling per-band ID broadcasts
-        // Ping is TLV type 0xCC at the head — no need to run a full classify() for it.
-        return h.hasPrefix("8301CC03")
+        // A ping is a CC record with no effect record after it. A light effect that merely
+        // starts with a wake ping (8301CC03000100E100E9…, e.g. Lightning) is not noise.
+        if !h.hasPrefix("8301CC03") { return false }
+        if let parsed = DisneyTlv.parse(h), parsed.has(DisneyTlv.typeEffect) { return false }
+        return true
     }
 
     /// Strict "is this a real, band/wand-controllable show-control packet" test: interaction pings,

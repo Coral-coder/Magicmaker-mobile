@@ -352,13 +352,16 @@ object MagicClassifier {
      * Packets we never auto-save to the library: guest MagicBand telemetry (8301C0…, every
      * nearby band broadcasts these with rolling payloads) and interaction/wakeup pings. Both
      * are high-volume background noise, not controllable effects.
+     *
+     * A ping is a CC record with no effect record after it. A light effect that merely starts
+     * with a wake ping (8301CC03000100E100E9…, e.g. Lightning) is not noise.
      */
     fun isLibraryNoise(hexRaw: String): Boolean {
         val h = HexUtils.canonicalHex(hexRaw)
         if (h.startsWith("8301C0")) return true       // guest MagicBand telemetry
         if (h.startsWith("83010F11")) return true      // rolling per-band ID broadcasts
-        // Ping is TLV type 0xCC at the head — no need to run a full classify() for it.
-        return h.startsWith("8301CC03")
+        if (!h.startsWith("8301CC03")) return false
+        return DisneyTlv.parse(h)?.has(DisneyTlv.TYPE_EFFECT) != true
     }
 
     /**
