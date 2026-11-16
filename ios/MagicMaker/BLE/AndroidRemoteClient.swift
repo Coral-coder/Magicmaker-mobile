@@ -11,6 +11,15 @@ struct AndroidRemoteStatus: Equatable {
     var autoResponsesSent = 0
     var lastHeardHex = ""
     var lastHeardLabel = ""
+    // The last heard packet that lights a band, and how many of those were heard.
+    var lastLightHex = ""
+    var lastLightLabel = ""
+    var lightsHeard = 0
+    // Reported by newer relays only; nil when the relay does not send them.
+    var keepAwake: Bool? = nil
+    var txPowerLevel: Int? = nil
+    var txInterleave: Bool? = nil
+    var showControlOnly: Bool? = nil
     var relayLinked = false
     var starlightLoopEnabled = false
     var starlightLoopLabel = ""
@@ -38,6 +47,13 @@ struct AndroidRemoteStatus: Equatable {
         s.autoResponsesSent = json["autoResponsesSent"] as? Int ?? 0
         s.lastHeardHex = json["lastHeardHex"] as? String ?? ""
         s.lastHeardLabel = json["lastHeardLabel"] as? String ?? ""
+        s.lastLightHex = json["lastLightHex"] as? String ?? ""
+        s.lastLightLabel = json["lastLightLabel"] as? String ?? ""
+        s.lightsHeard = json["lightsHeard"] as? Int ?? 0
+        s.keepAwake = json["keepAwake"] as? Bool
+        s.txPowerLevel = json["txPowerLevel"] as? Int
+        s.txInterleave = json["txInterleave"] as? Bool
+        s.showControlOnly = json["showControlOnly"] as? Bool
         s.relayLinked = json["relayLinked"] as? Bool ?? false
         s.starlightLoopEnabled = json["starlightLoopEnabled"] as? Bool ?? false
         s.starlightLoopLabel = json["starlightLoopLabel"] as? String ?? ""

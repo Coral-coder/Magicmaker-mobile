@@ -79,6 +79,11 @@ final class BleTransmitter {
     }
 
     func transmit(hex: String, durationMs: Double, onComplete: @escaping () -> Void) {
+        transmit(hex: hex, durationMs: durationMs, onResult: { _ in onComplete() })
+    }
+
+    /// The same send, reporting whether the relay took the packet.
+    func transmit(hex: String, durationMs: Double, onResult: @escaping (Bool) -> Void) {
         relayBackend = RelayBackend.load()
 
         switch relayBackend {
@@ -87,14 +92,14 @@ final class BleTransmitter {
                 if !success {
                     self?.onStatus?("Transmit failed — join Android hotspot, verify IP on LINK")
                 }
-                onComplete()
+                onResult(success)
             }
         case .androidBle, .esp32:
             if !central.relayGatt.isReady {
                 let target = relayBackend == .esp32 ? "MagicMaker-ESP32" : "MagicMaker-Android"
                 onStatus?("Waiting for \(target) — tap Retry in Remote")
                 central.reconnectRelay()
-                onComplete()
+                onResult(false)
                 return
             }
             // The relay (Android or ESP32 firmware) adds the wakeup preamble for band packets.
@@ -102,7 +107,7 @@ final class BleTransmitter {
                 if !success {
                     self?.onStatus?("Transmit failed — check relay")
                 }
-                onComplete()
+                onResult(success)
             }
         }
     }

@@ -37,6 +37,8 @@
 	<string>MagicMaker transmits BLE packets to MagicBands and wands.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MagicMaker sends transmit commands to your Android relay over the local WiFi hotspot.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>MagicMaker tags each captured packet with where it was heard, for the capture map.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

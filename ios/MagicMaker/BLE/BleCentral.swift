@@ -2,9 +2,13 @@ import CoreBluetooth
 import Foundation
 
 protocol BleCentralDelegate: AnyObject {
-    func bleCentral(didReceive hex: String, rssi: Int)
+    /// `address` identifies the advertiser: its CoreBluetooth identifier as an uppercased UUID
+    /// string (iOS never exposes the radio address).
+    func bleCentral(didReceive hex: String, rssi: Int, address: String)
     func bleCentral(didUpdate status: String)
     func bleCentralScanningChanged(_ scanning: Bool)
+    /// The Bluetooth radio changed state; `description` is `BleCentral.stateDescription`.
+    func bleCentralStateChanged(_ description: String)
 }
 
 final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
@@ -14,8 +18,9 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
     private(set) var isScanning = false
     private var isRelayScanning = false
     private var pausedDisneyScanForRelay = false
-    private var recentKeys: [String: Date] = [:]
-    private let dedupeMs: TimeInterval = 1.5
+    /// "Bluetooth ready", "Turn on Bluetooth", "Allow Bluetooth in Settings" or
+    /// "Bluetooth unavailable" (also the value until the radio first reports).
+    private(set) var stateDescription: String = "Bluetooth unavailable"
     let relayGatt = AndroidRelayGattClient()
     var disneyScanRequested: (() -> Bool)?
 
@@ -57,22 +62,47 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        stateDescription = Self.describe(central.state)
         switch central.state {
         case .poweredOn:
-            delegate?.bleCentral(didUpdate: "Bluetooth ready")
+            reportState()
             if relayGatt.reclaimConnectedRelay(central: central) {
                 return
             }
-            startRelayDiscovery()
+            if disneyScanRequested?() ?? false {
+                // Listening was asked for before the radio was ready, or Bluetooth was switched
+                // back on. Any earlier scan ended with the state change. The relay is still found
+                // through this scan (see ensureRelayLink).
+                isScanning = false
+                startScan()
+            } else {
+                startRelayDiscovery()
+            }
         case .poweredOff:
             stopScan()
             stopRelayDiscovery()
-            delegate?.bleCentral(didUpdate: "Turn on Bluetooth")
-        case .unauthorized:
-            delegate?.bleCentral(didUpdate: "Allow Bluetooth in Settings")
+            reportState()
         default:
-            delegate?.bleCentral(didUpdate: "Bluetooth unavailable")
+            reportState()
         }
+    }
+
+    private static func describe(_ state: CBManagerState) -> String {
+        switch state {
+        case .poweredOn:
+            return "Bluetooth ready"
+        case .poweredOff:
+            return "Turn on Bluetooth"
+        case .unauthorized:
+            return "Allow Bluetooth in Settings"
+        default:
+            return "Bluetooth unavailable"
+        }
+    }
+
+    private func reportState() {
+        delegate?.bleCentralStateChanged(stateDescription)
+        delegate?.bleCentral(didUpdate: stateDescription)
     }
 
     func startScan() {
@@ -183,24 +213,13 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
         }
 
         guard isScanning else { return }
+        // A relay's own advertisement is never a heard packet, whichever relay is selected.
+        if advertisesRelayService(advertisementData) { return }
         guard let hex = extractHex(from: advertisementData) else { return }
-        let canonical = HexUtils.canonicalHex(hex)
-        guard HexUtils.isDisneyBlePacket(canonical) else { return }
 
-        let dedupeKey: String
-        if HexUtils.isStarlightPacket(canonical) {
-            dedupeKey = "SL:\(MagicClassifier.starlightColorIndex(canonical))"
-        } else if MagicClassifier.classify(canonical) == nil {
-            dedupeKey = "RAW:\(canonical)"
-        } else {
-            dedupeKey = canonical
-        }
-        let now = Date()
-        if let last = recentKeys[dedupeKey], now.timeIntervalSince(last) < dedupeMs { return }
-        recentKeys[dedupeKey] = now
-        if recentKeys.count > 256 { recentKeys.remove(at: recentKeys.startIndex) }
-
-        delegate?.bleCentral(didReceive: canonical, rssi: RSSI.intValue)
+        // Every advertisement is passed on: counts, logs and signal weighting need them all.
+        let address = peripheral.identifier.uuidString.uppercased()
+        delegate?.bleCentral(didReceive: hex, rssi: RSSI.intValue, address: address)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -218,26 +237,54 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
         }
     }
 
+    private func advertisesRelayService(_ advertisementData: [String: Any]) -> Bool {
+        guard let uuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] else {
+            return false
+        }
+        for uuid in uuids {
+            if AndroidRelayGattClient.uuidMatches(uuid, AndroidRelayGattClient.serviceUUID) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The best Disney payload in one advertisement, as canonical hex. Every place a payload can
+    /// sit is a candidate (manufacturer data, service data, service UUIDs, local name) and the
+    /// highest-ranked one wins, as on Android.
     private func extractHex(from advertisementData: [String: Any]) -> String? {
-        if let mfg = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
-           HexUtils.isDisneyManufacturerData(mfg) {
-            return HexUtils.canonicalFromMfgData(mfg)
+        var manufacturer: [UInt8]? = nil
+        if let mfg = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data {
+            manufacturer = [UInt8](mfg)
         }
-        if let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String,
-           let hex = HexUtils.hexFromMagicMakerLocalName(name) {
-            return hex
-        }
-        if let uuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] {
-            for uuid in uuids {
-                if let hex = HexUtils.hexFromAdvertisementUUID(uuid) {
-                    return hex
+
+        var serviceData: [[UInt8]] = []
+        if let entries = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data] {
+            // A fixed order, so two equally ranked entries always resolve the same way.
+            let keys: [CBUUID] = entries.keys.sorted { $0.uuidString < $1.uuidString }
+            for key in keys {
+                if let value = entries[key] {
+                    serviceData.append([UInt8](value))
                 }
             }
         }
-        if let data = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data],
-           let first = data.values.first {
-            return HexUtils.extractDisneyPayload(ad: [UInt8](first)).map { HexUtils.canonicalHex($0) }
+
+        var serviceUUIDs: [[UInt8]] = []
+        if let uuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] {
+            for uuid in uuids {
+                serviceUUIDs.append([UInt8](uuid.data))
+            }
         }
-        return nil
+
+        let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
+
+        let candidates: [String] = HexUtils.extractDisneyCandidates(
+            manufacturerData: manufacturer,
+            serviceData: serviceData,
+            serviceUUIDBytes: serviceUUIDs,
+            localName: localName
+        )
+        if candidates.isEmpty { return nil }
+        return HexUtils.bestDisneyHex(candidates: candidates)
     }
 }

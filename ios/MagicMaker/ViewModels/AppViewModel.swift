@@ -42,7 +42,7 @@ final class AppViewModel: ObservableObject {
     private lazy var ble: BleCoordinator = {
         let coordinator = BleCoordinator()
         coordinator.store = store
-        coordinator.onPacket = { [weak self] hex, rssi in
+        coordinator.onPacket = { [weak self] hex, rssi, _ in
             Task { @MainActor in self?.handlePacket(hex: hex, rssi: rssi) }
         }
         coordinator.onStatus = { [weak self] msg in
