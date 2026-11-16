@@ -85,3 +85,18 @@ Your Swift is first compiled in CI, minutes later, by someone else. So:
 - `ios/MagicMaker/Core/StarlightColors.swift` — `StarlightColors.palette`, `nameFor(_:)`,
   `broadcastHex(_:serial:)`, `entries(serial:)`.
 - `HexUtils.hexToBytes` already tolerates an odd trailing nibble (drops it) like Kotlin.
+
+## Status (updated by the lead)
+
+- Phase A is done and verified in CI: the whole app target compiles with the ported Core, and
+  `ios/ParityCheck` (run on Linux by `.github/workflows/ios-core-parity.yml`) confirms the Swift Core returns
+  what the Android core returns for 868 packets. Do not change Core behaviour unless your task says so; if
+  you add a file to `Core/`, tell the lead (it must be added to that workflow's `swiftc` file list).
+- Do NOT download, install or run compilers or toolchains (a Linux Swift toolchain left under the
+  scratchpad by an earlier step must not be used — running it is not permitted here). Check by reading.
+- Facts about the ported Core that differ from what you might guess from the Kotlin:
+  `PacketBuilder.rainbowFinale` is a `static let`, not a function; `LabPacketBuilder.buildRandomShow()`
+  returns only the hex and `LabPacketBuilder.buildRandomShowStep()` returns `(label:hex:)`;
+  `LabPacketBuilder.vib(enabled:pattern:)` keeps its labels; `PresetCatalog.vibratePacket` is Android's
+  "Vibrate band" (white + burst). Always open the Swift file and read the real signature.
+- The views RecordTab, FilesTab, AutoTab, PresetsTab and LabTab no longer exist.
