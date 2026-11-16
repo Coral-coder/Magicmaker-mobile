@@ -446,7 +446,7 @@ private final class SessionLogWriter: @unchecked Sendable {
     }
 
     func flush() {
-        queue.sync(execute: {})
+        queue.sync {}
     }
 
     private func appendToBand(_ data: Data, header: String) {
@@ -670,9 +670,15 @@ final class MagicStore: ObservableObject {
             forName: name, object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.flushSave()
+                self?.flushForBackground()
             }
         }
+    }
+
+    private func flushForBackground() {
+        // A raw packet learned in the last few seconds is still waiting for its spaced save.
+        if rawSavePending { save() }
+        flushSave()
     }
 
     // MARK: - Derived lists
@@ -1806,9 +1812,18 @@ final class MagicStore: ObservableObject {
         hasLoaded = true
         let url = storeURL
         if !fileManager.fileExists(atPath: url.path) { return }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            // The file is there but could not be read just now (locked, I/O error). It may be
+            // a good library, so it is neither moved nor written over during this run.
+            CrashLog.record(error, "MagicStore.load read")
+            storeWriteBlocked = true
+            return
+        }
         let state: StorePersistedState
         do {
-            let data = try Data(contentsOf: url)
             state = try decodeStoreState(data)
         } catch {
             CrashLog.record(error, "MagicStore.load")

@@ -65,15 +65,17 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
         stateDescription = Self.describe(central.state)
         switch central.state {
         case .poweredOn:
+            // Any earlier scan ended when the radio left the powered-on state.
+            isScanning = false
+            isRelayScanning = false
             reportState()
             if relayGatt.reclaimConnectedRelay(central: central) {
                 return
             }
-            if disneyScanRequested?() ?? false {
+            let wantDisney: Bool = disneyScanRequested?() ?? false
+            if wantDisney {
                 // Listening was asked for before the radio was ready, or Bluetooth was switched
-                // back on. Any earlier scan ended with the state change. The relay is still found
-                // through this scan (see ensureRelayLink).
-                isScanning = false
+                // back on. The relay is still found through this scan (see ensureRelayLink).
                 startScan()
             } else {
                 startRelayDiscovery()
@@ -213,6 +215,11 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
         }
 
         guard isScanning else { return }
+        // An "MM:<hex>" name is another phone asking a relay to send, not a packet on air.
+        if let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String,
+           HexUtils.hexFromMagicMakerLocalName(name) != nil {
+            return
+        }
         // A relay's own advertisement is never a heard packet, whichever relay is selected.
         if advertisesRelayService(advertisementData) { return }
         guard let hex = extractHex(from: advertisementData) else { return }
@@ -250,8 +257,8 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
     }
 
     /// The best Disney payload in one advertisement, as canonical hex. Every place a payload can
-    /// sit is a candidate (manufacturer data, service data, service UUIDs, local name) and the
-    /// highest-ranked one wins, as on Android.
+    /// sit is a candidate (manufacturer data, service UUIDs, service data) and the highest-ranked
+    /// one wins, as on Android.
     private func extractHex(from advertisementData: [String: Any]) -> String? {
         var manufacturer: [UInt8]? = nil
         if let mfg = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data {
@@ -276,13 +283,11 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
             }
         }
 
-        let localName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
-
         let candidates: [String] = HexUtils.extractDisneyCandidates(
             manufacturerData: manufacturer,
             serviceData: serviceData,
             serviceUUIDBytes: serviceUUIDs,
-            localName: localName
+            localName: nil
         )
         if candidates.isEmpty { return nil }
         return HexUtils.bestDisneyHex(candidates: candidates)

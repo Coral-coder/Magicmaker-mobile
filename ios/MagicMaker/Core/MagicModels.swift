@@ -156,6 +156,49 @@ struct IScanLivePacket: Identifiable, Equatable {
     var id: String { "\(timestampMs)-\(hex.prefix(16))" }
 }
 
+/// One advertisement in the scan engine's live feed. Port of Android `ServiceState.LivePacket`.
+struct LivePacket: Identifiable, Equatable {
+    let hex: String
+    let label: String
+    let rssi: Int
+    let note: String
+    let category: MagicCategory
+    let typeInfo: String
+    let dedupeKey: String
+    let timestampMs: Int64
+    /// The advertiser's source id; empty when unknown.
+    let address: String
+    /// The source is one the user tagged as their own MagicBand.
+    let isBand: Bool
+
+    var id: String { "\(timestampMs)-\(dedupeKey)" }
+}
+
+/// A source heard while scanning; feeds the "pick my band" list.
+struct SeenAddress: Identifiable, Equatable {
+    let address: String
+    let rssi: Int
+    let lastSeenMs: Int64
+    let count: Int
+
+    var id: String { address }
+}
+
+/// Per-broadcaster diagnostics: one entry per source.
+struct SourceStat: Identifiable, Equatable {
+    let address: String
+    let count: Int
+    let bestRssi: Int
+    let lastRssi: Int
+    let lastSeenMs: Int64
+    /// The source sent at least one show, animation or colour packet.
+    let priority: Bool
+    /// The category names heard from this source, in alphabetical order.
+    let categories: [String]
+
+    var id: String { address }
+}
+
 struct Recording: Identifiable, Codable, Equatable {
     var id: Int64
     var timestampMs: Int64

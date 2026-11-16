@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 
@@ -16,7 +17,13 @@ final class AppViewModel: ObservableObject {
     // Scan filter: keep only real show-control packets (pings / E?00E9 effects / starlight /
     // show blocks) and drop MagicBand + device noise. Toggle off to see every raw Disney packet.
     @Published var iscanShowControlOnly = UserDefaults.standard.object(forKey: "iscan_show_control_only") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(iscanShowControlOnly, forKey: "iscan_show_control_only") }
+        didSet {
+            UserDefaults.standard.set(iscanShowControlOnly, forKey: "iscan_show_control_only")
+            // The scan engine filters what is learned and logged with the same switch.
+            if scan.showControlOnly != iscanShowControlOnly {
+                scan.showControlOnly = iscanShowControlOnly
+            }
+        }
     }
     @Published var activeSessionName: String?
     @Published private(set) var isCatalogSyncInFlight = false
@@ -29,21 +36,32 @@ final class AppViewModel: ObservableObject {
     @Published var androidLivePackets: [AndroidRemotePacket] = []
     @Published var androidCatalog: AndroidRemoteCatalog?
     @Published var androidLabHex = ""
+    /// Goes up when a packet is sent to the Lab from another screen, so the Lab reloads it.
+    @Published var labLoadTick = 0
+    /// A tab another screen asked the root view to show (`labTabId`); the root view clears it.
+    @Published var requestedTab: String?
+    static let labTabId = "lab"
     private var lastCatalogRevision = -1
 
-    private var _store: MagicStore?
-    var store: MagicStore {
-        if let _store { return _store }
-        let created = MagicStore()
-        created.prepareIfNeeded()
-        _store = created
-        return created
-    }
+    /// The iPhone's own library, preferences and capture logs.
+    let store: MagicStore
+    let location: LocationTracker
+    /// The scan pipeline: live feed, learning, logging and auto-responses.
+    let scan: ScanEngine
+    /// Everything that sends, through the linked relay.
+    let tx: TxEngine
+    /// Keeps the older iScan feed (`iscanUniqueLive` / `iscanRawLive`) up to date. A root view
+    /// whose screens all read `ScanEngine` sets this to false to spare the per-packet work.
+    var legacyFeedEnabled = true
+
     private lazy var ble: BleCoordinator = {
         let coordinator = BleCoordinator()
         coordinator.store = store
-        coordinator.onPacket = { [weak self] hex, rssi, _ in
-            Task { @MainActor in self?.handlePacket(hex: hex, rssi: rssi) }
+        coordinator.onPacket = { [weak self] hex, rssi, address in
+            Task { @MainActor in self?.handlePacket(hex: hex, rssi: rssi, address: address) }
+        }
+        coordinator.onBluetoothState = { [weak self] state in
+            Task { @MainActor in self?.scan.noteBluetoothStatus(state) }
         }
         coordinator.onStatus = { [weak self] msg in
             Task { @MainActor in
@@ -76,8 +94,91 @@ final class AppViewModel: ObservableObject {
     private var catalogFetchInFlight = false
     private var catalogFetchTimeout: DispatchWorkItem?
     private var catalogSyncCooldownUntil = Date.distantPast
+    // The older iScan feed is built in these plain arrays and copied to the published ones a
+    // few times a second, so a burst of adverts does not redraw the screens once per packet.
+    private var iscanRawWork: [IScanLivePacket] = []
+    private var iscanUniqueWork: [IScanLivePacket] = []
+    private var iscanFlushScheduled = false
+    private var nextLegacyRecordingId: Int64 = 1
+    private var keepAwakeChangedAt = Date.distantPast
+    /// The ping the relay streams while keep-awake is on.
+    private var keepAwakeHex: String = PacketBuilder.wakeupPing
+    private var lastRelayWandColorIndex: Int?
+    private var engineObservers = Set<AnyCancellable>()
 
-    init() {}
+    init() {
+        let store = MagicStore()
+        store.prepareIfNeeded()
+        let location = LocationTracker()
+        self.store = store
+        self.location = location
+        self.scan = ScanEngine(store: store, location: location)
+        self.tx = TxEngine(store: store)
+        wireEngines()
+    }
+
+    /// Connects the engines to each other and to the relay link. The engines never talk to
+    /// CoreBluetooth themselves.
+    private func wireEngines() {
+        tx.radioReady = { [weak self] in
+            self?.remoteLinkReady ?? false
+        }
+        tx.radioSend = { [weak self] hex, durationMs, completion in
+            guard let self else {
+                completion(false)
+                return
+            }
+            self.ble.send(hex: hex, durationMs: durationMs, onComplete: completion)
+        }
+        tx.onWandColor = { [weak self] index in
+            self?.noteWandColor(index)
+        }
+        tx.scanWanted = { [weak self] in
+            self?.scan.scanActive ?? false
+        }
+        scan.onAutoResponses = { [weak self] hexes, label in
+            self?.tx.transmitSequence(hexes, label: label)
+        }
+        scan.onScanWanted = { [weak self] wanted in
+            self?.scanWantedChanged(wanted)
+        }
+        scan.onWandColorHeard = { [weak self] index in
+            self?.noteWandColor(index)
+        }
+        // The older log switch shows the engine's capture log, whoever changed it.
+        scan.objectWillChange
+            .sink { [weak self] _ in
+                self?.syncLegacyLogState()
+            }
+            .store(in: &engineObservers)
+    }
+
+    /// The scan engine's switch changed: the older feed's flag follows it, and the radio starts
+    /// or stops listening.
+    private func scanWantedChanged(_ wanted: Bool) {
+        if isLocalListening != wanted {
+            isLocalListening = wanted
+        }
+        syncBleListenModes()
+    }
+
+    /// The wand view follows the last colour heard or sent.
+    private func noteWandColor(_ index: Int) {
+        if wandDisplayColorIndex != (index & 0x1F) {
+            applyWandDisplayColorIndex(index)
+        }
+    }
+
+    /// The relay reports the last wand colour it heard or sent with every status read. It is
+    /// taken over only when it changes, so a colour the iPhone itself just heard or sent is
+    /// not replaced by the relay's older one a moment later.
+    private func adoptRelayWandColor(_ index: Int) {
+        if lastRelayWandColorIndex == index { return }
+        lastRelayWandColorIndex = index
+        if wandDisplayColorIndex != index {
+            wandDisplayColorIndex = index
+        }
+    }
 
     /// Deferred from init so CoreBluetooth, file I/O, and remote refresh run after UIKit finishes launching.
     // MARK: - New Wand custom names
@@ -130,10 +231,29 @@ final class AppViewModel: ObservableObject {
         ble.activateBluetooth()
         refreshRelayStatus()
         refreshAndroidRemote()
-        if isBackupLogging, backupLogFileName == nil {
-            backupLogFileName = ISCanBackupLogger.shared.startSession()
+        location.start()             // each captured packet is tagged with where it was heard
+        scan.noteBluetoothStatus(ble.bluetoothState)
+        syncShowControlFilter()
+        scan.start()                 // scanning and logging resume as the user left them (on by default)
+        tx.start()
+        syncLegacyLogState()
+        if isLocalListening {
+            reconnectRelay()
+            statusMessage = "iPhone backup scan listening"
         }
-        setLocalListening(true)      // scan by default on launch (no need to tap the Scan button)
+    }
+
+    /// One filter switch for the older screen and the scan engine. The engine's setting is the
+    /// one that counts; a choice made on the older screen before the engine had one is kept.
+    private func syncShowControlFilter() {
+        let defaults = UserDefaults.standard
+        let engineHasChoice = defaults.object(forKey: "show_control_only") != nil
+        let legacyHasChoice = defaults.object(forKey: "iscan_show_control_only") != nil
+        if !engineHasChoice && legacyHasChoice {
+            scan.showControlOnly = iscanShowControlOnly
+        } else if iscanShowControlOnly != scan.showControlOnly {
+            iscanShowControlOnly = scan.showControlOnly
+        }
     }
 
     var telemetryLine: String {
@@ -182,45 +302,62 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    private func handlePacket(hex: String, rssi: Int) {
+    private func handlePacket(hex: String, rssi: Int, address: String) {
+        if isRelayEcho(hex) { return }
+        // The scan engine learns, logs and answers every heard packet.
+        scan.handleHeard(hex: hex, rssi: rssi, address: address)
+        fillLegacyFeed(hex: hex, rssi: rssi)
+    }
+
+    /// True for a packet the linked relay is broadcasting for this iPhone. An Android phone
+    /// never hears its own broadcasts and pauses its scan for a whole replay; here the relay
+    /// is a second radio, so its output would be learned, logged and answered as if heard.
+    private func isRelayEcho(_ hex: String) -> Bool {
+        if tx.replayActive { return true }
+        let sending: Bool = tx.isTransmitting
+        if !sending && !keepAwakeActive { return false }
+        let canonical = HexUtils.canonicalHex(hex)
+        if keepAwakeActive && canonical == keepAwakeHex { return true }
+        if sending {
+            // The packet on air, or the wake ping the relay sends ahead of it.
+            return canonical == tx.lastTransmitHex || canonical == PacketBuilder.wakeupPing
+        }
+        return false
+    }
+
+    /// The older iScan feed. It only fills its in-memory lists: saving to the library and the
+    /// capture log belong to the scan engine, so nothing is learned or logged twice.
+    private func fillLegacyFeed(hex: String, rssi: Int) {
+        if !legacyFeedEnabled { return }
         // Drop MagicBand/device noise up front: unless the user opted into raw, only real
         // show-control packets (those the classifier structurally recognizes) get through.
-        if iscanShowControlOnly, MagicClassifier.classify(hex) == nil { return }
+        let classified: ClassifiedPacket? = MagicClassifier.classify(hex)
+        if iscanShowControlOnly, classified == nil { return }
         if isLocalListening {
-            appendLocalLivePacket(hex: hex, rssi: rssi)
-            if isBackupLogging {
-                ISCanBackupLogger.shared.append(hex: hex, rssi: rssi)
-            }
+            appendLocalLivePacket(hex: hex, rssi: rssi, classified: classified)
             maybeIscanAutoRespond(hex: hex)
             return
         }
 
-        guard isRecording || isAutoEnabled else { return }
-
-        if let event = store.processHeardPacket(hex: hex, rssi: rssi, persistToSession: isRecording) {
-            if isRecording {
-                statusMessage = event.reason
-                let rec = Recording(
-                    id: event.packet.id,
-                    timestampMs: Int64(Date().timeIntervalSince1970 * 1000),
-                    hex: event.packet.hex,
-                    rssi: rssi,
-                    label: event.packet.label,
-                    category: event.packet.category,
-                    typeInfo: event.packet.typeInfo,
-                    colors: event.packet.colors,
-                    libraryNote: event.reason
-                )
-                livePackets.append(rec)
-                if livePackets.count > maxLive { livePackets.removeFirst(livePackets.count - maxLive) }
-            } else if event.added {
-                statusMessage = event.reason
-            }
-        }
+        guard isRecording else { return }
+        let canonical: String = classified?.hex ?? HexUtils.canonicalHex(hex)
+        let rec = Recording(
+            id: nextLegacyRecordingId,
+            timestampMs: Int64(Date().timeIntervalSince1970 * 1000),
+            hex: canonical,
+            rssi: rssi,
+            label: classified?.label ?? MagicClassifier.rawLabel(canonical),
+            category: classified?.category ?? .unknown,
+            typeInfo: classified?.typeInfo ?? "raw",
+            colors: classified?.colors ?? "",
+            libraryNote: ""
+        )
+        nextLegacyRecordingId += 1
+        livePackets.append(rec)
+        if livePackets.count > maxLive { livePackets.removeFirst(livePackets.count - maxLive) }
     }
 
-    private func appendLocalLivePacket(hex: String, rssi: Int) {
-        let classified = MagicClassifier.classify(hex)
+    private func appendLocalLivePacket(hex: String, rssi: Int, classified: ClassifiedPacket?) {
         let dedupeKey = LivePacketSort.liveDedupeKey(hex: hex, classified: classified)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         let packet = IScanLivePacket(
@@ -233,15 +370,31 @@ final class AppViewModel: ObservableObject {
             typeInfo: classified?.typeInfo ?? "raw",
             dedupeKey: dedupeKey
         )
-        iscanRawLive.insert(packet, at: 0)
-        if iscanRawLive.count > maxIscanLive {
-            iscanRawLive.removeLast(iscanRawLive.count - maxIscanLive)
+        iscanRawWork.insert(packet, at: 0)
+        if iscanRawWork.count > maxIscanLive {
+            iscanRawWork.removeLast(iscanRawWork.count - maxIscanLive)
         }
-        iscanUniqueLive.removeAll { $0.dedupeKey == dedupeKey }
-        iscanUniqueLive.insert(packet, at: 0)
-        if iscanUniqueLive.count > maxIscanLive {
-            iscanUniqueLive.removeLast(iscanUniqueLive.count - maxIscanLive)
+        iscanUniqueWork.removeAll { $0.dedupeKey == dedupeKey }
+        iscanUniqueWork.insert(packet, at: 0)
+        if iscanUniqueWork.count > maxIscanLive {
+            iscanUniqueWork.removeLast(iscanUniqueWork.count - maxIscanLive)
         }
+        scheduleIscanFlush()
+    }
+
+    private func scheduleIscanFlush() {
+        if iscanFlushScheduled { return }
+        iscanFlushScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            self?.flushIscanFeed()
+        }
+    }
+
+    private func flushIscanFeed() {
+        iscanFlushScheduled = false
+        iscanRawLive = iscanRawWork
+        iscanUniqueLive = iscanUniqueWork
     }
 
     func setIscanAuto(_ enabled: Bool) {
@@ -251,6 +404,10 @@ final class AppViewModel: ObservableObject {
 
     private func maybeIscanAutoRespond(hex: String) {
         guard iscanAutoEnabled, remoteLinkReady else { return }
+        // The scan engine answers with the iPhone's own rules. This older path uses the linked
+        // Android phone's rules and only runs while there are none here, so a packet is never
+        // answered twice.
+        if scan.autoEnabled, store.autoRules.contains(where: { $0.enabled }) { return }
         guard Date() >= iscanAutoCooldownUntil else { return }
         guard let rules = androidCatalog?.autoRules.filter(\.enabled), !rules.isEmpty else { return }
 
@@ -302,14 +459,16 @@ final class AppViewModel: ObservableObject {
         if enabled {
             clearIscanLive()
         }
+        // One scan switch: the engine that learns and logs follows this feed's Scan / Pause.
+        if scan.scanActive != enabled {
+            scan.setScan(enabled)
+        }
+        syncLegacyLogState()
         syncBleListenModes()
         if enabled {
             reconnectRelay()
             statusMessage = "iPhone backup scan listening"
-            if isBackupLogging && backupLogFileName == nil {
-                backupLogFileName = ISCanBackupLogger.shared.startSession()
-            }
-        } else if !isBackupLogging {
+        } else {
             statusMessage = "Backup scan off"
             ensureRelayLink()
         }
@@ -319,19 +478,38 @@ final class AppViewModel: ObservableObject {
         ble.ensureRelayLink()
     }
 
+    /// The backup log is now the scan engine's capture log (`Documents/logs`), so heard packets
+    /// are written once.
     func setBackupLogging(_ enabled: Bool) {
         guard isBackupLogging != enabled else { return }
-        isBackupLogging = enabled
         UserDefaults.standard.set(enabled, forKey: "backup_logging_enabled")
+        if enabled && !isLocalListening {
+            setLocalListening(true)      // starting the scan opens a log
+        }
+        if scan.recordSessionActive != enabled {
+            scan.setRecording(enabled)
+        }
+        syncLegacyLogState()
         if enabled {
-            backupLogFileName = ISCanBackupLogger.shared.startSession()
-            if !isLocalListening {
-                setLocalListening(true)
-            }
             statusMessage = "Backup log → \(backupLogFileName ?? "file")"
-        } else if let name = ISCanBackupLogger.shared.stopSession() {
-            backupLogFileName = nil
-            statusMessage = "Backup saved: \(name)"
+        } else {
+            let ended: String = scan.activeSessionName
+            statusMessage = ended.isEmpty ? "Backup log off" : "Backup saved: \(ended)"
+        }
+    }
+
+    /// `isBackupLogging` and `backupLogFileName` show the scan engine's capture log.
+    private func syncLegacyLogState() {
+        let recording: Bool = scan.recordSessionActive
+        if isBackupLogging != recording {
+            isBackupLogging = recording
+        }
+        var name: String? = nil
+        if recording && !scan.activeSessionName.isEmpty {
+            name = scan.activeSessionName
+        }
+        if backupLogFileName != name {
+            backupLogFileName = name
         }
     }
 
@@ -339,17 +517,26 @@ final class AppViewModel: ObservableObject {
         ISCanBackupLogger.shared.listSessions()
     }
 
+    /// The radio listens while the scan engine or the older iScan feed wants packets.
+    private var wantsLocalScan: Bool {
+        scan.scanActive || isLocalListening || isRecording || isAutoEnabled
+    }
+
     private func syncBleListenModes() {
-        ble.updateModes(recording: isRecording, auto: isAutoEnabled, listening: isLocalListening)
+        // Auto-responses come from the scan engine alone, so the coordinator's own responder
+        // stays switched off and a packet is never answered twice.
+        ble.updateModes(recording: false, auto: false, listening: wantsLocalScan)
     }
 
     func toggleRecording() {
         isRecording.toggle()
+        scan.setRecording(isRecording)
         if isRecording {
-            activeSessionName = store.beginScanSession().lastPathComponent
+            activeSessionName = scan.activeSessionName
             statusMessage = "Recording → \(activeSessionName ?? "")"
         } else {
-            if let ended = store.endScanSession() {
+            let ended: String = scan.activeSessionName
+            if !ended.isEmpty {
                 statusMessage = "Saved scan file: \(ended)"
             } else if isAutoEnabled {
                 statusMessage = "Recording off — auto still listening"
@@ -358,6 +545,7 @@ final class AppViewModel: ObservableObject {
             }
             activeSessionName = nil
         }
+        syncLegacyLogState()
         syncBleListenModes()
     }
 
@@ -368,6 +556,7 @@ final class AppViewModel: ObservableObject {
     func setAutoEnabled(_ enabled: Bool) {
         guard isAutoEnabled != enabled else { return }
         isAutoEnabled = enabled
+        scan.setAuto(enabled)
         statusMessage = enabled ? "Auto-response listening" : (isRecording ? "Auto off — scan still on" : "Auto off")
         syncBleListenModes()
     }
@@ -389,6 +578,34 @@ final class AppViewModel: ObservableObject {
         statusMessage = "Loaded into Lab"
     }
 
+    /// Sends a packet to the Lab from another screen: it becomes the Lab's packet (with its
+    /// label), the Lab reloads, and the root view is asked to show the Lab tab.
+    func loadInLab(hex: String, label: String) {
+        let canonical = HexUtils.canonicalHex(hex)
+        store.loadIntoLab(hex: canonical, label: label)
+        androidLabHex = canonical
+        labLoadTick += 1
+        requestedTab = AppViewModel.labTabId
+        statusMessage = "Loaded into Lab"
+    }
+
+    /// Adds the packets of the linked Android phone's library that the iPhone does not have
+    /// yet. Returns how many were added.
+    @discardableResult
+    func importAndroidLibrary() -> Int {
+        guard let catalog = androidCatalog else {
+            statusMessage = "No Android library synced yet — LINK → Refresh"
+            return 0
+        }
+        let added: Int = store.importAndroidCatalog(catalog)
+        if added > 0 {
+            statusMessage = "Imported \(added) packets from the Android library"
+        } else {
+            statusMessage = "Android library already imported"
+        }
+        return added
+    }
+
     func vibrateBand() {
         playHex(PresetCatalog.vibratePacket, label: "Vibrate")
     }
@@ -398,15 +615,19 @@ final class AppViewModel: ObservableObject {
     }
 
     func clearIscanLive() {
+        iscanUniqueWork.removeAll()
+        iscanRawWork.removeAll()
         iscanUniqueLive.removeAll()
         iscanRawLive.removeAll()
     }
 
     func removeIscanUnique(dedupeKey: String) {
+        iscanUniqueWork.removeAll { $0.dedupeKey == dedupeKey }
         iscanUniqueLive.removeAll { $0.dedupeKey == dedupeKey }
     }
 
     func removeIscanRaw(timestampMs: Int64, hex: String) {
+        iscanRawWork.removeAll { $0.timestampMs == timestampMs && $0.hex == hex }
         iscanRawLive.removeAll { $0.timestampMs == timestampMs && $0.hex == hex }
     }
 
@@ -471,7 +692,8 @@ final class AppViewModel: ObservableObject {
             Task { @MainActor in
                 self?.androidRemote = status
                 guard let status else { return }
-                self?.wandDisplayColorIndex = status.wandDisplayColorIndex
+                self?.reconcileKeepAwake(status.keepAwake)
+                self?.adoptRelayWandColor(status.wandDisplayColorIndex)
                 let revisionChanged = status.storeRevision != self?.lastCatalogRevision
                 let catalogMissing = self?.androidCatalog == nil
                     || self?.androidCatalog?.transmitPresets.isEmpty == true
@@ -498,9 +720,9 @@ final class AppViewModel: ObservableObject {
         catalogFetchInFlight = true
         isCatalogSyncInFlight = true
         catalogSyncDiagnostic = "starting…"
-        let pauseScanForSync = isLocalListening
+        let pauseScanForSync = wantsLocalScan
         if pauseScanForSync {
-            ble.updateModes(recording: isRecording, auto: isAutoEnabled, listening: false)
+            ble.updateModes(recording: false, auto: false, listening: false)
         }
         catalogFetchTimeout?.cancel()
         let timeout = DispatchWorkItem { [weak self] in
@@ -631,11 +853,26 @@ final class AppViewModel: ObservableObject {
 
     func setKeepAwake(_ enabled: Bool, hex: String = PacketBuilder.wakeupPing) {
         keepAwakeActive = enabled
-        remote.sendCommand("keep_awake", params: ["enabled": enabled, "hex": HexUtils.canonicalHex(hex)], central: ble.bleCentral) { [weak self] ok in
+        keepAwakeChangedAt = Date()
+        let pingHex = HexUtils.canonicalHex(hex)
+        // The relay keeps its earlier ping when it is given one too short to be a packet.
+        if pingHex.count >= 8 { keepAwakeHex = pingHex }
+        remote.sendCommand("keep_awake", params: ["enabled": enabled, "hex": pingHex], central: ble.bleCentral) { [weak self] ok in
             Task { @MainActor in
                 if !ok { self?.keepAwakeActive = !enabled }
                 self?.statusMessage = ok ? (enabled ? "Keeping band awake" : "Keep-awake off") : "Keep-awake command failed"
             }
+        }
+    }
+
+    /// The switch follows what the relay reports, so it is right after a relaunch or when the
+    /// relay dropped keep-awake by itself. A status read around the time of a tap may predate
+    /// it and is ignored.
+    private func reconcileKeepAwake(_ reported: Bool?) {
+        guard let reported else { return }
+        if Date().timeIntervalSince(keepAwakeChangedAt) < 4 { return }
+        if keepAwakeActive != reported {
+            keepAwakeActive = reported
         }
     }
 

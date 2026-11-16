@@ -6,7 +6,7 @@ import Foundation
 enum CrashLog {
     static let fileName = "crash_log.txt"
     /// Past this size the file is cut back to its newest half.
-    static let maxBytes = 200 * 1024
+    static let maxBytes = 64 * 1024
 
     // Recursive, so an exception raised while an entry is being written can still be recorded.
     private static let lock = NSRecursiveLock()

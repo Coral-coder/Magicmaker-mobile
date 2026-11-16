@@ -21,6 +21,9 @@ struct LaunchBootstrapView: View {
             if let viewModel = bootstrap.viewModel {
                 ContentView()
                     .environmentObject(viewModel)
+                    .environmentObject(viewModel.store)
+                    .environmentObject(viewModel.scan)
+                    .environmentObject(viewModel.tx)
             } else {
                 ZStack {
                     MMTheme.navy.ignoresSafeArea()
