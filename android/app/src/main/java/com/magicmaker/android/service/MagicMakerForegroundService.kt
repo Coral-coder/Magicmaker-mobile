@@ -1028,6 +1028,12 @@ class MagicMakerForegroundService : Service() {
         }
     }
 
+    /** Relay status plus the settings that live in the store rather than in [ServiceState]. */
+    private fun relayStatusJson(): org.json.JSONObject = ServiceState.statusJson()
+        .put("txPowerLevel", store.getTxPowerLevel())
+        .put("txInterleave", store.getTxInterleave())
+        .put("showControlOnly", store.getShowControlOnly())
+
     private fun publishTimingState() {
         publishState {
             it.copy(
@@ -1161,7 +1167,7 @@ class MagicMakerForegroundService : Service() {
                         RelayProtocol.HTTP_PORT,
                         onCommand = { hex -> queueSend(hex) },
                         onVibrate = { queueVibrate() },
-                        statusProvider = { ServiceState.statusJson() },
+                        statusProvider = { relayStatusJson() },
                         commandHandlers = handlers,
                     ).also { it.start() }
                     publishState {
@@ -1216,6 +1222,18 @@ class MagicMakerForegroundService : Service() {
 
     private fun relayCommandHandlers(): RelayCommands.Handlers = RelayCommands.Handlers(
         setKeepAwake = { enabled, hex -> setKeepAwakeInternal(enabled, hex) },
+        setTxPower = { level ->
+            store.saveTxPowerLevel(level)
+            gattServer?.refreshStatusCharacteristic()
+        },
+        setTxInterleave = { on ->
+            store.saveTxInterleave(on)
+            gattServer?.refreshStatusCharacteristic()
+        },
+        setShowControlOnly = { on ->
+            store.saveShowControlOnly(on)
+            gattServer?.refreshStatusCharacteristic()
+        },
         transmit = { hex -> queueSend(hex) },
         vibrate = { queueVibrate() },
         interrogate = { queueSend(PacketBuilder.WAKEUP_PING) },
@@ -1370,7 +1388,7 @@ class MagicMakerForegroundService : Service() {
                 starlightBurstMs = store.getStarlightBurstMs(),
             )
         },
-        statusJson = { ServiceState.statusJson() },
+        statusJson = { relayStatusJson() },
         liveJson = { ServiceState.liveJson() },
         pairingJson = {
             val s = ServiceState.state.value

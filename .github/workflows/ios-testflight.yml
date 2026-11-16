@@ -202,11 +202,22 @@ jobs:
             MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             archive > build/xcodebuild.log 2>&1 || {
               # Surface compiler errors as annotations (readable without downloading the log).
-              grep -E ': error: ' build/xcodebuild.log | sort -u | head -30 | while IFS= read -r line; do
-                f=$(echo "$line" | sed -E 's#^.*/(ios/[^:]+):([0-9]+):.*$#\1#')
-                l=$(echo "$line" | sed -E 's#^[^:]+:([0-9]+):.*$#\1#')
-                echo "::error file=$f,line=$l::$(echo "$line" | sed -E 's#^.*: error: ##')"
+              # GitHub keeps only 10 annotations per step, so pack 25 errors into each one.
+              grep -E '\.swift:[0-9]+:[0-9]+: error: ' build/xcodebuild.log \
+                | sed -E 's#^.*/(ios/[^:]+:[0-9]+):[0-9]+: error: #\1 #' | sort -u > build/errors.txt || true
+              total=$(wc -l < build/errors.txt | tr -d ' ')
+              split -l 25 build/errors.txt build/errchunk_ || true
+              n=0
+              for f in build/errchunk_*; do
+                [ -f "$f" ] || continue
+                n=$((n+1)); [ "$n" -gt 8 ] && break
+                msg=$(sed -e 's/%/%25/g' "$f" | awk '{printf "%s%%0A", $0}')
+                echo "::error title=Swift errors part $n of $total lines::$msg"
               done
+              if [ "$total" = "0" ]; then
+                msg=$(grep -E 'error:|ARCHIVE FAILED|The following build commands failed' -A6 build/xcodebuild.log | tail -40 | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+                echo "::error title=Archive failed::$msg"
+              fi
               tail -80 build/xcodebuild.log
               exit 1
             }

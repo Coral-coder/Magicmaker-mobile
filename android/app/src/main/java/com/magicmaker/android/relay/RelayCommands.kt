@@ -38,6 +38,10 @@ object RelayCommands {
         val mbleTap: (tokenHex: String, durationMs: Int) -> Unit,
         /** Keep-awake: pause scanning, stream a wake ping, sends go out without a preamble. */
         val setKeepAwake: (enabled: Boolean, hex: String?) -> Unit = { _, _ -> },
+        /** Radio and scan-filter settings the iPhone's Settings tab drives on this phone. */
+        val setTxPower: (level: Int) -> Unit = { },
+        val setTxInterleave: (Boolean) -> Unit = { },
+        val setShowControlOnly: (Boolean) -> Unit = { },
     )
 
     fun execute(body: JSONObject, handlers: Handlers): JSONObject {
@@ -107,6 +111,21 @@ object RelayCommands {
                     val ms = body.optInt("ms", body.optInt("burstMs", com.magicmaker.android.core.TransmitTiming.STARLIGHT_BURST_MS))
                     handlers.setStarlightBurst(ms)
                     ok().put("ms", ms)
+                }
+                "set_tx_power", "tx_power" -> {
+                    val level = body.optInt("level", 3).coerceIn(0, 3)
+                    handlers.setTxPower(level)
+                    ok().put("level", level)
+                }
+                "set_tx_interleave", "tx_interleave" -> {
+                    val enabled = body.optBoolean("enabled", false)
+                    handlers.setTxInterleave(enabled)
+                    ok().put("enabled", enabled)
+                }
+                "set_show_control_only", "show_control_only" -> {
+                    val enabled = body.optBoolean("enabled", true)
+                    handlers.setShowControlOnly(enabled)
+                    ok().put("enabled", enabled)
                 }
                 "save_custom_preset", "add_tx_preset", "save_preset" -> {
                     val label = body.optString("label", "Remote preset")
