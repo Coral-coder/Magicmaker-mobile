@@ -1111,6 +1111,12 @@ final class MagicStore: ObservableObject {
         return bandCacheSet
     }
 
+    /// The tagged sources in the order they were tagged, for showing as a list.
+    func bandAddressList() -> [String] {
+        refreshBandCache()
+        return bandCacheList
+    }
+
     func isBandAddress(_ address: String) -> Bool {
         if address.isEmpty { return false }
         refreshBandCache()
