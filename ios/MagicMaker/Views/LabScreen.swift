@@ -102,6 +102,7 @@ struct LabScreen: View {
             LabRandomShowSection()
             presetSection
             LabMbleSection()
+            LabThemesSection()
         }
     }
 
@@ -766,6 +767,124 @@ private struct LabMbleSection: View {
             }
         }
     }
+}
+
+// MARK: - Hawkeye themes
+
+/// The Hawkeye Light Up colour themes (MDE `mapIdentifier` + CMS swatches) as on-air presets.
+/// Tap sends through the relay; hold loads the packet into the Lab. Folded by default.
+private struct LabThemesSection: View {
+    @EnvironmentObject var vm: AppViewModel
+    @EnvironmentObject var tx: TxEngine
+    @AppStorage("lab_themes_collapsed") private var collapsed: Bool = true
+
+    init() {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            header
+            if !collapsed {
+                Text("TAP SENDS · HOLD LOADS IN LAB")
+                    .font(MMTheme.techLabel(9))
+                    .foregroundStyle(MMTheme.textDim)
+                ForEach(MdeThemeCatalog.categories, id: \.id) { category in
+                    LabThemeCategory(title: category.title, themes: category.themes)
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        Button {
+            collapsed.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(MMTheme.cyan)
+                Text("HAWKEYE THEMES")
+                    .font(MMTheme.techHeader())
+                    .foregroundStyle(MMTheme.cyan)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 8)
+    }
+}
+
+private struct LabThemeCategory: View {
+    @EnvironmentObject var vm: AppViewModel
+    @EnvironmentObject var tx: TxEngine
+    let title: String
+    let themes: [MdeHawkeyeTheme]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(MMTheme.techLabel(9))
+                .foregroundStyle(MMTheme.textDim)
+            ForEach(themes) { theme in
+                LabThemeRow(theme: theme)
+            }
+        }
+    }
+}
+
+private struct LabThemeRow: View {
+    @EnvironmentObject var vm: AppViewModel
+    @EnvironmentObject var tx: TxEngine
+    let theme: MdeHawkeyeTheme
+
+    var body: some View {
+        let hex: String = theme.transmitHex
+        HStack(spacing: 8) {
+            swatches
+            VStack(alignment: .leading, spacing: 2) {
+                Text(theme.title.uppercased())
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(MMTheme.textPrimary)
+                Text(hex)
+                    .font(MMTheme.techLabel(8))
+                    .foregroundStyle(MMTheme.cyanDim)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(6)
+        .background(MMTheme.panel)
+        .overlay(RoundedRectangle(cornerRadius: 0).stroke(MMTheme.panelLine, lineWidth: 0.5))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            tx.transmit(hex: hex, label: theme.title)
+        }
+        .onLongPressGesture(minimumDuration: 0.4) {
+            vm.loadInLab(hex: hex, label: theme.title)
+        }
+    }
+
+    private var swatches: some View {
+        HStack(spacing: 3) {
+            ForEach(Array(theme.colors.prefix(5).enumerated()), id: \.offset) { item in
+                Circle()
+                    .fill(labThemeSwatch(item.element))
+                    .frame(width: 12, height: 12)
+                    .overlay(Circle().stroke(MMTheme.panelLine, lineWidth: 0.5))
+            }
+        }
+    }
+}
+
+/// "#RRGGBB" to a colour; black when the text is not a colour.
+private func labThemeSwatch(_ text: String) -> Color {
+    let clean: String = text.replacingOccurrences(of: "#", with: "")
+    let value: Int = Int(clean, radix: 16) ?? 0
+    let red: Double = Double((value >> 16) & 0xFF) / 255.0
+    let green: Double = Double((value >> 8) & 0xFF) / 255.0
+    let blue: Double = Double(value & 0xFF) / 255.0
+    return Color(red: red, green: green, blue: blue)
 }
 
 // MARK: - Small pieces

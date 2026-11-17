@@ -140,9 +140,14 @@ final class AppViewModel: ObservableObject {
     /// Deferred from init so CoreBluetooth, file I/O, and remote refresh run after UIKit finishes launching.
     // MARK: - New Wand custom names
     // The generated New Wand codes are near-identical color variations, so let the user name
-    // them. Names are keyed by the (uppercased) hex and persisted on the device.
+    // them. Names are keyed by the (uppercased) hex. Stored as Android stores them (one JSON
+    // object in "newwand_names"), so they travel in the library file both ways.
     @Published private(set) var newWandNames: [String: String] = [:]
-    private let newWandNamesKey = "newwand_names_v1"
+    private let newWandNamesKey = "newwand_names"
+    /// Where earlier iOS builds kept the names, as a dictionary the library file cannot carry.
+    private let legacyNewWandNamesKey = "newwand_names_v1"
+    /// The stored text the current names were read from.
+    private var newWandNamesText: String? = nil
 
     func newWandDisplayName(for preset: AndroidRemotePreset) -> String {
         if let n = newWandNames[preset.hex.uppercased()], !n.isEmpty { return n }
@@ -157,11 +162,54 @@ final class AppViewModel: ObservableObject {
         } else {
             newWandNames[key] = trimmed
         }
-        UserDefaults.standard.set(newWandNames, forKey: newWandNamesKey)
+        saveNewWandNames()
+    }
+
+    private func saveNewWandNames() {
+        var text = "{}"
+        if let data = try? JSONSerialization.data(withJSONObject: newWandNames, options: [.sortedKeys]),
+           let encoded = String(data: data, encoding: .utf8) {
+            text = encoded
+        }
+        newWandNamesText = text
+        UserDefaults.standard.set(text, forKey: newWandNamesKey)
     }
 
     private func loadNewWandNames() {
-        newWandNames = (UserDefaults.standard.dictionary(forKey: newWandNamesKey) as? [String: String]) ?? [:]
+        let defaults = UserDefaults.standard
+        if let text = defaults.string(forKey: newWandNamesKey) {
+            newWandNamesText = text
+            newWandNames = Self.parseNewWandNames(text)
+            return
+        }
+        newWandNamesText = nil
+        let legacy: [String: String] = (defaults.dictionary(forKey: legacyNewWandNamesKey) as? [String: String]) ?? [:]
+        newWandNames = legacy
+        if !legacy.isEmpty {
+            saveNewWandNames()
+            defaults.removeObject(forKey: legacyNewWandNamesKey)
+        }
+    }
+
+    /// Importing a library file can replace the stored names; re-read them when the text changed.
+    func reloadNewWandNamesIfChanged() {
+        let text: String? = UserDefaults.standard.string(forKey: newWandNamesKey)
+        if text == newWandNamesText { return }
+        loadNewWandNames()
+    }
+
+    private static func parseNewWandNames(_ text: String) -> [String: String] {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        var out: [String: String] = [:]
+        for (key, value) in object {
+            if let name = value as? String {
+                out[key.uppercased()] = name
+            }
+        }
+        return out
     }
 
     // MARK: - Wand quick button (defaults to the New Wand "Off" code 6F1D; reprogrammable)

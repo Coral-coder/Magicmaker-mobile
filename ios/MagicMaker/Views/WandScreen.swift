@@ -192,6 +192,7 @@ struct WandScreen: View {
         .onChange(of: store.revision) { _, _ in
             reloadLibrary(resetToLoop: false)
             burstMs = Double(store.getStarlightBurstMs())
+            vm.reloadNewWandNamesIfChanged()
         }
         .onChange(of: showNewWand) { _, _ in
             reloadLibrary(resetToLoop: false)
