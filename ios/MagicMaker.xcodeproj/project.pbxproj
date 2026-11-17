@@ -7,6 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1318D50336B52BF2B7CA0F0B /* MapMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EF965165682BF3E7A56E44D /* MapMath.swift */; };
+		4507810A1CA1E0D1B5503C54 /* LogAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 899C5DB75C5AE4881E523D65 /* LogAnalysis.swift */; };
+		0441246529914B34B0A886CE /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE8BBC1022B0D23830E9274C /* SettingsScreen.swift */; };
+		4450E53ED918565AE1E3F1E4 /* LabScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 410B46EC039DE11D66AC19EA /* LabScreen.swift */; };
+		D433519440119C110391E563 /* DiagScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B086B5B28749044C160BF7B /* DiagScreen.swift */; };
+		BC92B99E0C9D899F0FB77A54 /* MapScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38326FC70C345D8D76338AF6 /* MapScreen.swift */; };
+		8E9DF4B3122672DD6DB40237 /* LogsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 148C50195C2236D2B8C72B84 /* LogsScreen.swift */; };
+		92C42B4FAF26327D710CEF9E /* LinkScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21EC753A76987F91DCDDB751 /* LinkScreen.swift */; };
+		A6792B5F42643A5799F93489 /* AutoScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17F5802372B2606AF7418020 /* AutoScreen.swift */; };
+		F8A861C9798745C2C2CE657F /* WandScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAC0EC6095D953616ACB8A4A /* WandScreen.swift */; };
+		0825A33E82E3F83A18E7E13F /* TxScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEB6DD5B3B781D10215CE02E /* TxScreen.swift */; };
+		CD0496E75D9C562929B2C2E2 /* ScanScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54B16323986A75DB3266584 /* ScanScreen.swift */; };
+		50142197BD1C5CA31AFFB8CA /* SharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07FCD77351C24DE49BD9AE2F /* SharedViews.swift */; };
 		54172BB6245AF0B3D4845DD3 /* TxEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 011D6D2A7C9E98E2DE832CA6 /* TxEngine.swift */; };
 		904D705B1B7238837E6E6F9A /* ScanEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 855B1195BCFB97C5196ACC2D /* ScanEngine.swift */; };
 		403F46F7CAEC5B0C1A46BE47 /* CrashLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7CD22C5F4DF44B51A2290C0 /* CrashLog.swift */; };
@@ -22,7 +35,6 @@
 		26065E0EF70C275B647C94A1 /* MagicModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A86BDA15A2093E44B9ED49B /* MagicModels.swift */; };
 		3D235FD8A7E0CCA68D6E2351 /* MagicClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CC59911D43C3D35D2EDAD60 /* MagicClassifier.swift */; };
 		43605EC3435703159F0C02D4 /* MagicMakerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8602255608055BB152278E8A /* MagicMakerApp.swift */; };
-		471F3EB6D283694928E1B72E /* RemoteTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ECD54B4DC2714422A767DC3 /* RemoteTab.swift */; };
 		A1A2A3A4B5C6D7E8F9012345 /* StarlightWandView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2B3B4C5D6E7F809012345 /* StarlightWandView.swift */; };
 		A9B8C7D6E5F403020100FFEE /* LaunchBootstrapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C7D6E5F403020100FFEEDD /* LaunchBootstrapView.swift */; };
 		B2C3D4E5F60718293A4B5D6 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F60718293A4B5D6E7 /* AppTheme.swift */; };
@@ -46,13 +58,25 @@
 		E3CE91BD6A2B8E29DC99E3BE /* AndroidRemoteClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6636D2A512568C7BCA2BFA76 /* AndroidRemoteClient.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* AndroidRemoteCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E2D3C4B5A6978865544332 /* AndroidRemoteCatalog.swift */; };
 		EB5F227DCD2210C964B29AF3 /* HexUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35812CDFB538AD038EA5AC98 /* HexUtils.swift */; };
-		B2C3D4E5F60718293A4B5D7 /* ISCanBackupLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F60718293A4B5D6F8 /* ISCanBackupLogger.swift */; };
 		D4E5F60718293A4B5C6D7E9 /* WiFiJoiner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5F60718293A4B5C6D7E8FA /* WiFiJoiner.swift */; };
 		F60718293A4B5C6D7E8FB0 /* PairingQRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0718293A4B5C6D7E8FB011 /* PairingQRScannerView.swift */; };
 		F664819506FB77F20D176969 /* AndroidRelayGattClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 213E2CED2AADA68CBCBE83FC /* AndroidRelayGattClient.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		3EF965165682BF3E7A56E44D /* MapMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapMath.swift; sourceTree = "<group>"; };
+		899C5DB75C5AE4881E523D65 /* LogAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogAnalysis.swift; sourceTree = "<group>"; };
+		CE8BBC1022B0D23830E9274C /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
+		410B46EC039DE11D66AC19EA /* LabScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabScreen.swift; sourceTree = "<group>"; };
+		3B086B5B28749044C160BF7B /* DiagScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagScreen.swift; sourceTree = "<group>"; };
+		38326FC70C345D8D76338AF6 /* MapScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapScreen.swift; sourceTree = "<group>"; };
+		148C50195C2236D2B8C72B84 /* LogsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsScreen.swift; sourceTree = "<group>"; };
+		21EC753A76987F91DCDDB751 /* LinkScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkScreen.swift; sourceTree = "<group>"; };
+		17F5802372B2606AF7418020 /* AutoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoScreen.swift; sourceTree = "<group>"; };
+		CAC0EC6095D953616ACB8A4A /* WandScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WandScreen.swift; sourceTree = "<group>"; };
+		CEB6DD5B3B781D10215CE02E /* TxScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TxScreen.swift; sourceTree = "<group>"; };
+		C54B16323986A75DB3266584 /* ScanScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanScreen.swift; sourceTree = "<group>"; };
+		07FCD77351C24DE49BD9AE2F /* SharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedViews.swift; sourceTree = "<group>"; };
 		011D6D2A7C9E98E2DE832CA6 /* TxEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TxEngine.swift; sourceTree = "<group>"; };
 		855B1195BCFB97C5196ACC2D /* ScanEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanEngine.swift; sourceTree = "<group>"; };
 		A7CD22C5F4DF44B51A2290C0 /* CrashLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashLog.swift; sourceTree = "<group>"; };
@@ -84,7 +108,6 @@
 		F1E2D3C4B5A6978865544332 /* AndroidRemoteCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidRemoteCatalog.swift; sourceTree = "<group>"; };
 		80DCA85662293F249743351C /* BleTransmitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BleTransmitter.swift; sourceTree = "<group>"; };
 		8602255608055BB152278E8A /* MagicMakerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagicMakerApp.swift; sourceTree = "<group>"; };
-		9ECD54B4DC2714422A767DC3 /* RemoteTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTab.swift; sourceTree = "<group>"; };
 		B1B2B3B4C5D6E7F809012345 /* StarlightWandView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarlightWandView.swift; sourceTree = "<group>"; };
 		B8C7D6E5F403020100FFEEDD /* LaunchBootstrapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchBootstrapView.swift; sourceTree = "<group>"; };
 		C3D4E5F60718293A4B5D6E7 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
@@ -92,7 +115,6 @@
 		AA30A2BC703D02716C2AEF30 /* RelayBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayBackend.swift; sourceTree = "<group>"; };
 		BBF319C3D2D6BF86B6762B38 /* AndroidWifiRelayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidWifiRelayClient.swift; sourceTree = "<group>"; };
 		C365CE46A5482E7EB62D3AA6 /* StarlightSerial.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarlightSerial.swift; sourceTree = "<group>"; };
-		C3D4E5F60718293A4B5D6F8 /* ISCanBackupLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISCanBackupLogger.swift; sourceTree = "<group>"; };
 		C870FCFC0BAC29CCD65CAC5F /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		DBAD0117D0BA807379D558E4 /* BleCentral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BleCentral.swift; sourceTree = "<group>"; };
 		E5F60718293A4B5C6D7E8FA /* WiFiJoiner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiJoiner.swift; sourceTree = "<group>"; };
@@ -113,6 +135,8 @@
 		9BDA14E78FD22C6E6275609C /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				3EF965165682BF3E7A56E44D /* MapMath.swift */,
+				899C5DB75C5AE4881E523D65 /* LogAnalysis.swift */,
 				3E2B7DE3B3BCF81E0210229C /* TransmitTiming.swift */,
 				6E791A1FB5AF54EB8BDB1A7D /* SessionLog.swift */,
 				777143C288CEE2E8F408CF2C /* LabPacketTools.swift */,
@@ -129,7 +153,6 @@
 				AABB0044CCDD2233EEFF4455 /* MdeLightSequence.swift */,
 				AABB0066CCDD2233EEFF4455 /* MdeThemeCatalog.swift */,
 				1DE2091CB8C5ACAEC915DF23 /* PresetCatalog.swift */,
-				C3D4E5F60718293A4B5D6F8 /* ISCanBackupLogger.swift */,
 				C365CE46A5482E7EB62D3AA6 /* StarlightSerial.swift */,
 			);
 			path = Core;
@@ -194,12 +217,22 @@
 		D60F6761176E2BF5F64C2883 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				CE8BBC1022B0D23830E9274C /* SettingsScreen.swift */,
+				410B46EC039DE11D66AC19EA /* LabScreen.swift */,
+				3B086B5B28749044C160BF7B /* DiagScreen.swift */,
+				38326FC70C345D8D76338AF6 /* MapScreen.swift */,
+				148C50195C2236D2B8C72B84 /* LogsScreen.swift */,
+				21EC753A76987F91DCDDB751 /* LinkScreen.swift */,
+				17F5802372B2606AF7418020 /* AutoScreen.swift */,
+				CAC0EC6095D953616ACB8A4A /* WandScreen.swift */,
+				CEB6DD5B3B781D10215CE02E /* TxScreen.swift */,
+				C54B16323986A75DB3266584 /* ScanScreen.swift */,
+				07FCD77351C24DE49BD9AE2F /* SharedViews.swift */,
 				C3D4E5F60718293A4B5D6E7 /* AppTheme.swift */,
 				C870FCFC0BAC29CCD65CAC5F /* ContentView.swift */,
 				B8C7D6E5F403020100FFEEDD /* LaunchBootstrapView.swift */,
 				D2D3D4E5F60718293A4B5D6E /* LabBuilderPanel.swift */,
 				BA11D000E5F60718293A4B04 /* BandPreviewView.swift */,
-				9ECD54B4DC2714422A767DC3 /* RemoteTab.swift */,
 				B1B2B3B4C5D6E7F809012345 /* StarlightWandView.swift */,
 				0718293A4B5C6D7E8FB011 /* PairingQRScannerView.swift */,
 			);
@@ -276,6 +309,19 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1318D50336B52BF2B7CA0F0B /* MapMath.swift in Sources */,
+				4507810A1CA1E0D1B5503C54 /* LogAnalysis.swift in Sources */,
+				0441246529914B34B0A886CE /* SettingsScreen.swift in Sources */,
+				4450E53ED918565AE1E3F1E4 /* LabScreen.swift in Sources */,
+				D433519440119C110391E563 /* DiagScreen.swift in Sources */,
+				BC92B99E0C9D899F0FB77A54 /* MapScreen.swift in Sources */,
+				8E9DF4B3122672DD6DB40237 /* LogsScreen.swift in Sources */,
+				92C42B4FAF26327D710CEF9E /* LinkScreen.swift in Sources */,
+				A6792B5F42643A5799F93489 /* AutoScreen.swift in Sources */,
+				F8A861C9798745C2C2CE657F /* WandScreen.swift in Sources */,
+				0825A33E82E3F83A18E7E13F /* TxScreen.swift in Sources */,
+				CD0496E75D9C562929B2C2E2 /* ScanScreen.swift in Sources */,
+				50142197BD1C5CA31AFFB8CA /* SharedViews.swift in Sources */,
 				54172BB6245AF0B3D4845DD3 /* TxEngine.swift in Sources */,
 				904D705B1B7238837E6E6F9A /* ScanEngine.swift in Sources */,
 				403F46F7CAEC5B0C1A46BE47 /* CrashLog.swift in Sources */,
@@ -296,7 +342,6 @@
 				DA53F758A231F40FB5C1E043 /* ContentView.swift in Sources */,
 				A9B8C7D6E5F403020100FFEE /* LaunchBootstrapView.swift in Sources */,
 				EB5F227DCD2210C964B29AF3 /* HexUtils.swift in Sources */,
-				B2C3D4E5F60718293A4B5D7 /* ISCanBackupLogger.swift in Sources */,
 				D4E5F60718293A4B5C6D7E9 /* WiFiJoiner.swift in Sources */,
 				F60718293A4B5C6D7E8FB0 /* PairingQRScannerView.swift in Sources */,
 				3D235FD8A7E0CCA68D6E2351 /* MagicClassifier.swift in Sources */,
@@ -315,7 +360,6 @@
 				AABB0055CCDD2233EEFF4455 /* MdeThemeCatalog.swift in Sources */,
 				9EA2E8AC01B035D09C9BEF90 /* PresetCatalog.swift in Sources */,
 				644CF3770FD5346280CE69BD /* RelayBackend.swift in Sources */,
-				471F3EB6D283694928E1B72E /* RemoteTab.swift in Sources */,
 				A1A2A3A4B5C6D7E8F9012345 /* StarlightWandView.swift in Sources */,
 				0C5BBFD07F367DBC7D8F271F /* StarlightSerial.swift in Sources */,
 			);

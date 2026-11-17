@@ -1,37 +1,53 @@
+import Combine
 import SwiftUI
 
+/// The ten tabs, in Android's order (`AppTab` in `MagicMakerScreens.kt`). LINK is the iPhone side
+/// of Android's RELAY tab. The raw values are the ids `AppViewModel.requestedTab` uses
+/// (`AppViewModel.labTabId` is "lab").
 private enum MainTab: String, CaseIterable, Identifiable {
-    case tx, wand, auto, lab, scan, link
+    case scan, tx, wand, auto, link, logs, map, diag, lab, settings
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .scan: return "SCAN"
         case .tx: return "TX"
         case .wand: return "WAND"
         case .auto: return "AUTO"
-        case .lab: return "LAB"
-        case .scan: return "SCAN"
         case .link: return "LINK"
+        case .logs: return "LOGS"
+        case .map: return "MAP"
+        case .diag: return "DIAG"
+        case .lab: return "LAB"
+        case .settings: return "SETTINGS"
         }
     }
 
     var icon: String {
         switch self {
+        case .scan: return "dot.radiowaves.left.and.right"
         case .tx: return "paperplane.fill"
         case .wand: return "sparkles"
         case .auto: return "bolt.circle"
-        case .lab: return "flask"
-        case .scan: return "dot.radiowaves.left.and.right"
         case .link: return "link"
+        case .logs: return "clock.arrow.circlepath"
+        case .map: return "mappin.and.ellipse"
+        case .diag: return "waveform.path.ecg"
+        case .lab: return "flask"
+        case .settings: return "gearshape"
         }
     }
 }
 
 struct ContentView: View {
     @EnvironmentObject var vm: AppViewModel
-    @StateObject private var remoteUI = RemoteUIState()
-    @State private var tab: MainTab = .tx
+    /// Opens like Android, on SCAN.
+    @State private var tab: MainTab = .scan
+
+    /// The relay link and status poll. Kept here, not built in `body`, so a redraw does not
+    /// start the 2 s wait again.
+    private let relayPoll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,35 +57,19 @@ struct ContentView: View {
         }
         .background(MMTheme.navy)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            MMCompactTabBar(
+            MMScrollTabBar(
                 selection: $tab,
                 tabs: MainTab.allCases,
                 title: { $0.title },
                 icon: { $0.icon }
             )
         }
-        .environmentObject(remoteUI)
         .onAppear {
-            if !vm.relayCommandReady {
-                vm.reconnectRelay()
-            }
-            vm.refreshRelayStatus()
-            vm.refreshAndroidCatalog()
-            remoteUI.sync(from: vm)
+            startRelayLink()
+            followRequestedTab(vm.requestedTab)
         }
-        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
-            if !vm.relayCommandReady {
-                vm.ensureRelayLink()
-            }
-            if !vm.isCatalogSyncInFlight {
-                vm.refreshAndroidRemote()
-            }
-            vm.refreshRelayStatus()
-            if vm.relayCommandReady,
-               !vm.isCatalogSyncInFlight,
-               vm.androidCatalog == nil || vm.androidCatalog?.transmitPresets.isEmpty == true {
-                vm.refreshAndroidCatalog()
-            }
+        .onReceive(relayPoll) { _ in
+            pollRelay()
         }
         .onChange(of: vm.relayCommandReady) { _, ready in
             if ready { vm.refreshAndroidCatalog() }
@@ -79,92 +79,62 @@ struct ContentView: View {
         }
         .onChange(of: vm.androidRemote?.storeRevision) { _, _ in
             vm.refreshAndroidCatalog()
-            remoteUI.sync(from: vm)
         }
-        .onChange(of: vm.androidCatalog?.wakeupPreambleMs) { _, ms in
-            if let ms, !remoteUI.sliderDragging { remoteUI.preambleMs = Double(ms) }
-        }
-        .onChange(of: vm.androidCatalog?.commandBurstMs) { _, ms in
-            if let ms, !remoteUI.sliderDragging { remoteUI.commandBurstMs = Double(ms) }
-        }
-        .onChange(of: vm.androidCatalog?.starlightBurstMs) { _, ms in
-            if let ms, !remoteUI.sliderDragging { remoteUI.starlightBurstMs = Double(ms) }
-        }
-        .onChange(of: vm.androidRemote) { _, _ in
-            if !remoteUI.sliderDragging { remoteUI.sync(from: vm) }
+        .onChange(of: vm.requestedTab) { _, requested in
+            followRequestedTab(requested)
         }
     }
 
     @ViewBuilder
     private var tabContent: some View {
         switch tab {
-        case .tx: RemoteTxView()
-        case .wand: RemoteWandView()
-        case .auto: RemoteAutoView()
-        case .lab: RemoteLabView()
-        case .scan: RemoteScanTabView()
-        case .link: RemoteLinkTabView()
-        }
-    }
-}
-
-@MainActor
-final class RemoteUIState: ObservableObject {
-    @Published var sliderDragging = false
-    @Published var wandIntervalSec: Double = 3
-    @Published var preambleMs: Double = 520
-    @Published var commandBurstMs: Double = 2000
-    @Published var starlightBurstMs: Double = 500
-    @Published var selectedWandId: Int64 = -1
-    @Published var selectedTxId: Int64 = -1
-    @Published var txIntervalSec: Double = 3
-    @Published var txSettingsExpanded = false
-    @Published var txLoopSettingsExpanded = false
-    @Published var collapsedTxSections: Set<LivePacketSection> = []
-    @Published var collapsedScanSections: Set<LivePacketSection> = []
-    @Published var collapsedLocalSections: Set<LivePacketSection> = []
-    @Published var scanControlsExpanded = false
-
-    func sync(from vm: AppViewModel) {
-        if let s = vm.androidRemote {
-            if s.starlightLoopPacketId >= 0 { selectedWandId = s.starlightLoopPacketId }
-            wandIntervalSec = Double(s.starlightIntervalMs) / 1000.0
-            if s.txLoopPacketId >= 0 { selectedTxId = s.txLoopPacketId }
-            txIntervalSec = Double(s.txLoopIntervalMs) / 1000.0
-            if !sliderDragging {
-                preambleMs = Double(s.wakeupPreambleMs)
-                commandBurstMs = Double(s.commandBurstMs)
-                starlightBurstMs = Double(s.starlightBurstMs)
-            }
-        }
-        if let cat = vm.androidCatalog, !sliderDragging {
-            preambleMs = Double(cat.wakeupPreambleMs)
-            commandBurstMs = Double(cat.commandBurstMs)
-            starlightBurstMs = Double(cat.starlightBurstMs)
+        case .scan: ScanScreen()
+        case .tx: TxScreen()
+        case .wand: WandScreen()
+        case .auto: AutoScreen()
+        case .link: LinkScreen()
+        case .logs: LogsScreen()
+        case .map: MapScreen()
+        case .diag: DiagScreen()
+        case .lab: LabScreen()
+        case .settings: SettingsScreen()
         }
     }
 
-    func toggleTxSection(_ section: LivePacketSection) {
-        if collapsedTxSections.contains(section) {
-            collapsedTxSections.remove(section)
-        } else {
-            collapsedTxSections.insert(section)
+    private func startRelayLink() {
+        if !vm.relayCommandReady {
+            vm.reconnectRelay()
+        }
+        vm.refreshRelayStatus()
+        vm.refreshAndroidCatalog()
+    }
+
+    /// Every 2 s: keep the relay link up and read its status. On the WiFi relay the link state
+    /// itself (`remoteLinkReady`) comes from this status read.
+    private func pollRelay() {
+        if !vm.relayCommandReady {
+            vm.ensureRelayLink()
+        }
+        if !vm.isCatalogSyncInFlight {
+            vm.refreshAndroidRemote()
+        }
+        vm.refreshRelayStatus()
+        if vm.relayCommandReady, !vm.isCatalogSyncInFlight, catalogMissing {
+            vm.refreshAndroidCatalog()
         }
     }
 
-    func toggleScanSection(_ section: LivePacketSection) {
-        if collapsedScanSections.contains(section) {
-            collapsedScanSections.remove(section)
-        } else {
-            collapsedScanSections.insert(section)
-        }
+    private var catalogMissing: Bool {
+        guard let catalog = vm.androidCatalog else { return true }
+        return catalog.transmitPresets.isEmpty
     }
 
-    func toggleLocalSection(_ section: LivePacketSection) {
-        if collapsedLocalSections.contains(section) {
-            collapsedLocalSections.remove(section)
-        } else {
-            collapsedLocalSections.insert(section)
+    /// Another screen asked for a tab (Load in Lab asks for the Lab): show it, then clear the ask.
+    private func followRequestedTab(_ requested: String?) {
+        guard let requested else { return }
+        if let wanted = MainTab(rawValue: requested) {
+            tab = wanted
         }
+        vm.requestedTab = nil
     }
 }

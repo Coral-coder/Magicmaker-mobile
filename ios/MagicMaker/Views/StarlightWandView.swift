@@ -40,122 +40,137 @@ private let wandAuraEnvelopes: [WandGlowEnvelope] = [
 
 private let wandTintEnvelope = WandGlowEnvelope(centerY: 0.28, rx: 0.085, ry: 0.275, peak: 0.72)
 
+/// One colour the wand view offers.
+private struct StarlightWandEntry: Equatable {
+    let id: Int64
+    let hex: String
+}
+
+/// The Starlight wand: the wand image glowing in the colour last heard or sent, a picker with
+/// each colour's name and code, and SEND. Tapping the wand steps to the next colour.
+/// Port of Android `StarlightWandView.kt`.
+///
+///     StarlightWandView(
+///         packets: colors,
+///         displayColorIndex: vm.wandDisplayColorIndex,
+///         onDelete: { packet in askDelete(packet) },
+///         onTransmit: { packet in send(packet) }
+///     )
 struct StarlightWandView: View {
-    let colors: [AndroidRemotePreset]
+    private let entries: [StarlightWandEntry]
     let displayColorIndex: Int
-    var sendEnabled: Bool = true
-    let onTransmit: (AndroidRemotePreset) -> Void
+    let sendEnabled: Bool
+    private let emptyText: String
+    private let sendAt: (Int) -> Void
+    private let deleteAt: ((Int) -> Void)?
 
     @State private var selectedIndex = 0
     @State private var glowColorIndex = defaultGlowIndex
     @State private var pulse1: CGFloat = 0
     @State private var pulse2: CGFloat = 0
 
+    /// The wand colours of a linked Android phone's library.
+    init(
+        colors: [AndroidRemotePreset],
+        displayColorIndex: Int,
+        sendEnabled: Bool = true,
+        onTransmit: @escaping (AndroidRemotePreset) -> Void
+    ) {
+        var list: [StarlightWandEntry] = []
+        list.reserveCapacity(colors.count)
+        for preset in colors {
+            list.append(StarlightWandEntry(id: preset.id, hex: preset.hex))
+        }
+        let presets: [AndroidRemotePreset] = colors
+        self.entries = list
+        self.displayColorIndex = displayColorIndex
+        self.sendEnabled = sendEnabled
+        self.emptyText = "HEAR A WAND COLOR · OPEN LINK · SYNC LIBRARY"
+        self.sendAt = { index in
+            if index >= 0 && index < presets.count {
+                onTransmit(presets[index])
+            }
+        }
+        self.deleteAt = nil
+    }
+
+    /// The iPhone's own learned colours. With `onDelete` the picker also offers to delete the
+    /// colour it shows.
+    init(
+        packets: [MagicPacket],
+        displayColorIndex: Int,
+        sendEnabled: Bool = true,
+        onDelete: ((MagicPacket) -> Void)? = nil,
+        onTransmit: @escaping (MagicPacket) -> Void
+    ) {
+        var list: [StarlightWandEntry] = []
+        list.reserveCapacity(packets.count)
+        for packet in packets {
+            list.append(StarlightWandEntry(id: packet.id, hex: packet.hex))
+        }
+        let all: [MagicPacket] = packets
+        self.entries = list
+        self.displayColorIndex = displayColorIndex
+        self.sendEnabled = sendEnabled
+        self.emptyText = "HEAR A WAND COLOR · SCAN TO LEARN"
+        self.sendAt = { index in
+            if index >= 0 && index < all.count {
+                onTransmit(all[index])
+            }
+        }
+        if let deleteHandler = onDelete {
+            self.deleteAt = { index in
+                if index >= 0 && index < all.count {
+                    deleteHandler(all[index])
+                }
+            }
+        } else {
+            self.deleteAt = nil
+        }
+    }
+
     private var glow: Color { starlightGlowColor(glowColorIndex) }
+
+    /// The name of the colour the wand glows in.
     private var label: String {
-        PresetCatalog.starlightColorNames[glowColorIndex] ?? "White"
+        StarlightColors.nameFor(glowColorIndex).uppercased()
     }
 
-    private var selectedPreset: AndroidRemotePreset? {
-        guard !colors.isEmpty, selectedIndex < colors.count else { return nil }
-        return colors[selectedIndex]
+    private var selectedEntry: StarlightWandEntry? {
+        guard selectedIndex >= 0, selectedIndex < entries.count else { return nil }
+        return entries[selectedIndex]
     }
 
-    private var selectedHex: String { selectedPreset?.hex.uppercased() ?? "" }
+    private var selectedHex: String { selectedEntry?.hex.uppercased() ?? "" }
+
+    /// The codes on offer, in order; a change means the list changed.
+    private var entryKeys: [String] {
+        entries.map { $0.hex }
+    }
 
     var body: some View {
         VStack(spacing: 10) {
-            GeometryReader { geo in
-                let maxH = geo.size.height
-                let maxW = geo.size.width * 0.88
-                let wandH = min(maxH, maxW / wandAspect)
-                let wandW = wandH * wandAspect
-                let wandTop = (geo.size.height - wandH) / 2
-                let cx = geo.size.width / 2
-                let cy = wandTop + wandH / 2
-
-                ZStack {
-                    WandAuraLayer(
-                        glow: glow,
-                        pulse1: pulse1,
-                        pulse2: pulse2,
-                        wandWidth: wandW,
-                        wandHeight: wandH
-                    )
-                    .frame(width: wandW, height: wandH)
-                    .position(x: cx, y: cy)
-
-                    Image("StarlightWand")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: wandW, height: wandH)
-                        .position(x: cx, y: cy)
-
-                    WandTintLayer(
-                        glow: glow,
-                        wandWidth: wandW,
-                        wandHeight: wandH
-                    )
-                    .frame(width: wandW, height: wandH)
-                    .position(x: cx, y: cy)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .onTapGesture { cycleColor() }
-            }
-
-            if colors.isEmpty {
-                Text("HEAR A WAND COLOR · OPEN LINK · SYNC LIBRARY")
+            wandArea
+            if entries.isEmpty {
+                Text(emptyText)
                     .font(MMTheme.techLabel(9))
                     .foregroundStyle(MMTheme.textDim)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 12)
             } else {
-                // Dropdown to pick the color/command + a Send button to the right — no tapping
-                // through every color to reach the one you want.
-                HStack(spacing: 8) {
-                    Menu {
-                        ForEach(Array(colors.enumerated()), id: \.offset) { idx, preset in
-                            // Show the name AND the code so you can tell exactly which one you're sending.
-                            Button("\(colorName(preset))  ·  \(preset.hex.uppercased())") { select(idx) }
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            Circle().fill(glow).frame(width: 12, height: 12)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(label).font(MMTheme.techLabel(11)).foregroundStyle(.white)
-                                Text(selectedHex)
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundStyle(MMTheme.textDim)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            Spacer(minLength: 4)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.caption2)
-                                .foregroundStyle(MMTheme.textDim)
-                        }
-                        .padding(.horizontal, 10)
-                        .frame(maxWidth: .infinity, minHeight: 36)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.08)))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.15)))
-                    }
-
-                    MMPrimaryButton(title: "SEND", enabled: sendEnabled) {
-                        guard let preset = selectedPreset else { return }
-                        runTransmitPulse()
-                        onTransmit(preset)
-                    }
-                    .frame(width: 96)
-                }
-                .padding(.horizontal, 12)
+                pickerRow
             }
         }
         .padding(.bottom, 8)
         .onChange(of: displayColorIndex) { _, newIndex in
             syncHeardColor(newIndex)
         }
-        .onChange(of: colors.count) { _, _ in
+        .onChange(of: entryKeys) { oldKeys, newKeys in
+            // A list of another length starts again from its first colour, then follows the
+            // colour last heard or sent.
+            if oldKeys.count != newKeys.count {
+                selectedIndex = 0
+            }
             syncHeardColor(displayColorIndex)
         }
         .onAppear {
@@ -163,29 +178,143 @@ struct StarlightWandView: View {
         }
     }
 
+    private var wandArea: some View {
+        GeometryReader { geo in
+            let maxH = geo.size.height
+            let maxW = geo.size.width * 0.88
+            let wandH = min(maxH, maxW / wandAspect)
+            let wandW = wandH * wandAspect
+            let wandTop = (geo.size.height - wandH) / 2
+            let cx = geo.size.width / 2
+            let cy = wandTop + wandH / 2
+
+            ZStack {
+                WandAuraLayer(
+                    glow: glow,
+                    pulse1: pulse1,
+                    pulse2: pulse2,
+                    wandWidth: wandW,
+                    wandHeight: wandH
+                )
+                .frame(width: wandW, height: wandH)
+                .position(x: cx, y: cy)
+
+                Image("StarlightWand")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: wandW, height: wandH)
+                    .position(x: cx, y: cy)
+
+                WandTintLayer(
+                    glow: glow,
+                    wandWidth: wandW,
+                    wandHeight: wandH
+                )
+                .frame(width: wandW, height: wandH)
+                .position(x: cx, y: cy)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture { cycleColor() }
+        }
+    }
+
+    // Dropdown to pick the color/command + a Send button to the right — no tapping
+    // through every color to reach the one you want.
+    private var pickerRow: some View {
+        HStack(spacing: 8) {
+            Menu {
+                menuItems
+            } label: {
+                pickerLabel
+            }
+
+            MMPrimaryButton(title: "SEND", enabled: sendEnabled && selectedEntry != nil) {
+                sendSelected()
+            }
+            .frame(width: 96)
+        }
+        .padding(.horizontal, 12)
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        // The name AND the code, so you can tell exactly which one you are sending.
+        ForEach(Array(entries.enumerated()), id: \.offset) { idx, entry in
+            Button(menuTitle(entry)) { select(idx) }
+        }
+        if deleteAt != nil, let entry = selectedEntry {
+            Divider()
+            Button(role: .destructive) {
+                deleteSelected()
+            } label: {
+                Label("DELETE " + colorName(entry.hex).uppercased(), systemImage: "trash")
+            }
+        }
+    }
+
+    private var pickerLabel: some View {
+        HStack(spacing: 6) {
+            Circle().fill(glow).frame(width: 12, height: 12)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(MMTheme.techLabel(11))
+                    .foregroundStyle(MMTheme.textPrimary)
+                    .lineLimit(1)
+                Text(selectedHex)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(MMTheme.textDim)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 4)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.caption2)
+                .foregroundStyle(MMTheme.textDim)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, minHeight: 36)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.15)))
+    }
+
+    private func menuTitle(_ entry: StarlightWandEntry) -> String {
+        colorName(entry.hex).uppercased() + "  ·  " + entry.hex.uppercased()
+    }
+
+    private func colorName(_ hex: String) -> String {
+        StarlightColors.nameFor(MagicClassifier.starlightColorIndex(hex))
+    }
+
+    private func sendSelected() {
+        if selectedEntry == nil { return }
+        runTransmitPulse()
+        sendAt(selectedIndex)
+    }
+
+    private func deleteSelected() {
+        if selectedEntry == nil { return }
+        guard let action = self.deleteAt else { return }
+        action(selectedIndex)
+    }
+
     private func cycleColor() {
-        guard !colors.isEmpty else { return }
-        selectedIndex = (selectedIndex + 1) % colors.count
-        glowColorIndex = MagicClassifier.starlightColorIndex(colors[selectedIndex].hex)
+        guard !entries.isEmpty else { return }
+        selectedIndex = (selectedIndex + 1) % entries.count
+        glowColorIndex = MagicClassifier.starlightColorIndex(entries[selectedIndex].hex)
     }
 
     private func select(_ idx: Int) {
-        guard idx >= 0, idx < colors.count else { return }
+        guard idx >= 0, idx < entries.count else { return }
         selectedIndex = idx
-        glowColorIndex = MagicClassifier.starlightColorIndex(colors[idx].hex)
-    }
-
-    private func colorName(_ preset: AndroidRemotePreset) -> String {
-        let idx = MagicClassifier.starlightColorIndex(preset.hex) & 0x1F
-        if let name = PresetCatalog.starlightColorNames[idx] { return name }
-        return preset.label.isEmpty ? String(format: "Color %02X", idx) : preset.label
+        glowColorIndex = MagicClassifier.starlightColorIndex(entries[idx].hex)
     }
 
     private func syncHeardColor(_ index: Int) {
         let heard = index & 0x1F
         glowColorIndex = heard
-        guard !colors.isEmpty else { return }
-        if let idx = colors.firstIndex(where: { MagicClassifier.starlightColorIndex($0.hex) == heard }) {
+        guard !entries.isEmpty else { return }
+        if let idx = entries.firstIndex(where: { MagicClassifier.starlightColorIndex($0.hex) == heard }) {
             selectedIndex = idx
         }
     }

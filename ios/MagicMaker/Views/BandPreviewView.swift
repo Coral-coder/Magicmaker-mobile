@@ -200,36 +200,3 @@ struct BandPreviewView: View {
         return Color(red: r1 + (r2 - r1) * k, green: g1 + (g2 - g1) * k, blue: b1 + (b2 - b1) * k)
     }
 }
-
-/// Scan page: the last packet heard (from the phone's own scan or the Android relay), as the band
-/// would show it. One row, always at the top.
-struct LastHeardStrip: View {
-    @EnvironmentObject var vm: AppViewModel
-
-    private var last: (hex: String, count: Int)? {
-        let local = vm.livePackets.max(by: { $0.timestampMs < $1.timestampMs })
-        let relay = vm.androidLivePackets.max(by: { $0.timestampMs < $1.timestampMs })
-        let count = vm.livePackets.count + vm.androidLivePackets.count
-        switch (local, relay) {
-        case let (l?, r?): return (l.timestampMs >= r.timestampMs ? l.hex : r.hex, count)
-        case let (l?, nil): return (l.hex, count)
-        case let (nil, r?): return (r.hex, count)
-        default: return nil
-        }
-    }
-
-    var body: some View {
-        if let last {
-            BandPreviewView(hex: last.hex, compact: true, title: "LAST HEARD · \(last.count) LIVE")
-                .frame(height: 40)
-        } else {
-            HStack {
-                Text("LAST HEARD · NOTHING YET").font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
-                Spacer()
-            }
-            .frame(height: 40)
-            .padding(.horizontal, 12)
-            .background(MMTheme.navy)
-        }
-    }
-}

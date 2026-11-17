@@ -48,77 +48,6 @@ struct MMPrimaryButton: View {
     }
 }
 
-struct RemotePacketRow: View {
-    let label: String
-    let hex: String
-    var subtitle: String = ""
-    var highlighted: Bool = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label.uppercased())
-                    .font(MMTheme.techLabel())
-                    .foregroundStyle(highlighted ? MMTheme.cyan : MMTheme.textPrimary)
-                Text(hex)
-                    .font(MMTheme.techLabel(9))
-                    .foregroundStyle(MMTheme.cyanDim)
-                    .lineLimit(1)
-                if !subtitle.isEmpty {
-                    Text(subtitle.uppercased())
-                        .font(MMTheme.techLabel(9))
-                        .foregroundStyle(MMTheme.textDim)
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 4)
-            .background(highlighted ? MMTheme.cyan.opacity(0.12) : Color.clear)
-        }
-        .buttonStyle(.plain)
-        Rectangle()
-            .fill(MMTheme.panelLine)
-            .frame(height: 0.5)
-    }
-}
-
-struct SwipeRemotePacketRow: View {
-    let label: String
-    let hex: String
-    var subtitle: String = ""
-    let onTap: () -> Void
-    var onPromote: (() -> Void)? = nil
-    var onDelete: (() -> Void)? = nil
-    var disabled: Bool = false
-
-    var body: some View {
-        RemotePacketRow(
-            label: label,
-            hex: hex,
-            subtitle: subtitle,
-            action: onTap
-        )
-        .disabled(disabled)
-        .swipeActions(edge: .leading, allowsFullSwipe: false) {
-            if let onPromote {
-                Button(action: onPromote) {
-                    Label("TX/TAG", systemImage: "plus.circle")
-                }
-                .tint(MMTheme.cyan)
-            }
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            if let onDelete {
-                Button(role: .destructive, action: onDelete) {
-                    Label("Delete", systemImage: "trash")
-                }
-            }
-        }
-    }
-}
-
 struct CollapsibleSectionHeader: View {
     let title: String
     let count: Int
@@ -145,29 +74,52 @@ struct CollapsibleSectionHeader: View {
     }
 }
 
+/// Port of Android `TelemetryLine`, from the iPhone's own state: its radio, its scan counters and
+/// switches, the loops, and the relay link. Android ends with IPHONE:LINK (an iPhone uses that
+/// phone as its relay); the iPhone shows RELAY:LINK when it has a relay to send through.
 struct TelemetryBar: View {
     @EnvironmentObject var vm: AppViewModel
+    @EnvironmentObject var scan: ScanEngine
+    @EnvironmentObject var tx: TxEngine
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(vm.telemetryLine)
-                .font(MMTheme.techLabel(9))
+        VStack(spacing: 0) {
+            Text(line)
+                .font(MMTheme.techLabel())
                 .foregroundStyle(MMTheme.textDim)
-                .lineLimit(2)
-            if !vm.remoteLinkReady {
-                Text(vm.remoteLinkHint)
-                    .font(MMTheme.techLabel(9))
-                    .foregroundStyle(MMTheme.amber)
-                    .lineLimit(2)
-            }
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+            Rectangle()
+                .fill(MMTheme.panelLine)
+                .frame(height: 1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(MMTheme.panel)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(MMTheme.panelLine).frame(height: 0.5)
-        }
+        .background(MMTheme.navy)
+    }
+
+    /// BLE:OFF while Bluetooth is not ready, BLE:SCAN while scanning, otherwise BLE:LINK.
+    private var radioToken: String {
+        if scan.bluetoothStatus != "Bluetooth ready" { return "BLE:OFF" }
+        if scan.scanActive { return "BLE:SCAN" }
+        return "BLE:LINK"
+    }
+
+    private var line: String {
+        var text: String = "MM/RF " + radioToken
+        text += " | RX:\(scan.packetsHeard)"
+        text += " | TX-AUTO:\(scan.autoResponsesSent)"
+        if scan.scanActive { text += " | SCAN:ON" }
+        if scan.autoEnabled { text += " | AUTO:ARM" }
+        if scan.recordSessionActive { text += " | LOG:REC" }
+        if tx.starlightLoopEnabled { text += " | WAND:LOOP" }
+        if tx.txLoopEnabled { text += " | TX:LOOP" }
+        if vm.remoteLinkReady { text += " | RELAY:LINK" }
+        // Two iPhone-only tokens go last: the band-lighting packets heard and a running replay.
+        if scan.lightsHeard > 0 { text += " | LIGHTS:\(scan.lightsHeard)" }
+        if tx.replayActive { text += " | REPLAY:\(tx.replayProgress)/\(tx.replayTotal)" }
+        return text
     }
 }
 

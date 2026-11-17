@@ -59,52 +59,92 @@ enum TxLoopInterval {
     }
 }
 
-/// The interval slider of the TX loop and the wand loop. `seconds` is the interval in use (it
-/// need not sit on a slider position); `onCommit` gets the interval of the position the user
-/// let go on or stepped to.
+/// The loop interval slider of the TX and WAND tabs: Android `SettingSlider` with `steps`, one
+/// line of text over a slider with the 61 positions of `TxLoopInterval` and no step buttons.
+/// The text follows the thumb while it is dragged; `onCommit` gets the interval of the position
+/// the user let go on. `seconds` is the interval in use and need not sit on a position.
 ///
-///     TxLoopIntervalSlider(title: "INTERVAL", seconds: intervalSec) { sec in
+///     TxIntervalSlider(seconds: intervalSec, label: { sec in TxLoopInterval.text(sec) + "S INTERVAL" }) { sec in
 ///         intervalSec = sec
 ///     }
-struct TxLoopIntervalSlider: View {
-    let title: String
+struct TxIntervalSlider: View {
     let seconds: Float
-    let showsValue: Bool
+    let label: (Float) -> String
     let onCommit: (Float) -> Void
 
+    @State private var draftStop: Double = 0
+    @State private var dragging: Bool = false
+
     init(
-        title: String,
         seconds: Float,
-        showsValue: Bool = true,
+        label: @escaping (Float) -> String,
         onCommit: @escaping (Float) -> Void
     ) {
-        self.title = title
         self.seconds = seconds
-        self.showsValue = showsValue
+        self.label = label
         self.onCommit = onCommit
     }
 
     var body: some View {
-        SettingSlider(
-            title: title,
-            value: stopBinding,
-            range: 0...Double(TxLoopInterval.lastStop),
-            step: 1
-        )
-        .valueText { stop in
-            stopText(stop)
+        VStack(alignment: .leading, spacing: 0) {
+            Text(label(shownSeconds))
+                .font(MMTheme.techLabel())
+                .foregroundStyle(MMTheme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            slider
         }
     }
 
-    /// The slider works in positions; the interval is derived from the position.
+    private var slider: some View {
+        Slider(value: stopBinding, in: 0...TxIntervalSlider.lastStopValue, step: 1) { editing in
+            editingChanged(editing)
+        }
+        .tint(MMTheme.cyan)
+        .accessibilityValue(Text(TxLoopInterval.text(shownSeconds) + "S"))
+    }
+
+    private static let lastStopValue: Double = Double(TxLoopInterval.lastStop)
+
+    /// While dragging, the interval under the thumb; at rest, the interval in use.
+    private var shownSeconds: Float {
+        if dragging {
+            return TxLoopInterval.seconds(forStop: TxIntervalSlider.stopIndex(draftStop))
+        }
+        return seconds
+    }
+
     private var stopBinding: Binding<Double> {
         Binding(
-            get: { Double(TxLoopInterval.stop(forSeconds: seconds)) },
-            set: { newStop in
-                let index: Int = TxLoopIntervalSlider.stopIndex(newStop)
-                onCommit(TxLoopInterval.seconds(forStop: index))
+            get: { dragging ? draftStop : Double(TxLoopInterval.stop(forSeconds: seconds)) },
+            set: { newValue in
+                moved(newValue)
             }
         )
+    }
+
+    private func moved(_ newValue: Double) {
+        draftStop = newValue
+        // A change with no drag in progress (an accessibility adjustment) is complete as it is.
+        if !dragging {
+            commit(newValue)
+        }
+    }
+
+    private func editingChanged(_ editing: Bool) {
+        if editing {
+            draftStop = Double(TxLoopInterval.stop(forSeconds: seconds))
+            dragging = true
+        } else if dragging {
+            dragging = false
+            commit(draftStop)
+        }
+    }
+
+    private func commit(_ stop: Double) {
+        let index: Int = TxIntervalSlider.stopIndex(stop)
+        onCommit(TxLoopInterval.seconds(forStop: index))
     }
 
     private static func stopIndex(_ value: Double) -> Int {
@@ -112,15 +152,6 @@ struct TxLoopIntervalSlider: View {
         let last: Double = Double(TxLoopInterval.lastStop)
         let bounded: Double = min(max(value.rounded(), 0), last)
         return Int(bounded)
-    }
-
-    private func stopText(_ stop: Double) -> String {
-        if !showsValue { return "" }
-        let index: Int = TxLoopIntervalSlider.stopIndex(stop)
-        let current: Int = TxLoopInterval.stop(forSeconds: seconds)
-        // At rest the interval in use is shown, which may lie between two positions.
-        let shown: Float = (index == current) ? seconds : TxLoopInterval.seconds(forStop: index)
-        return TxLoopInterval.text(shown) + "S"
     }
 }
 
@@ -145,6 +176,7 @@ private struct TxRowItem: Identifiable {
     init(packet: MagicPacket) {
         self.id = "\(packet.id)-\(packet.hex)"
         self.packet = packet
+        // Android `TxSwipeRow`: "CATEGORY · colors", or the category alone.
         let category: String = packet.category.rawValue
         if packet.colors.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.subtitle = category
@@ -161,26 +193,78 @@ private struct TxSectionGroup: Identifiable {
     var id: String { section.id }
 }
 
-/// What the tab remembers between launches, under Android's preference names.
+/// The library as the list shows it, with what the selection rules need.
+private struct TxLibrarySnapshot {
+    let groups: [TxSectionGroup]
+    let ids: Set<Int64>
+    /// Each packet's label by id (the first packet with that id, as Android's `firstOrNull`).
+    let labels: [Int64: String]
+    /// The first packet of `allTransmitPackets()`, or -1 for an empty library.
+    let firstId: Int64
+
+    static let empty = TxLibrarySnapshot(groups: [], ids: [], labels: [:], firstId: -1)
+
+    /// The wanted packet when it is in the library, otherwise the first one (Android selects
+    /// the first packet so LOOP can be used straight away).
+    func validSelection(_ wanted: Int64) -> Int64 {
+        if wanted >= 0 && ids.contains(wanted) {
+            return wanted
+        }
+        return firstId
+    }
+}
+
+/// Groups the library off the main thread: it can hold thousands of learned packets.
+private func txBuildSnapshot(_ all: [MagicPacket]) -> TxLibrarySnapshot {
+    let grouped: [(LivePacketSection, [MagicPacket])] = LivePacketSort.groupedMagicPackets(all)
+    var groups: [TxSectionGroup] = []
+    for entry in grouped {
+        let packets: [MagicPacket] = entry.1
+        if packets.isEmpty { continue }
+        var rows: [TxRowItem] = []
+        rows.reserveCapacity(packets.count)
+        for packet in packets {
+            rows.append(TxRowItem(packet: packet))
+        }
+        groups.append(TxSectionGroup(section: entry.0, rows: rows))
+    }
+    var ids = Set<Int64>()
+    ids.reserveCapacity(all.count)
+    var labels: [Int64: String] = [:]
+    labels.reserveCapacity(all.count)
+    for packet in all {
+        if ids.insert(packet.id).inserted {
+            labels[packet.id] = packet.label
+        }
+    }
+    let firstId: Int64 = all.first?.id ?? -1
+    return TxLibrarySnapshot(groups: groups, ids: ids, labels: labels, firstId: firstId)
+}
+
+/// What the tab remembers between launches, under the keys of Android's `UiPrefs`.
 private enum TxScreenPrefs {
     static let collapsedSectionsKey = "tx_collapsed_sections"
     static let loopSettingsCollapsedKey = "tx_loop_settings_collapsed"
 
-    /// Stored the way Android stores it: the upper-case section names.
+    /// Stored the way Android stores it: the section names ("WAND", "COLORS", ...).
     static func loadCollapsedSections() -> Set<LivePacketSection> {
         let names: [String] = UserDefaults.standard.stringArray(forKey: collapsedSectionsKey) ?? []
-        var out = Set<LivePacketSection>()
+        var wanted = Set<String>()
         for name in names {
-            let wanted: String = name.uppercased()
-            for section in LivePacketSection.allCases where section.title == wanted {
-                out.insert(section)
-            }
+            wanted.insert(name.uppercased())
+        }
+        var out = Set<LivePacketSection>()
+        for section in LivePacketSection.allCases where wanted.contains(section.title) {
+            out.insert(section)
         }
         return out
     }
 
     static func saveCollapsedSections(_ sections: Set<LivePacketSection>) {
-        let names: [String] = sections.map { $0.title }.sorted()
+        var names: [String] = []
+        for section in LivePacketSection.allCases where sections.contains(section) {
+            names.append(section.title)
+        }
         UserDefaults.standard.set(names, forKey: collapsedSectionsKey)
     }
 
@@ -204,8 +288,10 @@ struct TxScreen: View {
     @EnvironmentObject var tx: TxEngine
 
     /// The library grouped into sections; read again whenever the store's revision changes.
-    @State private var groups: [TxSectionGroup] = []
+    @State private var library: TxLibrarySnapshot = TxLibrarySnapshot.empty
     @State private var loaded: Bool = false
+    /// Bumped by every read of the library, so only the newest read is shown.
+    @State private var readGeneration: Int = 0
     @State private var visibleSections: Set<LivePacketSection> = Set(LivePacketSection.allCases)
     @State private var collapsed: Set<LivePacketSection> = []
     @State private var loopSettingsCollapsed: Bool = true
@@ -230,10 +316,10 @@ struct TxScreen: View {
         layout
             .background(MMTheme.navy)
             .onAppear {
-                firstLoad()
+                screenAppeared()
             }
             .onChange(of: store.revision) { _, _ in
-                reloadLibrary(selecting: selectedTxId)
+                reloadLibrary()
             }
             .onChange(of: tx.txLoopPacketId) { _, newId in
                 adoptLoopPacket(newId)
@@ -265,6 +351,7 @@ struct TxScreen: View {
         }
     }
 
+    /// Android `WideScreenColumns`: the controls in a third of the width, the library beside it.
     private func wideLayout(width: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 0) {
             controls
@@ -285,7 +372,7 @@ struct TxScreen: View {
     // MARK: Controls
 
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             buttonRow
             loopSection
             SectionFilterMenu(visible: $visibleSections)
@@ -294,14 +381,16 @@ struct TxScreen: View {
                 .foregroundStyle(MMTheme.textDim)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+            // Android shows the service status in its notification; here the line says what
+            // the relay did with the last send.
             StatusLine(tx.status, color: txStatusLineColor(tx.status))
         }
-        .padding(8)
+        .padding(6)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var buttonRow: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             MMCompactButton(title: "VIBRATE") {
                 tx.vibrate()
             }
@@ -311,14 +400,17 @@ struct TxScreen: View {
         }
     }
 
+    /// Android `TxLoopSettingsSection`.
     private var loopSection: some View {
         VStack(alignment: .leading, spacing: 2) {
             loopHeader
             if !loopSettingsCollapsed {
                 loopToggle
-                TxLoopIntervalSlider(title: "INTERVAL", seconds: intervalSec) { sec in
-                    commitInterval(sec)
-                }
+                TxIntervalSlider(
+                    seconds: intervalSec,
+                    label: { sec in TxLoopInterval.text(sec) + "S INTERVAL" },
+                    onCommit: { sec in commitInterval(sec) }
+                )
             }
         }
     }
@@ -337,7 +429,7 @@ struct TxScreen: View {
             Image(systemName: loopSettingsCollapsed ? "chevron.down" : "chevron.up")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(MMTheme.textPrimary)
-                .frame(width: 12)
+                .frame(width: 16)
             Text(loopSettingsCollapsed ? "TX LOOP SETTINGS" : "HIDE TX LOOP")
                 .font(MMTheme.techLabel())
                 .foregroundStyle(MMTheme.textPrimary)
@@ -348,6 +440,7 @@ struct TxScreen: View {
                     .font(MMTheme.techLabel())
                     .foregroundStyle(MMTheme.textDim)
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
         }
         .padding(.vertical, 2)
@@ -359,7 +452,7 @@ struct TxScreen: View {
         Toggle(isOn: loopBinding) {
             Text("LOOP")
                 .font(MMTheme.techHeader())
-                .foregroundStyle(MMTheme.textPrimary)
+                .foregroundStyle(MMTheme.cyan)
         }
         .tint(MMTheme.cyan)
         .disabled(selectedTxId < 0)
@@ -374,13 +467,13 @@ struct TxScreen: View {
         )
     }
 
-    /// "ON · 3.0S · LABEL" while the loop runs; nothing otherwise.
+    /// "ON · 3.0S · LABEL" while the loop runs (the label of the selected packet, which the
+    /// loop repeats), nothing otherwise.
     private var loopStatusLabel: String? {
         if !tx.txLoopEnabled { return nil }
         let seconds: String = TxLoopInterval.text(intervalSec)
-        let wanted: Int64 = selectedTxId
-        if let packet = store.allTransmitPackets().first(where: { $0.id == wanted }) {
-            return "ON · \(seconds)S · \(packet.label.uppercased())"
+        if let selectedLabel = library.labels[selectedTxId] {
+            return "ON · \(seconds)S · \(selectedLabel.uppercased())"
         }
         return "ON · \(seconds)S"
     }
@@ -391,7 +484,7 @@ struct TxScreen: View {
     private var content: some View {
         if !loaded {
             Color.clear
-        } else if groups.isEmpty {
+        } else if library.groups.isEmpty {
             Text("NO TX LIBRARY — RUN RX SESSION")
                 .font(MMTheme.techLabel())
                 .foregroundStyle(MMTheme.textDim)
@@ -402,7 +495,7 @@ struct TxScreen: View {
     }
 
     private var visibleGroups: [TxSectionGroup] {
-        groups.filter { visibleSections.contains($0.section) }
+        library.groups.filter { visibleSections.contains($0.section) }
     }
 
     private var packetList: some View {
@@ -432,6 +525,8 @@ struct TxScreen: View {
         }
     }
 
+    /// Android `TxSwipeRow`: tap sends, hold opens the menu, swipe left deletes, swipe right
+    /// recategorizes.
     private func packetRow(_ row: TxRowItem) -> some View {
         PacketRow(
             label: row.packet.label,
@@ -450,47 +545,45 @@ struct TxScreen: View {
 
     // MARK: Library state
 
-    private func firstLoad() {
+    /// Each visit starts as Android's tab does: saved collapse states, the loop's packet
+    /// selected, the loop's interval.
+    private func screenAppeared() {
         collapsed = TxScreenPrefs.loadCollapsedSections()
         loopSettingsCollapsed = TxScreenPrefs.loadLoopSettingsCollapsed()
         intervalSec = TxLoopInterval.seconds(fromMilliseconds: tx.txLoopIntervalMs)
-        reloadLibrary(selecting: tx.txLoopPacketId)
-        loaded = true
+        selectedTxId = tx.txLoopPacketId
+        reloadLibrary()
     }
 
-    /// Reads the library again and keeps the selection on a row that exists: the wanted one,
-    /// or else the first packet, so LOOP can be used straight away.
-    private func reloadLibrary(selecting wanted: Int64) {
+    /// Reads the library again and keeps the selection on a packet that exists: the selected
+    /// one, or else the first packet.
+    private func reloadLibrary() {
         let all: [MagicPacket] = store.allTransmitPackets()
-        let grouped: [(LivePacketSection, [MagicPacket])] = LivePacketSort.groupedMagicPackets(all)
-        var built: [TxSectionGroup] = []
-        for entry in grouped {
-            let packets: [MagicPacket] = entry.1
-            if packets.isEmpty { continue }
-            var rows: [TxRowItem] = []
-            rows.reserveCapacity(packets.count)
-            for packet in packets {
-                rows.append(TxRowItem(packet: packet))
-            }
-            built.append(TxSectionGroup(section: entry.0, rows: rows))
+        readGeneration += 1
+        let generation: Int = readGeneration
+        Task { @MainActor in
+            let snapshot: TxLibrarySnapshot = await Task.detached(priority: .userInitiated) { () -> TxLibrarySnapshot in
+                txBuildSnapshot(all)
+            }.value
+            applyLibrary(snapshot, generation: generation)
         }
-        groups = built
-        let valid: Int64 = TxScreen.validSelection(wanted, in: all)
+    }
+
+    private func applyLibrary(_ snapshot: TxLibrarySnapshot, generation: Int) {
+        // A newer read is on its way; this one is already out of date.
+        if generation != readGeneration { return }
+        library = snapshot
+        loaded = true
+        let valid: Int64 = snapshot.validSelection(selectedTxId)
         if selectedTxId != valid {
             selectedTxId = valid
         }
     }
 
-    private static func validSelection(_ wanted: Int64, in all: [MagicPacket]) -> Int64 {
-        if wanted >= 0 && all.contains(where: { $0.id == wanted }) {
-            return wanted
-        }
-        return all.first?.id ?? -1
-    }
-
     /// The loop's packet is the selected one, whoever set it.
     private func adoptLoopPacket(_ loopId: Int64) {
-        let valid: Int64 = TxScreen.validSelection(loopId, in: store.allTransmitPackets())
+        if !loaded { return }
+        let valid: Int64 = library.validSelection(loopId)
         if selectedTxId != valid {
             selectedTxId = valid
         }
@@ -515,7 +608,7 @@ struct TxScreen: View {
 
     // MARK: Sending
 
-    /// A tap sends the packet and makes it the loop's packet.
+    /// A tap sends the packet and, while the loop runs, makes it the loop's packet.
     private func selectPacket(_ packet: MagicPacket) {
         selectedTxId = packet.id
         tx.transmit(hex: packet.hex, label: packet.label)
@@ -552,6 +645,7 @@ struct TxScreen: View {
 
     // MARK: Row actions
 
+    /// Android `PacketActionSheet` for a library packet.
     private func showActions(for packet: MagicPacket) {
         var colors: String = packet.colors
         if colors.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -580,12 +674,13 @@ struct TxScreen: View {
     }
 
     private func askRecategorize(_ packet: MagicPacket) {
-        categoryRequest = CategoryPickRequest(label: packet.label, current: packet.category) { category in
+        categoryRequest = CategoryPickRequest(label: packet.label) { category in
             store.recategorizePacket(id: packet.id, category: category)
         }
     }
 
-    /// Built-in presets stay: the store only removes saved presets and learned packets.
+    /// Built-in presets stay, as on Android: the store removes only saved presets and learned
+    /// packets.
     private func askDelete(_ packet: MagicPacket) {
         deleteRequest = DeleteRequest(
             title: "Delete from TX library?",

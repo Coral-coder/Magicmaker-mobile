@@ -86,20 +86,27 @@ private struct ScanControlsHeightKey: PreferenceKey {
     }
 }
 
-/// The exported library file handed to the share sheet.
+/// The exported library file handed to the share sheet. Every export is a new item, so a
+/// sheet that closed itself without clearing the binding never blocks the next one.
 private struct ScanShareFile: Identifiable {
+    let id = UUID()
     let url: URL
-
-    var id: String { url.path }
 }
 
-/// The system share sheet for one file.
+/// The system share sheet for one file. When sharing finishes or is cancelled the sheet closes
+/// itself, which SwiftUI does not always report, so `onFinish` says so.
 private struct ScanShareSheet: UIViewControllerRepresentable {
     let url: URL
+    let onFinish: () -> Void
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let items: [Any] = [url]
-        return UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let finish: () -> Void = onFinish
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            finish()
+        }
+        return controller
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
@@ -232,7 +239,7 @@ struct ScanScreen: View {
                 }
             )
             .sheet(item: $shareFile, onDismiss: { exportSheetClosed() }) { file in
-                ScanShareSheet(url: file.url)
+                ScanShareSheet(url: file.url, onFinish: { shareFinished() })
                     .presentationDetents([.medium, .large])
             }
     }
@@ -471,12 +478,14 @@ struct ScanScreen: View {
         scan.bluetoothStatus == "Bluetooth ready"
     }
 
+    /// Android says "Service running · lock screen OK" here. An iPhone hears these adverts only
+    /// while the app is open: a background scan must name a service, and they carry none.
     private var scanStatusText: String {
         if !scan.scanActive {
             return "Tap SCAN to start"
         }
         if bluetoothReady {
-            return "Scanning · " + scan.bluetoothStatus
+            return "Scanning · keep app open"
         }
         return "Scan on · " + scan.bluetoothStatus
     }
@@ -553,13 +562,10 @@ struct ScanScreen: View {
     }
 
     private var bufferText: String {
-        let buffer: String
         if viewMode == .raw {
-            buffer = "BUF RAW \(scan.rawLivePackets.count)"
-        } else {
-            buffer = "BUF UNIQUE \(scan.livePackets.count)"
+            return "BUF RAW \(scan.rawLivePackets.count)"
         }
-        return buffer + " · RX \(scan.packetsHeard)"
+        return "BUF UNIQUE \(scan.livePackets.count)"
     }
 
     private var hintLine: some View {
@@ -1002,6 +1008,13 @@ struct ScanScreen: View {
         shareFile = ScanShareFile(url: url)
     }
 
+    /// Sharing finished or was cancelled; the activity view closes its sheet by itself.
+    private func shareFinished() {
+        shareFile = nil
+        exportSheetClosed()
+    }
+
+    /// Runs once per export, whichever of the sheet's dismissal and `shareFinished` comes first.
     private func exportSheetClosed() {
         let text: String = exportMessage
         if text.isEmpty { return }
