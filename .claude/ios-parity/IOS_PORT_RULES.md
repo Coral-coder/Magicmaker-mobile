@@ -100,3 +100,8 @@ Your Swift is first compiled in CI, minutes later, by someone else. So:
   `LabPacketBuilder.vib(enabled:pattern:)` keeps its labels; `PresetCatalog.vibratePacket` is Android's
   "Vibrate band" (white + burst). Always open the Swift file and read the real signature.
 - The views RecordTab, FilesTab, AutoTab, PresetsTab and LabTab no longer exist.
+- Phase C is done: the whole app — ten screens (`Views/ScanScreen.swift`, `TxScreen`, `WandScreen`, `AutoScreen`,
+  `LinkScreen`, `LogsScreen`, `MapScreen`, `DiagScreen`, `LabScreen`, `SettingsScreen`), `Views/SharedViews.swift`,
+  the engines and the store — compiles in CI with Xcode 26 (commit 644ff08 and later). Old `RemoteTab.swift` and
+  `ISCanBackupLogger.swift` are gone. Any edit now must keep it compiling: smallest possible change, same
+  conservative style.
