@@ -62,7 +62,9 @@ struct LabBuilderPanel: View {
             framing: framing,
             showIndex: showIndex
         )
-        if extended && selectedType == .preset && ledMask != 7 {
+        // ledMask is only off 7 while Extended is on (applyExtended resets it), so this does not
+        // read `extended`: the switch itself must not change the packet before it is held.
+        if selectedType == .preset && ledMask != 7 {
             return PacketBuilder.withZoneMask(base, ledMask)
         }
         return base
@@ -89,6 +91,7 @@ struct LabBuilderPanel: View {
         }
         .onChange(of: extended) { _, on in
             applyExtended(on)
+            holdBuiltHex()
         }
     }
 
@@ -541,8 +544,8 @@ struct LabBuilderPanel: View {
         showIndex = decoded.showIndex
     }
 
-    /// The packet the builder holds right now came from a load, not from the user: keep it out
-    /// of the hex field.
+    /// The packet the builder holds right now came from a load or the Standard / Extended switch,
+    /// not from the user: keep it out of the hex field.
     private func holdBuiltHex() {
         heldHex = builtHex
     }

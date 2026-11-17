@@ -42,6 +42,8 @@ object RelayCommands {
         val setTxPower: (level: Int) -> Unit = { },
         val setTxInterleave: (Boolean) -> Unit = { },
         val setShowControlOnly: (Boolean) -> Unit = { },
+        /** Replay step: the packet alone for exactly durationMs, with no wake and no stored timing. */
+        val rawBurst: (hex: String, durationMs: Int) -> Unit = { _, _ -> },
     )
 
     fun execute(body: JSONObject, handlers: Handlers): JSONObject {
@@ -179,13 +181,23 @@ object RelayCommands {
                     CatalogSync.buildChunk(handlers.catalogJson(), section, index)
                 }
                 "status" -> handlers.statusJson().put("ok", true)
-                "live" -> handlers.liveJson().put("ok", true)
+                "live" -> if (body.has("index")) {
+                    buildLivePage(handlers.liveJson(), body.optInt("index", 0))
+                } else {
+                    handlers.liveJson().put("ok", true)
+                }
                 "pairing", "pairing_info" -> handlers.pairingJson().put("ok", true)
                 "mble_tap", "mble", "tap" -> {
                     val token = body.getString("token")
                     val duration = body.optInt("durationMs", 5000)
                     handlers.mbleTap(token, duration)
                     ok().put("token", token).put("durationMs", duration)
+                }
+                "raw_burst", "replay_burst" -> {
+                    val hex = body.getString("hex")
+                    val ms = body.optInt("durationMs", 500).coerceIn(60, 10000)
+                    handlers.rawBurst(hex, ms)
+                    ok().put("durationMs", ms)
                 }
                 else -> error("Unknown action: ${body.optString("action")}")
             }
@@ -262,6 +274,61 @@ object RelayCommands {
     }
 
     private fun ok() = JSONObject().put("ok", true)
+
+    /**
+     * One page of the live feed for a BLE GATT read, which carries at most 512 bytes. Pages keep
+     * the feed's order (newest first) and each stays under [CatalogSync.MAX_RESPONSE_BYTES].
+     */
+    private fun buildLivePage(live: JSONObject, index: Int): JSONObject {
+        val pages = splitLivePages(live.optJSONArray("packets") ?: JSONArray())
+        if (index < 0 || index >= pages.size) return error("Bad live page index $index")
+        return livePage(index, pages.size, pages[index])
+    }
+
+    private fun livePage(index: Int, total: Int, packets: JSONArray): JSONObject = JSONObject()
+        .put("ok", true)
+        .put("index", index)
+        .put("total", total)
+        .put("packets", packets)
+
+    /** UTF-8 size of a page holding [packets]; labels and notes can hold multi-byte characters. */
+    private fun livePageBytes(packets: JSONArray): Int =
+        livePage(999, 999, packets).toString().toByteArray(Charsets.UTF_8).size
+
+    private fun splitLivePages(arr: JSONArray): List<JSONArray> {
+        if (arr.length() == 0) return listOf(JSONArray())
+        val pages = mutableListOf<JSONArray>()
+        var current = JSONArray()
+        for (i in 0 until arr.length()) {
+            val packet = arr.optJSONObject(i) ?: continue
+            val item = fitLivePacket(packet)
+            val trial = JSONArray()
+            for (j in 0 until current.length()) trial.put(current.get(j))
+            trial.put(item)
+            if (current.length() > 0 && livePageBytes(trial) > CatalogSync.MAX_RESPONSE_BYTES) {
+                pages.add(current)
+                current = JSONArray().put(item)
+            } else {
+                current = trial
+            }
+        }
+        pages.add(current)
+        return pages
+    }
+
+    /** A packet too big for a page of its own has its note, then its label, shortened. */
+    private fun fitLivePacket(packet: JSONObject): JSONObject {
+        if (livePageBytes(JSONArray().put(packet)) <= CatalogSync.MAX_RESPONSE_BYTES) return packet
+        val out = JSONObject(packet.toString())
+        for (key in listOf("note", "label")) {
+            var text = out.optString(key, "")
+            while (text.isNotEmpty() && livePageBytes(JSONArray().put(out)) > CatalogSync.MAX_RESPONSE_BYTES) {
+                text = text.dropLast(1)
+                out.put(key, text)
+            }
+        }
+        return out
+    }
 
     private fun error(msg: String?) = JSONObject().put("ok", false).put("error", msg ?: "error")
 

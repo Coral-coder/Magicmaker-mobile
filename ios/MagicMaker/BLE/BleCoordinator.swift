@@ -100,7 +100,8 @@ final class BleCoordinator: NSObject, BleCentralDelegate {
             Task { @MainActor in
                 guard let self else { return }
                 self.isTransmitting = false
-                if shouldPause { self.central.startScan() }
+                // Only resume if the user still wants the scan (PAUSE may have come mid-burst).
+                if shouldPause && self.shouldListenForDisney { self.central.startScan() }
                 onComplete?()
             }
         }
@@ -145,7 +146,7 @@ final class BleCoordinator: NSObject, BleCentralDelegate {
                     }
                 }
                 self.isTransmitting = false
-                if shouldPause { self.central.startScan() }
+                if shouldPause && self.shouldListenForDisney { self.central.startScan() }
                 onComplete(success)
             }
         })

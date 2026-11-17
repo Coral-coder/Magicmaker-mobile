@@ -50,9 +50,16 @@ final class AppViewModel: ObservableObject {
         }
         coordinator.onRelayCommandReady = { [weak self] in
             Task { @MainActor in
+                // A new link may be to an updated relay.
+                self?.relayLacksRawBurst = false
                 self?.refreshAndroidCatalog()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self?.refreshAndroidRemote()
+                }
+                // The ESP32 drops keep-awake when the link goes and never reports it, so a
+                // re-link sends it again.
+                if let self, self.relayBackend == .esp32, self.keepAwakeActive {
+                    self.setKeepAwake(true, hex: self.keepAwakeHex)
                 }
             }
         }
@@ -67,6 +74,14 @@ final class AppViewModel: ObservableObject {
     private var catalogFetchInFlight = false
     private var catalogFetchTimeout: DispatchWorkItem?
     private var catalogSyncCooldownUntil = Date.distantPast
+    /// When the last catalog sync finished; revision-driven re-syncs wait a minute after it.
+    private var lastCatalogSyncAt = Date.distantPast
+    /// Tags each catalog sync, so a late result of one that timed out changes nothing.
+    private var catalogSyncToken = 0
+    /// The iPhone's TX settings were given to the Android relay on this link.
+    private var relaySettingsPushed = false
+    /// The relay refused raw_burst on this link (an older build), so replay steps use plain sends.
+    private var relayLacksRawBurst = false
     private var keepAwakeChangedAt = Date.distantPast
     /// The ping the relay streams while keep-awake is on.
     private var keepAwakeHex: String = PacketBuilder.wakeupPing
@@ -89,12 +104,24 @@ final class AppViewModel: ObservableObject {
         tx.radioReady = { [weak self] in
             self?.remoteLinkReady ?? false
         }
+        tx.keepAwakeOn = { [weak self] in
+            self?.keepAwakeActive ?? false
+        }
         tx.radioSend = { [weak self] hex, durationMs, completion in
             guard let self else {
                 completion(false)
                 return
             }
-            self.ble.send(hex: hex, durationMs: durationMs, onComplete: completion)
+            // The ESP32 swaps any duration under 300 ms for its 4 s default.
+            let onAirMs: Int = self.relayBackend == .esp32 ? max(durationMs, 300) : durationMs
+            self.ble.send(hex: hex, durationMs: onAirMs, onComplete: completion)
+        }
+        tx.radioBurst = { [weak self] hex, durationMs, completion in
+            guard let self else {
+                completion(false)
+                return
+            }
+            self.sendRawBurst(hex: hex, durationMs: durationMs, completion: completion)
         }
         tx.onWandColor = { [weak self] index in
             self?.noteWandColor(index)
@@ -113,10 +140,39 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// A replay step through the Android relay: the packet alone for exactly durationMs, no wake.
+    /// The ESP32 firmware acknowledges every command without acting on it, and an older Android
+    /// relay refuses raw_burst; both get the step as an ordinary send instead.
+    private func sendRawBurst(hex: String, durationMs: Int, completion: @escaping (Bool) -> Void) {
+        if relayBackend == .esp32 || relayLacksRawBurst {
+            tx.radioSend(hex, durationMs, completion)
+            return
+        }
+        let ms: Int = min(max(durationMs, 60), 10_000)
+        let params: [String: Any] = ["hex": hex, "durationMs": ms]
+        remote.sendCommand("raw_burst", params: params, central: ble.bleCentral) { [weak self] ok in
+            Task { @MainActor in
+                guard let self else {
+                    completion(false)
+                    return
+                }
+                if ok {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) {
+                        completion(true)
+                    }
+                } else {
+                    self.relayLacksRawBurst = true
+                    self.tx.radioSend(hex, durationMs, completion)
+                }
+            }
+        }
+    }
+
     /// The scan engine's switch changed: the radio starts or stops listening. The engine has
     /// already stored the new value, which `wantsLocalScan` reads.
     private func scanWantedChanged(_ wanted: Bool) {
         syncBleListenModes()
+        tx.refreshIdleTimer()
     }
 
     /// The wand view follows the last colour heard or sent.
@@ -155,6 +211,8 @@ final class AppViewModel: ObservableObject {
     }
 
     func setNewWandName(hex: String, name: String) {
+        // A library import may have replaced the stored names; edit those, not older ones.
+        reloadNewWandNamesIfChanged()
         let key = hex.uppercased()
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -223,6 +281,15 @@ final class AppViewModel: ObservableObject {
         wandQuickHex = HexUtils.canonicalHex(hex)
         UserDefaults.standard.set(wandQuickLabel, forKey: "wand_quick_label")
         UserDefaults.standard.set(wandQuickHex, forKey: "wand_quick_hex")
+    }
+
+    /// Importing a library file can replace the stored quick button; re-read it.
+    func reloadWandQuickIfChanged() {
+        let defaults = UserDefaults.standard
+        let label: String = defaults.string(forKey: "wand_quick_label") ?? "OFF"
+        let hex: String = defaults.string(forKey: "wand_quick_hex") ?? AppViewModel.defaultWandQuickHex
+        if wandQuickLabel != label { wandQuickLabel = label }
+        if wandQuickHex != hex { wandQuickHex = hex }
     }
 
     func transmitWandQuick() {
@@ -360,8 +427,20 @@ final class AppViewModel: ObservableObject {
     }
 
     func setRelayBackend(_ backend: RelayBackend) {
+        // Read before saving: afterwards both hold the new value.
+        let changed: Bool = backend != RelayBackend.load()
         relayBackend = backend
         RelayBackend.save(backend)
+        if changed {
+            androidRemote = nil
+            relaySettingsPushed = false
+            relayLacksRawBurst = false
+            // A link to the other relay would keep taking every send and command: drop it so
+            // discovery starts over for the selected backend.
+            if let manager = ble.bleCentral.activateIfNeeded() {
+                ble.bleCentral.relayGatt.resetForRetry(central: manager)
+            }
+        }
         if !backend.usesWifiRelay {
             androidLivePackets = []
         }
@@ -416,10 +495,21 @@ final class AppViewModel: ObservableObject {
 
     func refreshAndroidRemote() {
         let skipGattPoll = isCatalogSyncInFlight || ble.bleCentral.relayGatt.hasGattWorkQueued
+        // A skipped GATT poll reads nothing, so the last status stays on LINK until the next one.
+        if skipGattPoll && !relayBackend.usesWifiRelay { return }
         remote.refreshStatus(central: skipGattPoll ? nil : ble.bleCentral) { [weak self] status in
             Task { @MainActor in
-                self?.androidRemote = status
+                // STATUS can serve a command reply instead of the status (nil here); keep the
+                // last status while the BLE link is up. WiFi, or a link that is down, clears it.
+                if let status {
+                    self?.androidRemote = status
+                } else if self?.relayBackend == .androidWifi || self?.relayGattReady != true {
+                    self?.androidRemote = nil
+                }
+                // Only a link that is really down resets this: a skipped GATT poll also gives nil.
+                if self?.remoteLinkReady != true { self?.relaySettingsPushed = false }
                 guard let status else { return }
+                self?.pushRelaySettingsIfNeeded()
                 self?.reconcileKeepAwake(status.keepAwake)
                 self?.adoptRelayWandColor(status.wandDisplayColorIndex)
                 let revisionChanged = status.storeRevision != self?.lastCatalogRevision
@@ -438,23 +528,76 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func refreshAndroidCatalog() {
+    /// Settings changed on the iPhone while no Android relay took commands. The relay sends with
+    /// its own stored values, so these are given to it on the next link; untouched settings are
+    /// never pushed, so the Android keeps its own tuning. Capitalised: kept out of library exports.
+    private static let pendingRelaySettingsKey = "MMRelayPendingSettings"
+
+    /// SETTINGS calls this when a TX setting changes with no Android relay linked.
+    func noteRelaySettingPending(_ name: String) {
+        let defaults = UserDefaults.standard
+        var pending: [String] = defaults.stringArray(forKey: Self.pendingRelaySettingsKey) ?? []
+        if !pending.contains(name) { pending.append(name) }
+        defaults.set(pending, forKey: Self.pendingRelaySettingsKey)
+    }
+
+    /// Once per link, sends the settings changed on the iPhone while the relay was away.
+    private func pushRelaySettingsIfNeeded() {
+        guard relayBackend != .esp32, remoteLinkReady, !relaySettingsPushed else { return }
+        relaySettingsPushed = true
+        let defaults = UserDefaults.standard
+        let pending: [String] = defaults.stringArray(forKey: Self.pendingRelaySettingsKey) ?? []
+        if pending.isEmpty { return }
+        defaults.removeObject(forKey: Self.pendingRelaySettingsKey)
+        for name in pending {
+            switch name {
+            case "tx_power":
+                sendRelaySetting("set_tx_power", ["level": store.getTxPowerLevel()])
+            case "tx_interleave":
+                sendRelaySetting("set_tx_interleave", ["enabled": store.getTxInterleave()])
+            case "show_control_only":
+                sendRelaySetting("set_show_control_only", ["enabled": store.getShowControlOnly()])
+            case "wakeup_preamble":
+                setAndroidWakeupPreamble(store.getWakeupPreambleMs())
+            case "command_burst":
+                setAndroidCommandBurst(store.getCommandBurstMs())
+            case "starlight_burst":
+                setAndroidStarlightBurst(store.getStarlightBurstMs())
+            default:
+                break
+            }
+        }
+    }
+
+    /// `force` (LINK → Refresh) skips the wait between re-syncs.
+    func refreshAndroidCatalog(force: Bool = false) {
         // The ESP32 hosts no catalog, so never try to pull one over it — that would just fail and
         // spin. Rely on the persisted cache (synced once from Android) instead.
         guard relayBackend != .esp32 else { return }
         guard relayCommandReady || relayCatalogReady else { return }
         guard !catalogFetchInFlight else { return }
         guard Date() >= catalogSyncCooldownUntil else { return }
+        // A scanning relay changes its library every few seconds. With a catalog in hand,
+        // re-syncs wait a minute and the local scan keeps running during them.
+        let haveCatalog: Bool = !(androidCatalog?.transmitPresets.isEmpty ?? true)
+        let sinceLastSync: TimeInterval = Date().timeIntervalSince(lastCatalogSyncAt)
+        if !force && haveCatalog && sinceLastSync < 60 { return }
+        catalogSyncToken += 1
+        let token: Int = catalogSyncToken
         catalogFetchInFlight = true
         isCatalogSyncInFlight = true
         catalogSyncDiagnostic = "starting…"
-        let pauseScanForSync = wantsLocalScan
+        let pauseScanForSync: Bool = wantsLocalScan && !haveCatalog
         if pauseScanForSync {
             ble.updateModes(recording: false, auto: false, listening: false)
         }
         catalogFetchTimeout?.cancel()
         let timeout = DispatchWorkItem { [weak self] in
-            guard let self, self.catalogFetchInFlight else { return }
+            guard let self, self.catalogSyncToken == token, self.catalogFetchInFlight else { return }
+            // The chunk transfer cannot be cancelled: its late result is ignored (new token), and
+            // the cooldown keeps the next poll from queueing a second transfer behind it.
+            self.catalogSyncToken += 1
+            self.catalogSyncCooldownUntil = Date().addingTimeInterval(30)
             self.catalogFetchInFlight = false
             self.isCatalogSyncInFlight = false
             if pauseScanForSync {
@@ -471,25 +614,28 @@ final class AppViewModel: ObservableObject {
             Task { @MainActor in self?.catalogSyncDiagnostic = msg }
         }) { [weak self] catalog in
             Task { @MainActor in
-                self?.catalogFetchTimeout?.cancel()
+                // A sync that timed out changes nothing: no timer, no scan, no flags.
+                guard let self, self.catalogSyncToken == token else { return }
+                timeout.cancel()
                 if pauseScanForSync {
-                    self?.syncBleListenModes()
+                    self.syncBleListenModes()
                 }
                 defer {
-                    self?.catalogFetchInFlight = false
-                    self?.isCatalogSyncInFlight = false
+                    self.catalogFetchInFlight = false
+                    self.isCatalogSyncInFlight = false
                 }
                 guard let catalog, !catalog.transmitPresets.isEmpty else {
-                    self?.catalogSyncCooldownUntil = Date().addingTimeInterval(30)
-                    if self?.androidCatalog == nil {
-                        let detail = self?.catalogSyncDiagnostic ?? "unknown"
-                        self?.statusMessage = "Catalog sync failed (\(detail)) — LINK → Refresh"
+                    self.catalogSyncCooldownUntil = Date().addingTimeInterval(30)
+                    if self.androidCatalog == nil {
+                        let detail: String = self.catalogSyncDiagnostic
+                        self.statusMessage = "Catalog sync failed (\(detail)) — LINK → Refresh"
                     }
                     return
                 }
-                self?.catalogSyncCooldownUntil = .distantPast
-                self?.catalogSyncDiagnostic = "ok · \(catalog.transmitPresets.count) TX"
-                self?.applyAndroidCatalogFromParsed(catalog)
+                self.catalogSyncCooldownUntil = .distantPast
+                self.lastCatalogSyncAt = Date()
+                self.catalogSyncDiagnostic = "ok · \(catalog.transmitPresets.count) TX"
+                self.applyAndroidCatalogFromParsed(catalog)
             }
         }
     }
@@ -580,8 +726,15 @@ final class AppViewModel: ObservableObject {
     @Published var keepAwakeActive = false
 
     func setKeepAwake(_ enabled: Bool, hex: String = PacketBuilder.wakeupPing) {
+        let turningOn: Bool = enabled && !keepAwakeActive
         keepAwakeActive = enabled
         keepAwakeChangedAt = Date()
+        if turningOn {
+            // One transmit loop at a time: the others would fight keep-awake for the radio.
+            if tx.randomShowEnabled { tx.setRandomShow(enabled: false, intervalMs: nil) }
+            if tx.txLoopEnabled { tx.setTxLoop(enabled: false, packetId: nil, intervalMs: nil) }
+            if tx.starlightLoopEnabled { tx.setStarlightLoop(enabled: false, packetId: nil, intervalMs: nil) }
+        }
         let pingHex = HexUtils.canonicalHex(hex)
         // The relay keeps its earlier ping when it is given one too short to be a packet.
         if pingHex.count >= 8 { keepAwakeHex = pingHex }
@@ -689,7 +842,6 @@ final class AppViewModel: ObservableObject {
             Task { @MainActor in
                 self?.statusMessage = ok ? "Preamble \(ms)ms" : "Preamble failed"
                 self?.refreshAndroidRemote()
-                self?.refreshAndroidCatalog()
             }
         }
     }
@@ -699,7 +851,6 @@ final class AppViewModel: ObservableObject {
             Task { @MainActor in
                 self?.statusMessage = ok ? "Command burst \(ms)ms" : "Burst failed"
                 self?.refreshAndroidRemote()
-                self?.refreshAndroidCatalog()
             }
         }
     }
@@ -709,7 +860,6 @@ final class AppViewModel: ObservableObject {
             Task { @MainActor in
                 self?.statusMessage = ok ? "Starlight burst \(ms)ms" : "Starlight burst failed"
                 self?.refreshAndroidRemote()
-                self?.refreshAndroidCatalog()
             }
         }
     }

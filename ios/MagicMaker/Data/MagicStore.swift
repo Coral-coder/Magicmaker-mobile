@@ -1,5 +1,8 @@
 import Combine
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - Library file
 
@@ -597,6 +600,10 @@ final class MagicStore: ObservableObject {
     /// replace a library that simply was not loaded yet.
     private var hasLoaded = false
     private var backgroundObserver: NSObjectProtocol?
+    #if canImport(UIKit)
+    /// Keeps the app running after it is backgrounded until the pending store write is on disk.
+    private var saveBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    #endif
 
     private let fileManager = FileManager.default
     private let defaults = UserDefaults.standard
@@ -677,9 +684,36 @@ final class MagicStore: ObservableObject {
     }
 
     private func flushForBackground() {
+        #if canImport(UIKit)
+        if saveBackgroundTask == .invalid {
+            // The handler runs on the main thread and must end the task before it returns.
+            saveBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "store-save") { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.endSaveBackgroundTask()
+                }
+            }
+        }
+        #endif
         // A raw packet learned in the last few seconds is still waiting for its spaced save.
         if rawSavePending { save() }
         flushSave()
+        endSaveBackgroundTaskIfIdle()
+    }
+
+    /// Releases the background time once no write is running, queued or scheduled.
+    private func endSaveBackgroundTaskIfIdle() {
+        if writeInFlight || changedWhileWriting || saveScheduled { return }
+        endSaveBackgroundTask()
+    }
+
+    private func endSaveBackgroundTask() {
+        #if canImport(UIKit)
+        if saveBackgroundTask == .invalid { return }
+        let id: UIBackgroundTaskIdentifier = saveBackgroundTask
+        saveBackgroundTask = .invalid
+        UIApplication.shared.endBackgroundTask(id)
+        #endif
     }
 
     // MARK: - Derived lists
@@ -2077,6 +2111,7 @@ final class MagicStore: ObservableObject {
             changedWhileWriting = false
             startWrite()
         }
+        endSaveBackgroundTaskIfIdle()
     }
 
     /// Coalesces the high-volume raw-learn saves so a packet flood cannot cause an IO storm:

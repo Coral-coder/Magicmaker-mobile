@@ -83,11 +83,17 @@ final class TxEngine: ObservableObject {
 
     /// True when a relay is linked and can take a packet.
     var radioReady: () -> Bool = { false }
+    /// True while the relay streams the keep-awake ping; a single send then ends on that status.
+    var keepAwakeOn: () -> Bool = { false }
     /// Send one packet for durationMs through the linked relay; completion(false) when it could not be sent.
     var radioSend: (_ hex: String, _ durationMs: Int, _ completion: @escaping (Bool) -> Void) -> Void = { _, _, done in done(false) }
+    /// A replay step: the packet alone for exactly durationMs, with no wake preamble. Nil when the
+    /// relay cannot do that; steps then go through `radioSend`.
+    var radioBurst: ((_ hex: String, _ durationMs: Int, _ completion: @escaping (Bool) -> Void) -> Void)? = nil
     /// The palette index of a wand colour that is being sent.
     var onWandColor: ((Int) -> Void)?
-    /// Whether the user has scanning switched on: "Scanning" or "Idle" once a replay ends.
+    /// Whether the user has scanning switched on: "Scanning" or "Idle" once a replay ends, and
+    /// the screen is kept awake while it is on.
     var scanWanted: () -> Bool = { true }
 
     @Published private(set) var status: String = "Idle"
@@ -232,6 +238,7 @@ final class TxEngine: ObservableObject {
         if status == "Idle" && scanWanted() {
             status = "Scanning"
         }
+        refreshIdleTimer()
         let wandLoop = TxEngine.boolPref("starlight_loop_enabled", fallback: false)
         let txLoop = TxEngine.boolPref("tx_loop_enabled", fallback: false)
         let randomShow = TxEngine.boolPref("random_show_enabled", fallback: false)
@@ -276,7 +283,7 @@ final class TxEngine: ObservableObject {
         runRadioJob(
             .manual,
             status: starlight ? "Wand TX…" : "TX…",
-            onCompleteStatus: doneStatus,
+            onCompleteStatus: keepAwakeOn() ? "Keeping band awake" : doneStatus,
             // A tap supersedes whatever is queued, so it goes out as soon as the air is free.
             preempt: true,
             send: { [weak self] done in
@@ -739,13 +746,14 @@ final class TxEngine: ObservableObject {
                     return
                 }
                 if self.status != "Replaying" { self.status = "Replaying" }
-                self.sendPacket(step.hex, durationMs: step.durationMs) { [weak self] failure in
+                self.sendPacket(step.hex, durationMs: step.durationMs, raw: true) { [weak self] failure in
                     guard let self else { return }
                     if self.replaying && self.replayRun == run {
-                        if let failure {
-                            // The relay stopped taking packets; the rest would fail the same way.
+                        if let failure, failure == TxEngine.notLinkedStatus {
+                            // No relay linked: the rest would fail the same way.
                             self.finishReplay(failure: failure)
                         } else {
+                            // A failed burst is passed over, as the advertiser does.
                             self.runReplayStep(index + 1)
                         }
                     }
@@ -899,7 +907,7 @@ final class TxEngine: ObservableObject {
     /// a later turn of the main actor: nil when the packet went out, otherwise why it did not.
     /// `fixedMs` puts the packet on air for exactly that long (replay); without it the time
     /// follows the kind of packet.
-    private func sendPacket(_ hex: String, durationMs fixedMs: Int? = nil, _ done: @escaping (String?) -> Void) {
+    private func sendPacket(_ hex: String, durationMs fixedMs: Int? = nil, raw: Bool = false, _ done: @escaping (String?) -> Void) {
         let canonical = HexUtils.canonicalHex(hex)
         if let reason = HexUtils.legacyAdvertiseRejectReason(canonical) {
             finishSend(done, failure: reason, afterMs: 0)
@@ -926,7 +934,13 @@ final class TxEngine: ObservableObject {
             self.openSendSerial = 0
             done(TxEngine.sendFailedStatus)
         }
-        radioSend(canonical, durationMs) { [weak self] sent in
+        let sender: (String, Int, @escaping (Bool) -> Void) -> Void
+        if raw, let burst = radioBurst {
+            sender = burst
+        } else {
+            sender = radioSend
+        }
+        sender(canonical, durationMs) { [weak self] sent in
             guard let self, self.openSendSerial == serial else { return }
             self.openSendSerial = 0
             self.sendWatchdog?.cancel()
@@ -962,10 +976,11 @@ final class TxEngine: ObservableObject {
         }
     }
 
-    /// The loops, the show and a replay are timers in this app, so the screen is kept from
-    /// locking while one of them runs and the earlier setting is put back afterwards.
-    private func refreshIdleTimer() {
-        let wanted = txLoopEnabled || starlightLoopEnabled || randomShowEnabled || replayActive
+    /// The loops, the show and a replay are timers in this app, and the scan only hears adverts
+    /// in the foreground, so the screen is kept from locking while scanning or while one of them
+    /// runs, and the earlier setting is put back afterwards. Call again when the scan switch changes.
+    func refreshIdleTimer() {
+        let wanted = txLoopEnabled || starlightLoopEnabled || randomShowEnabled || replayActive || scanWanted()
         if wanted == idleTimerHeld { return }
         idleTimerHeld = wanted
         if wanted {

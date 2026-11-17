@@ -212,9 +212,51 @@ final class AndroidRemoteClient {
                 onComplete([])
                 return
             }
-            central.relayGatt.sendRemoteCommandJson(["action": "live"]) { json in
-                onComplete(Self.parseLivePackets(json: json))
+            // One GATT value carries at most 512 bytes, so the feed is read a page at a time.
+            let firstPage: [String: Any] = ["action": "live", "index": 0]
+            central.relayGatt.sendRemoteCommandJson(firstPage) { json in
+                guard let page = json, let total = page["total"] as? Int else {
+                    // An older relay ignores "index" and answers with the whole feed.
+                    onComplete(Self.parseLivePackets(json: json))
+                    return
+                }
+                let first = Self.parseLivePackets(json: page)
+                let endIndex = min(total, Self.maxLivePages)
+                self.fetchLivePages(central: central, index: 1, endIndex: endIndex, accumulated: first, onComplete: onComplete)
             }
+        }
+    }
+
+    /// Pages per poll, so one 2 s poll cannot flood the GATT queue.
+    private static let maxLivePages = 12
+
+    /// Reads live-feed pages index..<endIndex one at a time; the first page that does not arrive
+    /// ends the feed with what was read so far.
+    private func fetchLivePages(
+        central: BleCentral,
+        index: Int,
+        endIndex: Int,
+        accumulated: [AndroidRemotePacket],
+        onComplete: @escaping ([AndroidRemotePacket]) -> Void
+    ) {
+        if index >= endIndex {
+            onComplete(accumulated)
+            return
+        }
+        let body: [String: Any] = ["action": "live", "index": index]
+        central.relayGatt.sendRemoteCommandJson(body) { json in
+            guard let json, json["ok"] as? Bool == true, json["index"] as? Int == index else {
+                onComplete(accumulated)
+                return
+            }
+            // A packet heard between two reads shifts the feed, so a row can come back twice.
+            var seen: Set<String> = Set(accumulated.map { $0.id })
+            var next = accumulated
+            for packet in Self.parseLivePackets(json: json) where !seen.contains(packet.id) {
+                seen.insert(packet.id)
+                next.append(packet)
+            }
+            self.fetchLivePages(central: central, index: index + 1, endIndex: endIndex, accumulated: next, onComplete: onComplete)
         }
     }
 

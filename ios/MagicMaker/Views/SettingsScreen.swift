@@ -298,6 +298,8 @@ struct SettingsScreen: View {
         store.saveTxInterleave(on)
         if androidRelayLinked {
             vm.sendRelaySetting("set_tx_interleave", ["enabled": on])
+        } else {
+            vm.noteRelaySettingPending("tx_interleave")
         }
     }
 
@@ -306,6 +308,8 @@ struct SettingsScreen: View {
         store.saveTxPowerLevel(level)
         if androidRelayLinked {
             vm.sendRelaySetting("set_tx_power", ["level": level])
+        } else {
+            vm.noteRelaySettingPending("tx_power")
         }
     }
 
@@ -315,6 +319,8 @@ struct SettingsScreen: View {
         store.saveWakeupPreambleMs(ms)
         if androidRelayLinked {
             vm.setAndroidWakeupPreamble(ms)
+        } else {
+            vm.noteRelaySettingPending("wakeup_preamble")
         }
     }
 
@@ -324,6 +330,8 @@ struct SettingsScreen: View {
         store.saveCommandBurstMs(ms)
         if androidRelayLinked {
             vm.setAndroidCommandBurst(ms)
+        } else {
+            vm.noteRelaySettingPending("command_burst")
         }
     }
 
@@ -333,6 +341,8 @@ struct SettingsScreen: View {
         store.saveStarlightBurstMs(ms)
         if androidRelayLinked {
             vm.setAndroidStarlightBurst(ms)
+        } else {
+            vm.noteRelaySettingPending("starlight_burst")
         }
     }
 
@@ -341,6 +351,8 @@ struct SettingsScreen: View {
     private func scanFilterChanged(_ on: Bool) {
         if androidRelayLinked {
             vm.sendRelaySetting("set_show_control_only", ["enabled": on])
+        } else {
+            vm.noteRelaySettingPending("show_control_only")
         }
     }
 }

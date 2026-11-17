@@ -135,9 +135,12 @@ final class AndroidRelayGattClient: NSObject {
 
     func handleDisconnect() {
         markProgress()
+        // CoreBluetooth never answers a read or write still in flight when the link drops, so
+        // fail them here or the GATT queue stays busy after the relay links again.
         if isBroadcasting {
             txCharacteristic = nil
             connectInProgress = false
+            clearPendingReads()
             onStatus?("Android broadcasting — hold phone near MagicBand")
             return
         }
@@ -145,6 +148,7 @@ final class AndroidRelayGattClient: NSObject {
         commandCharacteristic = nil
         statusCharacteristic = nil
         catalogCharacteristic = nil
+        clearPendingReads()
         relay = nil
         lockedRelayId = nil
         connectInProgress = false
@@ -290,6 +294,7 @@ final class AndroidRelayGattClient: NSObject {
             txCharacteristic = nil
             relay = nil
             connectInProgress = false
+            clearPendingReads()
             onStatus?("Android broadcasting — hold phone near MagicBand")
             return
         }
@@ -874,7 +879,10 @@ extension AndroidRelayGattClient: CBPeripheralDelegate {
             return
         }
         let whole: Any? = try? JSONSerialization.jsonObject(with: data)
-        guard let json = (whole as? [String: Any]) ?? Self.leadingFields(ofTruncatedObject: data) else {
+        // Android serves its last command reply (kept up to 30 s for catalog chunks) on STATUS
+        // instead of the status object; only a real status carries "running".
+        guard let json = (whole as? [String: Any]) ?? Self.leadingFields(ofTruncatedObject: data),
+              json["running"] != nil else {
             done?(nil)
             return
         }

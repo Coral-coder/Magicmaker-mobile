@@ -466,8 +466,9 @@ struct ScanScreen: View {
     private var statusLines: some View {
         VStack(alignment: .leading, spacing: 2) {
             StatusLine(scanStatusText, color: scanStatusColor)
-            if scan.recordSessionActive && !scan.activeSessionName.isEmpty {
-                StatusLine("LOG · " + scan.activeSessionName)
+            // The file really open; ScanEngine's name can be an old sidecar after a relaunch.
+            if let logName = store.activeSessionName {
+                StatusLine("LOG · " + logName)
             }
             // A tap replays through the relay; this says why nothing went out when none is linked.
             StatusLine("STATUS: " + tx.status, color: txStatusColor)

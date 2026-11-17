@@ -161,7 +161,6 @@ struct WandScreen: View {
     @State private var loaded: Bool = false
     @State private var selectedId: Int64 = -1
     @State private var intervalSec: Float = 3
-    @State private var burstMs: Double = Double(TransmitTiming.starlightBurstMs)
     @State private var deleteRequest: DeleteRequest? = nil
     @State private var renameTarget: MagicPacket? = nil
     @State private var renameText: String = ""
@@ -191,8 +190,8 @@ struct WandScreen: View {
         }
         .onChange(of: store.revision) { _, _ in
             reloadLibrary(resetToLoop: false)
-            burstMs = Double(store.getStarlightBurstMs())
             vm.reloadNewWandNamesIfChanged()
+            vm.reloadWandQuickIfChanged()
         }
         .onChange(of: showNewWand) { _, _ in
             reloadLibrary(resetToLoop: false)
@@ -264,7 +263,6 @@ struct WandScreen: View {
                 label: { sec in intervalText(sec) },
                 onCommit: { sec in commitInterval(sec) }
             )
-            burstSlider
             libraryRow
             StatusLine(tx.status, color: txStatusLineColor(tx.status))
         }
@@ -344,21 +342,6 @@ struct WandScreen: View {
         )
     }
 
-    /// On-air time of a wand colour (Android's STARLIGHT WAND setting).
-    private var burstSlider: some View {
-        SettingSlider(
-            title: "STARLIGHT WAND",
-            value: $burstMs,
-            range: Double(TransmitTiming.minStarlightBurstMs)...Double(TransmitTiming.maxStarlightBurstMs),
-            step: 250,
-            unit: "ms",
-            hint: "On-air time for starlight wand TX · no band wakeup · default \(TransmitTiming.starlightBurstMs)ms",
-            onCommit: { ms in
-                store.saveStarlightBurstMs(Int(ms))
-            }
-        )
-    }
-
     private var libraryRow: some View {
         HStack(spacing: 4) {
             Text("LIB \(library.count)")
@@ -400,8 +383,10 @@ struct WandScreen: View {
 
     /// Each visit starts as Android's tab does: the loop's colour selected, the loop's interval.
     private func screenAppeared() {
+        // An import made on another tab never reached this screen's onChange(of: store.revision).
+        vm.reloadNewWandNamesIfChanged()
+        vm.reloadWandQuickIfChanged()
         intervalSec = TxLoopInterval.seconds(fromMilliseconds: tx.starlightIntervalMs)
-        burstMs = Double(store.getStarlightBurstMs())
         reloadLibrary(resetToLoop: true)
         loaded = true
     }

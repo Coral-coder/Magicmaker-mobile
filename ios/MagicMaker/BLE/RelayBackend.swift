@@ -48,8 +48,21 @@ enum RelaySettings {
         set { UserDefaults.standard.set(newValue, forKey: portKey) }
     }
 
+    // The IP is raw user text saved on every keystroke, so never force-unwrap it.
     static var androidBaseURL: URL {
-        URL(string: "http://\(androidRelayIP):\(androidRelayPort)")!
+        var host: String = androidRelayIP
+        var port: Int = androidRelayPort
+        // Android's RELAY tab shows the address with its port; a pasted "ip:port" is split here
+        // rather than in the field, which is saved on every keystroke.
+        let parts = host.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count == 2, !parts[1].isEmpty, parts[1].allSatisfy({ $0.isASCII && $0.isNumber }),
+           let pastedPort = Int(parts[1]), pastedPort > 0, pastedPort <= 65_535 {
+            host = String(parts[0])
+            port = pastedPort
+        }
+        if let url = URL(string: "http://\(host):\(port)") { return url }
+        if let fallback = URL(string: "http://192.168.43.1:\(port)") { return fallback }
+        return URL(fileURLWithPath: "/")
     }
 }
 

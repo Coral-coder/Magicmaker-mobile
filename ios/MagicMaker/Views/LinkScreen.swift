@@ -149,7 +149,7 @@ private struct LinkRelayPanel: View {
                 .padding(8)
                 .background(MMTheme.panel)
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(MMTheme.panelLine, lineWidth: 0.5))
-                .keyboardType(.decimalPad)
+                .keyboardType(.numbersAndPunctuation)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
         }
@@ -185,9 +185,10 @@ private struct LinkRelayPanel: View {
         }
     }
 
+    /// The ESP32 answers STATUS with a bare `{"ok":true}`, which is not an Android status.
     @ViewBuilder
     private var androidRows: some View {
-        if let s = vm.androidRemote {
+        if vm.relayBackend != .esp32, let s = vm.androidRemote {
             LinkInfoRow("ANDROID", androidStatusText(s))
             LinkInfoRow("STORE", "REV \(s.storeRevision)")
             if s.relayLinked {
@@ -200,7 +201,7 @@ private struct LinkRelayPanel: View {
         HStack(spacing: 6) {
             MMCompactButton(title: "Refresh") {
                 vm.refreshAndroidRemote()
-                vm.refreshAndroidCatalog()
+                vm.refreshAndroidCatalog(force: true)
                 vm.refreshRelayStatus()
             }
             if vm.relayBackend.usesBleRelayLink {
@@ -236,7 +237,11 @@ private struct LinkRelayPanel: View {
 
     private var linkColor: Color {
         switch vm.relayBackend {
-        case .androidBle, .esp32:
+        case .esp32:
+            if vm.relayCommandReady { return MMTheme.cyan }
+            if vm.relayGattReady { return MMTheme.amber }
+            return MMTheme.error
+        case .androidBle:
             if vm.relayGattReady, vm.androidRemote?.relayLinked == true { return MMTheme.cyan }
             if vm.relayGattReady { return MMTheme.amber }
             return MMTheme.error

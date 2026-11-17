@@ -852,6 +852,24 @@ class MagicMakerForegroundService : Service() {
         )
     }
 
+    /**
+     * One step of a replay driven over the relay: the logged packet alone for exactly its logged
+     * gap, as [runReplayStep] sends it — no wake preamble and no stored burst timing. Steps queue
+     * in order (no preempt) so none of the log is skipped.
+     */
+    private fun queueRawBurst(hex: String, durationMs: Int) {
+        val txHex = HexUtils.canonicalHex(hex)
+        val ms = durationMs.coerceIn(REPLAY_MIN_STEP_MS.toInt(), REPLAY_MAX_STEP_MS.toInt())
+        runManufacturerTx(
+            status = "Replaying",
+            onCompleteStatus = if (keepAwakeEnabled) "Keeping band awake" else if (scanActiveNow()) "Scanning" else "Idle",
+            send = { onDone ->
+                val adv = bleAdvertiser
+                if (adv != null && txHex.isNotEmpty()) adv.burst(txHex, ms, onDone) else onDone()
+            },
+        )
+    }
+
     private fun queueVibrate() {
         runManufacturerTx(
             status = "Vibrate…",
@@ -1242,6 +1260,7 @@ class MagicMakerForegroundService : Service() {
             store.saveShowControlOnly(on)
             gattServer?.refreshStatusCharacteristic()
         },
+        rawBurst = { hex, ms -> queueRawBurst(hex, ms) },
         transmit = { hex -> queueSend(hex) },
         vibrate = { queueVibrate() },
         interrogate = { queueSend(PacketBuilder.WAKEUP_PING) },

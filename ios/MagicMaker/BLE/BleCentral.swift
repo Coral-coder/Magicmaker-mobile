@@ -83,8 +83,12 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
         case .poweredOff:
             stopScan()
             stopRelayDiscovery()
+            // No didDisconnectPeripheral arrives when the radio goes down, so drop the relay link
+            // here; otherwise it still looks ready and the next power-on never relinks.
+            relayGatt.resetForRetry(central: central)
             reportState()
         default:
+            relayGatt.resetForRetry(central: central)
             reportState()
         }
     }
@@ -223,6 +227,8 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
         // A relay's own advertisement is never a heard packet, whichever relay is selected.
         if advertisesRelayService(advertisementData) { return }
         guard let hex = extractHex(from: advertisementData) else { return }
+        // 127 is CoreBluetooth's reserved 'RSSI not available' value, not a reading.
+        if RSSI.intValue == 127 { return }
 
         // Every advertisement is passed on: counts, logs and signal weighting need them all.
         let address = peripheral.identifier.uuidString.uppercased()

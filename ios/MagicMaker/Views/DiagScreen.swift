@@ -213,6 +213,7 @@ struct DiagScreen: View {
 /// The phone's own radio, scan, counters, relay link and location at a glance.
 private struct DiagStatusBlock: View {
     @EnvironmentObject var vm: AppViewModel
+    @EnvironmentObject var store: MagicStore
     @EnvironmentObject var scan: ScanEngine
     @EnvironmentObject var tx: TxEngine
 
@@ -255,7 +256,8 @@ private struct DiagStatusBlock: View {
 
     private var logText: String {
         if !scan.recordSessionActive { return "OFF" }
-        let name: String = scan.activeSessionName
+        // The file really open; ScanEngine's name can be an old sidecar after a relaunch.
+        let name: String = store.activeSessionName ?? ""
         if name.isEmpty { return "REC" }
         return "REC · " + name
     }

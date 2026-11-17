@@ -116,14 +116,13 @@ enum PacketPatterns {
            let packet = learned.first(where: { $0.id == id }) {
             return equalsIgnoreCase(classified.simKey, packet.simKey)
         }
-        // System triggers are the common case. Check that short list before building the full
-        // option list, which allocates a pattern for every library packet.
+        // System triggers: a short list, so this lookup stays cheap on every heard packet.
         if let pattern = systemTriggers.first(where: { $0.id == triggerId }) {
             return matches(pattern, classified: classified, rawHex: rawHex)
         }
-        let options = buildTriggerOptions(userPresets: userPresets, learned: learned)
-        guard let pattern = options.first(where: { $0.id == triggerId }) else { return false }
-        return matches(pattern, classified: classified, rawHex: rawHex)
+        // buildTriggerOptions holds only system, preset_t_ and learned_t_ ids, all checked above,
+        // so a trigger that reaches here (its packet was deleted) can never match.
+        return false
     }
 
     /// Every packet a rule answers with, in send order.
