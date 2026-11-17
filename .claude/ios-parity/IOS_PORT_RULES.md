@@ -105,3 +105,11 @@ Your Swift is first compiled in CI, minutes later, by someone else. So:
   the engines and the store — compiles in CI with Xcode 26 (commit 644ff08 and later). Old `RemoteTab.swift` and
   `ISCanBackupLogger.swift` are gone. Any edit now must keep it compiling: smallest possible change, same
   conservative style.
+- Phase D (audit) is done and compiles (e829b5e): seven area audits, each finding checked by a
+  reviewer told to disprove it, 31 confirmed and fixed. Relay protocol additions that need Android
+  v1.3.13 or later: STATUS without "running" is a command reply (ignored); `{"action":"live","index":i}`
+  returns one page `{ok,index,total,packets}` that fits a 512-byte GATT read; `raw_burst {hex,durationMs}`
+  sends one replay step with no wake and no stored timing (older relays refuse it, and iOS then falls back
+  to plain sends). TX settings changed while no Android relay is linked are queued in UserDefaults
+  `MMRelayPendingSettings` and sent on the next link; untouched settings are never pushed.
+  The app target signs with `MagicMaker/MagicMaker.entitlements` (Hotspot Configuration) from 6c3e3da.
