@@ -624,6 +624,7 @@ final class MagicStore: ObservableObject {
     func prepareIfNeeded() {
         if isPrepared { return }
         isPrepared = true
+        keepPreUpgradeCopy()
         load()
         if presets.isEmpty {
             var seeded: [MagicPacket] = []
@@ -1839,6 +1840,29 @@ final class MagicStore: ObservableObject {
         // The preferences on this phone are at least as new as the copy in the file, so at
         // launch the file only fills in what is missing. An import replaces them.
         applyState(state, overwritePrefs: false)
+    }
+
+    /// Once, before this store first reads the library file an earlier iOS build wrote, keep a
+    /// copy of it (`magicmaker_store.before-upgrade.json`, visible in the Files app), so nothing
+    /// the earlier build saved can be lost however it is read here. The marker key starts with a
+    /// capital so it is not exported with the settings.
+    private func keepPreUpgradeCopy() {
+        let marker = "MMStorePreUpgradeCopy"
+        if defaults.bool(forKey: marker) { return }
+        let source = storeURL
+        if fileManager.fileExists(atPath: source.path) {
+            let copy = SessionLogFiles.documentsDirectory().appendingPathComponent("magicmaker_store.before-upgrade.json")
+            if !fileManager.fileExists(atPath: copy.path) {
+                do {
+                    try fileManager.copyItem(at: source, to: copy)
+                } catch {
+                    // Try again next launch rather than carry on without the copy marked done.
+                    CrashLog.record(error, "MagicStore.keepPreUpgradeCopy")
+                    return
+                }
+            }
+        }
+        defaults.set(true, forKey: marker)
     }
 
     private func setAsideUnreadableStore() {
