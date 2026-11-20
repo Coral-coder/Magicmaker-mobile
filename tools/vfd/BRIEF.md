@@ -67,7 +67,8 @@ colours) are shown as text (colour names / short codes) or patterns, never as th
   proportional columns, and the fixed rows of header, telemetry line and tab bar.
 - `header(fb, L, title, back=False, right=None)`, `telemetry(fb, L, text)` (the existing TelemetryBar line,
   e.g. `MM/RF BLE:SCAN | RX:1284 | TX-AUTO:3 | SCAN:ON | LOG:REC | RELAY:LINK`), `tab_bar(fb, L, selected)` for the
-  ten tabs SCAN TX WAND AUTO LINK LOGS MAP DIAG LAB SETTINGS (selected tab inverted), plus content widgets:
+  ten tabs SCAN TX WAND AUTO LINK LOGS MAP DIAG LAB SETTINGS (selected tab inverted; SETTINGS does not fit a
+  tab cell at either width and is shown as SETUP, a deliberate re-expression of the iOS tab label), plus content widgets:
   `section(...)` (collapsible section header with a count), `toggle(...)` (pixel ON/OFF), `options(...)`
   (`[OPTION]` selectors, selected inverted), `stepper(...)` (`[-] value [+]`), `button(...)`, `slider(...)`
   (the app's SettingSlider: title, value text in the label row, −/+ and an LED bar), `field(...)` (boxed text
