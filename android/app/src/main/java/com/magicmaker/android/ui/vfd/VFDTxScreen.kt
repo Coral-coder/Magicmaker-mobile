@@ -58,14 +58,32 @@ object VFDTxScreen : VFDScreen {
         return LivePacketSection.entries.filter { it.name in names }.toSet()
     }
 
+    /** Goes up each time a draw or a tap sees one of the service values below change. */
+    private var epochSeq: Int = 0
+
+    /** The keys of TransmitTab's remember(...) / LaunchedEffect(...): a number that stays the same
+     *  until [value] changes, and is new after every change (also a change back to an earlier
+     *  value). A memo (ctx.cached), so draw stays free of visible state. */
+    private fun epoch(ctx: VFDContext, key: String, value: Any?): Int =
+        ctx.cached(key, value) {
+            epochSeq += 1
+            epochSeq
+        }
+
+    private fun loopEpoch(ctx: VFDContext): Int = epoch(ctx, "tx.epoch.loop", ctx.state.txLoopEnabled)
+
+    private fun selEpoch(ctx: VFDContext): Int =
+        epoch(ctx, "tx.epoch.sel", Pair(ctx.state.txLoopPacketId, ctx.state.storeRevision))
+
+    private fun intervalEpoch(ctx: VFDContext): Int = epoch(ctx, "tx.epoch.interval", ctx.state.txLoopIntervalMs)
+
     /** TransmitTab.loopOn: remember(state.txLoopEnabled) — the switch's own value until the
      *  service's flag changes. */
     private fun loopOn(ctx: VFDContext, ui: VFDUIState): Boolean {
-        val service: Boolean = ctx.state.txLoopEnabled
-        if (ui.has("loopOn") && ui.bool("loopOnBase") == service) {
+        if (ui.has("loopOn") && ui.int("loopEpoch") == loopEpoch(ctx)) {
             return ui.bool("loopOn")
         }
-        return service
+        return ctx.state.txLoopEnabled
     }
 
     /** TransmitTab.selectedTxId: remember(state.txLoopPacketId, storeRev) — the last tapped packet
@@ -74,21 +92,19 @@ object VFDTxScreen : VFDScreen {
     private fun selection(ctx: VFDContext, ui: VFDUIState, library: TxLibrary): Long {
         val loopId: Long = ctx.state.txLoopPacketId
         var wanted: Long = loopId
-        if (ui.has("sel") && ui.string("selLoop") == loopId.toString() &&
-            ui.int("selRev") == ctx.state.storeRevision) {
+        if (ui.has("sel") && ui.int("selEpoch") == selEpoch(ctx)) {
             wanted = ui.string("sel").toLongOrNull() ?: loopId
         }
         return library.validSelection(wanted)
     }
 
-    /** TransmitTab.intervalSec: txLoopIntervalMs / 1000f, or the last committed slider value while
-     *  the service's interval has not changed since (LaunchedEffect(state.txLoopIntervalMs)). */
+    /** TransmitTab.intervalSec: txLoopIntervalMs / 1000f, or the last committed slider value until
+     *  the service's interval changes (LaunchedEffect(state.txLoopIntervalMs)). */
     private fun interval(ctx: VFDContext, ui: VFDUIState): Float {
-        val ms: Long = ctx.state.txLoopIntervalMs
-        if (ui.has("intervalSec") && ui.string("intervalMs") == ms.toString()) {
+        if (ui.has("intervalSec") && ui.int("intervalEpoch") == intervalEpoch(ctx)) {
             return ui.double("intervalSec").toFloat()
         }
-        return ms / 1000f
+        return ctx.state.txLoopIntervalMs / 1000f
     }
 
     private fun library(ctx: VFDContext): TxLibrary =
@@ -451,8 +467,7 @@ object VFDTxScreen : VFDScreen {
     private fun selectPacket(ctx: VFDContext, ui: VFDUIState, packet: MagicPacket) {
         val loopOn: Boolean = loopOn(ctx, ui)
         val sec: Float = interval(ctx, ui)
-        ui.setString("selLoop", ctx.state.txLoopPacketId.toString())
-        ui.setInt("selRev", ctx.state.storeRevision)
+        ui.setInt("selEpoch", selEpoch(ctx))
         ui.setString("sel", packet.id.toString())
         MagicMakerForegroundService.transmit(ctx.context, packet.hex)
         if (loopOn) {
@@ -465,7 +480,7 @@ object VFDTxScreen : VFDScreen {
     private fun setLoop(ctx: VFDContext, ui: VFDUIState, enabled: Boolean) {
         val packetId: Long = selection(ctx, ui, library(ctx))
         val sec: Float = interval(ctx, ui)
-        ui.setBool("loopOnBase", ctx.state.txLoopEnabled)
+        ui.setInt("loopEpoch", loopEpoch(ctx))
         ui.setBool("loopOn", enabled)
         if (enabled && !ctx.state.running) MagicMakerForegroundService.start(ctx.context)
         if (packetId >= 0) {
@@ -478,8 +493,8 @@ object VFDTxScreen : VFDScreen {
     private fun commitInterval(ctx: VFDContext, ui: VFDUIState, sec: Float) {
         val packetId: Long = selection(ctx, ui, library(ctx))
         val loopOn: Boolean = loopOn(ctx, ui)
+        ui.setInt("intervalEpoch", intervalEpoch(ctx))
         ui.setDouble("intervalSec", sec.toDouble())
-        ui.setString("intervalMs", ctx.state.txLoopIntervalMs.toString())
         if (loopOn && packetId >= 0) {
             MagicMakerForegroundService.setTxLoop(ctx.context, enabled = true, packetId = packetId,
                                                   intervalMs = millis(sec))

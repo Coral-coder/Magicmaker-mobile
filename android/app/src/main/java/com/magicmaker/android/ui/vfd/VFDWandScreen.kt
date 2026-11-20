@@ -85,34 +85,56 @@ object VFDWandScreen : VFDScreen {
     private fun library(ctx: VFDContext, newWand: Boolean): List<MagicPacket> =
         if (newWand) ctx.store.newWandPackets() else starlight(ctx).packets
 
+    /** Goes up each time a draw or a tap sees one of the values below change. */
+    private var epochSeq: Int = 0
+
+    /** The last heard-colour sync (see [sync]); a memo, not screen state. */
+    private var lastSync: WandSync? = null
+
+    /** The keys of WandTab's remember(...) / LaunchedEffect(...): a number that stays the same
+     *  until [value] changes, and is new after every change (also a change back to an earlier
+     *  value). A memo (ctx.cached), so draw stays free of visible state. */
+    private fun epoch(ctx: VFDContext, key: String, value: Any?): Int =
+        ctx.cached(key, value) {
+            epochSeq += 1
+            epochSeq
+        }
+
+    private fun loopEpoch(ctx: VFDContext): Int = epoch(ctx, "wand.epoch.loop", ctx.state.starlightLoopEnabled)
+
+    private fun intervalEpoch(ctx: VFDContext): Int =
+        epoch(ctx, "wand.epoch.interval", ctx.state.starlightIntervalMs)
+
+    /** remember(starlightLoopPacketId, learned.size) of the list on screen. */
+    private fun selEpoch(ctx: VFDContext, newWand: Boolean, size: Int): Int =
+        epoch(ctx, "wand.epoch.sel", Triple(ctx.state.starlightLoopPacketId, size, newWand))
+
     /** WandTab.loopOn: remember(starlightLoopEnabled) — the switch's own value until the service's
      *  flag changes. */
     private fun loopOn(ctx: VFDContext, ui: VFDUIState): Boolean {
-        val service: Boolean = ctx.state.starlightLoopEnabled
-        if (ui.has("loopOn") && ui.bool("loopOnBase") == service) {
+        if (ui.has("loopOn") && ui.int("loopEpoch") == loopEpoch(ctx)) {
             return ui.bool("loopOn")
         }
-        return service
+        return ctx.state.starlightLoopEnabled
     }
 
-    /** WandTab.intervalSec: starlightIntervalMs / 1000f, or the last committed slider value while
-     *  the service's interval has not changed since. */
+    /** WandTab.intervalSec: starlightIntervalMs / 1000f, or the last committed slider value until
+     *  the service's interval changes (LaunchedEffect(starlightIntervalMs)). */
     private fun interval(ctx: VFDContext, ui: VFDUIState): Float {
-        val ms: Long = ctx.state.starlightIntervalMs
-        if (ui.has("intervalSec") && ui.string("intervalMs") == ms.toString()) {
+        if (ui.has("intervalSec") && ui.int("intervalEpoch") == intervalEpoch(ctx)) {
             return ui.double("intervalSec").toFloat()
         }
-        return ms / 1000f
+        return ctx.state.starlightIntervalMs / 1000f
     }
 
     /** WandTab.selectedId: remember(starlightLoopPacketId, learned.size) — the last sent colour
-     *  until the loop's colour or the list's size changes, else the loop's colour or the first;
-     *  then the LaunchedEffect(learned) fix-up (the first when the wanted one is gone). */
-    private fun selection(ctx: VFDContext, ui: VFDUIState, library: List<MagicPacket>): Long {
+     *  until the loop's colour or the list changes, else the loop's colour or the first; then the
+     *  LaunchedEffect(learned) fix-up (the first when the wanted one is gone). */
+    private fun selection(ctx: VFDContext, ui: VFDUIState, newWand: Boolean, library: List<MagicPacket>): Long {
         val loopId: Long = ctx.state.starlightLoopPacketId
         val firstId: Long = library.firstOrNull()?.id ?: -1L
         var wanted: Long = if (loopId >= 0) loopId else firstId
-        if (ui.has("sel") && ui.string("selLoop") == loopId.toString() && ui.int("selCount") == library.size) {
+        if (ui.has("sel") && ui.int("selEpoch") == selEpoch(ctx, newWand, library.size)) {
             wanted = ui.string("sel").toLongOrNull() ?: wanted
         }
         if (wanted >= 0 && library.none { it.id == wanted }) {
@@ -121,32 +143,49 @@ object VFDWandScreen : VFDScreen {
         return wanted
     }
 
-    /** StarlightWandView's selectedIndex and glowColorIndex: the colour last picked (a tap on the
-     *  wand or the menu) while the heard colour and the list are the same; otherwise the
-     *  LaunchedEffect(displayColorIndex, colors) sync: the glow follows the heard colour and the
-     *  picker its entry of that colour (selectedIndex restarts at 0 for a list of another size). */
-    private fun picker(ctx: VFDContext, ui: VFDUIState, list: WandList): WandPick {
-        val entries: List<MagicPacket> = list.packets
+    /** StarlightWandView's LaunchedEffect(displayColorIndex, colors), run once each time the heard
+     *  colour, the list or the view (a mode switch makes a new StarlightWandView) changes: the
+     *  glow takes the heard colour and selectedIndex its entry of that colour, or else stays where
+     *  it was (the colour picked by hand since the last sync, or that sync's own entry; 0 for a
+     *  new view or a list of another size, as remember(colors.size) restarts it). */
+    private fun sync(ctx: VFDContext, ui: VFDUIState, list: WandList): WandSync {
         val heardRaw: Int = ctx.state.wandDisplayColorIndex
-        val count: Int = entries.size
-        val picked: Boolean = ui.has("pickIdx")
-        if (picked && ui.int("pickHeard") == heardRaw && ui.int("pickKeys") == list.key &&
-            ui.int("pickCount") == count) {
+        val gen: Int = ui.int("viewGen")
+        return ctx.cached("wand.sync", Triple(heardRaw, list.key, gen)) {
+            val entries: List<MagicPacket> = list.packets
+            val count: Int = entries.size
+            val prev: WandSync? = lastSync
+            var idx = 0
+            if (prev != null && prev.gen == gen && prev.count == count) {
+                idx = if (ui.has("pickIdx") && ui.int("pickEpoch") == prev.epoch) ui.int("pickIdx") else prev.index
+            }
+            val heard: Int = heardRaw and 0x1F
+            val heardIdx: Int = entries.indexOfFirst { MagicClassifier.starlightColorIndex(it.hex) == heard }
+            if (heardIdx >= 0) idx = heardIdx
+            idx = if (count > 0) VFDMath.clamp(idx, 0, count - 1) else 0
+            epochSeq += 1
+            val made = WandSync(epochSeq, gen, count, idx, heard)
+            lastSync = made
+            made
+        }
+    }
+
+    /** StarlightWandView's selectedIndex and glowColorIndex: the colour picked by hand (a tap on
+     *  the wand or the menu) since the last sync, else the sync's. */
+    private fun picker(ctx: VFDContext, ui: VFDUIState, list: WandList): WandPick {
+        val s: WandSync = sync(ctx, ui, list)
+        if (ui.has("pickIdx") && ui.int("pickEpoch") == s.epoch) {
+            val count: Int = list.packets.size
             val idx: Int = if (count > 0) VFDMath.clamp(ui.int("pickIdx"), 0, count - 1) else 0
             return WandPick(idx, ui.int("pickGlow"))
         }
-        val heard: Int = heardRaw and 0x1F
-        var idx: Int = if (picked && ui.int("pickCount") == count) ui.int("pickIdx") else 0
-        val heardIdx: Int = entries.indexOfFirst { MagicClassifier.starlightColorIndex(it.hex) == heard }
-        if (heardIdx >= 0) idx = heardIdx
-        idx = if (count > 0) VFDMath.clamp(idx, 0, count - 1) else 0
-        return WandPick(idx, heard)
+        return WandPick(s.index, s.glow)
     }
 
     private fun state(ctx: VFDContext, ui: VFDUIState): WandState {
         val newWand: Boolean = ui.bool("newWand")
         val list: List<MagicPacket> = library(ctx, newWand)
-        val selected: Long = selection(ctx, ui, list)
+        val selected: Long = selection(ctx, ui, newWand, list)
         val pick: WandPick = picker(ctx, ui, starlight(ctx))
         return WandState(
             newWand = newWand,
@@ -546,8 +585,9 @@ object VFDWandScreen : VFDScreen {
     private fun setMode(ctx: VFDContext, ui: VFDUIState, newWand: Boolean) {
         if (ui.bool("newWand") == newWand) return
         ui.setBool("newWand", newWand)
-        // A new StarlightWandView starts without pulse rings at its first colour; the code list
-        // is a new LazyColumn and starts at the top.
+        // A new StarlightWandView starts without pulse rings and syncs to the heard colour afresh;
+        // the code list is a new LazyColumn and starts at the top.
+        ui.setInt("viewGen", ui.int("viewGen") + 1)
         ui.remove(sentAtKey)
         ui.remove("pickIdx")
         ctx.setScroll(codesRegion, 0)
@@ -594,9 +634,8 @@ object VFDWandScreen : VFDScreen {
     private fun transmitColor(ctx: VFDContext, ui: VFDUIState, packet: MagicPacket) {
         val loopOn: Boolean = loopOn(ctx, ui)
         val sec: Float = interval(ctx, ui)
-        val count: Int = library(ctx, ui.bool("newWand")).size
-        ui.setString("selLoop", ctx.state.starlightLoopPacketId.toString())
-        ui.setInt("selCount", count)
+        val newWand: Boolean = ui.bool("newWand")
+        ui.setInt("selEpoch", selEpoch(ctx, newWand, library(ctx, newWand).size))
         ui.setString("sel", packet.id.toString())
         if (loopOn) {
             MagicMakerForegroundService.setStarlightLoop(ctx.context, enabled = true, packetId = packet.id,
@@ -606,14 +645,16 @@ object VFDWandScreen : VFDScreen {
         }
     }
 
-    private fun currentSelection(ctx: VFDContext, ui: VFDUIState): Long =
-        selection(ctx, ui, library(ctx, ui.bool("newWand")))
+    private fun currentSelection(ctx: VFDContext, ui: VFDUIState): Long {
+        val newWand: Boolean = ui.bool("newWand")
+        return selection(ctx, ui, newWand, library(ctx, newWand))
+    }
 
     /** The LOOP switch: its own value, the service started when needed, the loop on the selection. */
     private fun setLoop(ctx: VFDContext, ui: VFDUIState, enabled: Boolean) {
         val packetId: Long = currentSelection(ctx, ui)
         val sec: Float = interval(ctx, ui)
-        ui.setBool("loopOnBase", ctx.state.starlightLoopEnabled)
+        ui.setInt("loopEpoch", loopEpoch(ctx))
         ui.setBool("loopOn", enabled)
         if (enabled && !ctx.state.running) MagicMakerForegroundService.start(ctx.context)
         if (packetId >= 0) {
@@ -626,8 +667,8 @@ object VFDWandScreen : VFDScreen {
     private fun commitInterval(ctx: VFDContext, ui: VFDUIState, sec: Float) {
         val packetId: Long = currentSelection(ctx, ui)
         val loopOn: Boolean = loopOn(ctx, ui)
+        ui.setInt("intervalEpoch", intervalEpoch(ctx))
         ui.setDouble("intervalSec", sec.toDouble())
-        ui.setString("intervalMs", ctx.state.starlightIntervalMs.toString())
         if (loopOn && packetId >= 0) {
             MagicMakerForegroundService.setStarlightLoop(ctx.context, enabled = true, packetId = packetId,
                                                          intervalMs = millis(sec))
@@ -639,9 +680,7 @@ object VFDWandScreen : VFDScreen {
         val entries: List<MagicPacket> = list.packets
         if (index < 0 || index >= entries.size) return
         ui.setInt("pickGlow", MagicClassifier.starlightColorIndex(entries[index].hex))
-        ui.setInt("pickHeard", ctx.state.wandDisplayColorIndex)
-        ui.setInt("pickKeys", list.key)
-        ui.setInt("pickCount", entries.size)
+        ui.setInt("pickEpoch", sync(ctx, ui, list).epoch)
         ui.setInt("pickIdx", index)
     }
 
@@ -690,7 +729,7 @@ object VFDWandScreen : VFDScreen {
             ctx.store.clearLearnedStarlight()
             ui.remove("sel")
             if (loopOn(ctx, ui)) {
-                ui.setBool("loopOnBase", ctx.state.starlightLoopEnabled)
+                ui.setInt("loopEpoch", loopEpoch(ctx))
                 ui.setBool("loopOn", false)
                 MagicMakerForegroundService.setStarlightLoop(ctx.context, enabled = false)
             }
@@ -705,6 +744,10 @@ private class WandList(val packets: List<MagicPacket>, val key: Int)
 
 /** StarlightWandView's selectedIndex and glowColorIndex. */
 private class WandPick(val index: Int, val glow: Int)
+
+/** One heard-colour sync: its epoch, the view generation and list size it ran on, and the entry
+ *  and glow it set. */
+private class WandSync(val epoch: Int, val gen: Int, val count: Int, val index: Int, val glow: Int)
 
 /** What one draw of the WAND tab reads. */
 private class WandState(

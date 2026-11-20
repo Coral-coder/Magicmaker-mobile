@@ -107,10 +107,16 @@ object VFDDiagScreen : VFDScreen {
         rows.add(VFDDiagStatus("TX-AUTO", s.autoResponsesSent.toString(), VFDInk.text, middle = false))
         rows.add(relayRow(s))
         val status: String = s.status.ifBlank { "Idle" }
-        rows.add(VFDDiagStatus("SERVICE", status.uppercase(), if (btOff) VFDInk.alarm else VFDInk.text,
+        rows.add(VFDDiagStatus("SERVICE", status.uppercase(), if (isWarningStatus(status)) VFDInk.alarm else VFDInk.text,
                                middle = false))
         return rows
     }
+
+    /** The service statuses that are warnings (the iPhone's not-linked / send-failed TX statuses):
+     *  Bluetooth off or missing, and the scan / relay errors and failures the service reports. */
+    private fun isWarningStatus(status: String): Boolean =
+        status == bluetoothOffStatus || status == "Bluetooth unavailable" ||
+            status.contains("error", ignoreCase = true) || status.contains("failed", ignoreCase = true)
 
     /** onOffColor: cyan (highlight) when on, dim when off. */
     private fun onOffColor(on: Boolean): Int = if (on) VFDInk.highlight else VFDInk.dim

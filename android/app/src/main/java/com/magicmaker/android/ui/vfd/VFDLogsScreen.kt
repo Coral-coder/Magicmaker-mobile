@@ -170,7 +170,7 @@ object VFDLogsScreen : VFDScreen {
         val fb: VFDFrameBuffer = ctx.fb
         val L: VFDLayout = ctx.L
         val s: ServiceState.UiState = ctx.state
-        val warn: Boolean = s.status == bluetoothOffStatus
+        val warn: Boolean = isWarningStatus(s.status)
         val color: Int = if (warn) VFDInk.alarm else VFDInk.dim
         var y: Int = VFDW.statusLine(fb, L, c, top, w, "STATUS: " + s.status, color = color)
         if (ctx.cached("logs.cloud", 0) { ctx.store.cloudSyncConfigured() }) {
@@ -181,8 +181,11 @@ object VFDLogsScreen : VFDScreen {
         return y + 7
     }
 
-    /** The service status while Bluetooth is off (a warning, amber on the standard screens). */
-    private const val bluetoothOffStatus: String = "Turn on Bluetooth"
+    /** The service statuses that are warnings (the iPhone's not-linked / send-failed): Bluetooth
+     *  off or missing, and the scan / relay errors and failures the service reports. */
+    private fun isWarningStatus(status: String): Boolean =
+        status == "Turn on Bluetooth" || status == "Bluetooth unavailable" ||
+            status.contains("error", ignoreCase = true) || status.contains("failed", ignoreCase = true)
 
     /** LogsTab's cloud row (Android only): CLOUD: <status> with SYNC NOW (cyan text button). */
     private fun cloudRow(ctx: VFDContext, c: Int, y: Int, w: Int): Int {

@@ -26,8 +26,9 @@ import kotlin.math.sin
  * as MapTab centres the map, about 1000 m across, with a reseau cross every 100 m, the counts and
  * a 100 M scale bar in the top border and a legend in the bottom border. Every pin is selectable:
  * the info panel shows what the osmdroid marker's balloon shows (× or the bare map closes it).
- * The street map itself (OpenStreetMap tiles, pan, zoom) cannot be drawn on the grid: OPEN STREET
- * MAP under the plot, or HOLD anywhere on it, shows the standard MAP screen in a sheet.
+ * The street map itself (OpenStreetMap tiles, pan, zoom) cannot be drawn on the grid: HOLD anywhere
+ * on the plot opens a menu with OPEN STREET MAP, which shows the standard MAP screen in a sheet
+ * (the plot runs to the bottom of the content, as map.py and the iPhone port lay it out).
  */
 object VFDMapScreen : VFDScreen {
     override val title: String = "CAPTURE MAP"
@@ -96,11 +97,7 @@ object VFDMapScreen : VFDScreen {
         } else if (load.data.captures.isEmpty()) {
             centredNote(fb, L, c, y, w, emptyText)
         } else {
-            val by: Int = L.contentBottom - VFDW.ctrlH
-            plot(ctx, load, mode, c, y + 1, w, bottom = by - 3)
-            VFDW.button(fb, L, c, by, w, streetMapLabel, action = {
-                ctx.openStandard("map")
-            })
+            plot(ctx, load, mode, c, y + 1, w, bottom = L.contentBottom)
         }
         fb.popClip()
         return null
@@ -115,10 +112,11 @@ object VFDMapScreen : VFDScreen {
         ui.setOptionalString(kSelection, null)
     }
 
-    /** Select a pin (null: none) of the current load. */
-    private fun select(ctx: VFDContext, tag: String?) {
+    /** Select a pin (null: none) of load [generation] (a capture index belongs to the load it was
+     *  drawn from; a selection made on an earlier load shows nothing). */
+    private fun select(ctx: VFDContext, tag: String?, generation: Int = VFDMapLoader.generation) {
         val ui: VFDUIState = ctx.ui
-        ui.setInt(kSelectionLoad, VFDMapLoader.generation)
+        ui.setInt(kSelectionLoad, generation)
         ui.setOptionalString(kSelection, tag)
     }
 
@@ -558,6 +556,7 @@ object VFDMapScreen : VFDScreen {
         val xs = IntArray(nx + 1) { k -> x0 + VFDMath.floorDiv(w * k, nx) }
         val ys = IntArray(ny + 1) { k -> y0 + VFDMath.floorDiv(h * k, ny) }
         val picked = IntArray(nx * ny) { -1 }
+        val generation: Int = VFDMapLoader.generation
         val offsets: Array<IntArray> = arrayOf(intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(0, 1), intArrayOf(1, 1))
         for ((i, p) in cells.withIndex()) {
             for (d in offsets) {
@@ -577,7 +576,7 @@ object VFDMapScreen : VFDScreen {
             val bx: Int = key % nx
             val by: Int = key / nx
             fb.tap(xs[bx], ys[by], xs[bx + 1] - xs[bx], ys[by + 1] - ys[by], name = "marker:c|$index",
-                   action = { select(ctx, captureTag + index) }, long = long)
+                   action = { select(ctx, captureTag + index, generation) }, long = long)
         }
     }
 

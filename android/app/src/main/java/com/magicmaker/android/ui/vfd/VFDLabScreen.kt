@@ -1054,16 +1054,17 @@ object VFDLabScreen : VFDScreen {
         var x: Int = tx
         for (item in items) {
             val need: Int = SWATCH + 3 + VFDText.width(item.name)
+            // OFF (no swatch colour) is dim, a colour name is text, cut or not.
+            val color: Int = if (item.rgb == null) VFDInk.dim else VFDInk.text
             if (x + need > limit) {
                 val short: String = item.name.take(1) + VFDText.ellipsis
                 if (x + SWATCH + 3 + VFDText.width(short) <= limit) {
                     swatchLED(fb, x, r, item.rgb)
-                    fb.textFit(x + SWATCH + 3, r, item.name, limit - x - SWATCH - 3, VFDSize.small, VFDInk.text)
+                    fb.textFit(x + SWATCH + 3, r, item.name, limit - x - SWATCH - 3, VFDSize.small, color)
                 }
                 break
             }
             swatchLED(fb, x, r, item.rgb)
-            val color: Int = if (item.rgb == null) VFDInk.dim else VFDInk.text
             x = fb.text(x + SWATCH + 3, r, item.name, VFDSize.small, color) + 6
         }
     }
@@ -1093,13 +1094,14 @@ object VFDLabScreen : VFDScreen {
         val y0: Int = top + 4
         var off: Int = maxOf(0, ctx.scroll(Keys.region))
         val probe: VFDFrameBuffer = scratchBuffer(fb)
-        var end: Int = probeBody(ctx, probe, fb, L, m, c, y0, w, off)
+        val end: Int = probeBody(ctx, probe, fb, L, m, c, y0, w, off)
         val total: Int = end - top
         val limit: Int = maxOf(0, total - view)
         if (off > limit) {
+            // The body shrank under the offset: probe again at the end (the end row is the same).
             off = limit
             scratchBuffer(fb)
-            end = probeBody(ctx, probe, fb, L, m, c, y0, w, off)
+            probeBody(ctx, probe, fb, L, m, c, y0, w, off)
         }
         val win: VFDWindow = snapWindow(probe, top, top + view)
         fb.pushClip(0, top, fb.cols, view, dy = -off)
