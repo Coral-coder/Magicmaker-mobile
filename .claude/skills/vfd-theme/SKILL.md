@@ -104,3 +104,13 @@ before building the app, so we don't burn CI builds on visual tweaks. Render the
 amber, plus one other base colour, to show the palette swap works. Lay screens out with
 proportional column positions so they work at both 241-cell (3x) and ~207-cell (2x) widths. Put
 units in the label row ("SUCTION PSI") rather than after values, so columns never collide.
+
+## MagicMaker overrides (user decisions)
+
+- **Real colours for colour content.** Band LEDs, the wand glow, pattern/effect colours and colour
+  swatches are drawn in their true RGB (whole cells, no alpha, no blur); the colour name text stays
+  beside the swatch. Text, chrome and controls keep the 5-ink palette.
+- **Animation.** The band preview, the SCAN "LAST LIGHTS" strip and the wand animate exactly like the
+  standard theme (redraw at 30 fps while visible).
+- **Android too.** The theme ships on iOS first, then Android with the same design.
+- Port details: `tools/vfd/PORT_BRIEF.md`.
