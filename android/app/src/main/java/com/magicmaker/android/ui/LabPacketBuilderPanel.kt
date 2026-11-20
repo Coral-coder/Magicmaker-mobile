@@ -829,7 +829,7 @@ private fun TypeChips(
 }
 
 /** E905 zone-mask options. 3 and 4 are agreed by both public decoders; the rest disagree. */
-private val LED_MASKS: List<Pair<Int, String>> = listOf(
+internal val LED_MASKS: List<Pair<Int, String>> = listOf(
     7 to "All LEDs",
     3 to "Bottom-left (agreed)",
     4 to "Top-left (agreed)",
