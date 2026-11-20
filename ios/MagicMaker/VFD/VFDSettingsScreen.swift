@@ -340,10 +340,12 @@ extension VFDSettingsScreen {
         let y: Int = VFDW.slider(fb, L, c, top, w, title, valueText, frac, name: name, canDec: current > lo,
                                  canInc: current < hi,
                                  onDec: {
+                                     ui.setBool(dragKey, false)
                                      let next: Double = VFDSettingsScreen.snap(current - stepD, lo, hi, stepD)
                                      commit(VFDSettingsScreen.milliseconds(next))
                                  },
                                  onInc: {
+                                     ui.setBool(dragKey, false)
                                      let next: Double = VFDSettingsScreen.snap(current + stepD, lo, hi, stepD)
                                      commit(VFDSettingsScreen.milliseconds(next))
                                  })

@@ -37,6 +37,10 @@ final class VFDSettings: ObservableObject {
         didSet {
             if theme != oldValue {
                 UserDefaults.standard.set(theme.rawValue, forKey: VFDSettings.themeKey)
+                if theme == .vfd {
+                    // Switching to VFD mid-run: a crash in the next few seconds also falls back.
+                    VFDSettings.markLaunchPending()
+                }
             }
         }
     }
@@ -64,6 +68,41 @@ final class VFDSettings: ObservableObject {
     }
 
     init() {}
+
+    // MARK: Launch guard
+
+    /// Set while a launch in the VFD theme has not yet run for `launchGuardSeconds`.
+    static let launchGuardKey: String = "MMVFDLaunchPending"
+    static let launchGuardSeconds: Double = 6
+
+    /// Called once at launch, before the first screen. If the last launch in the VFD theme ended
+    /// before it had run for a few seconds (a crash while drawing would repeat on every launch,
+    /// because the theme is saved), start in the standard theme instead; the VFD theme can be
+    /// chosen again in Settings.
+    @discardableResult
+    func armLaunchGuard() -> Bool {
+        let defaults: UserDefaults = UserDefaults.standard
+        let key: String = VFDSettings.launchGuardKey
+        if theme == .vfd && defaults.bool(forKey: key) {
+            defaults.set(false, forKey: key)
+            theme = .standard
+            return true
+        }
+        guard theme == .vfd else {
+            defaults.set(false, forKey: key)
+            return false
+        }
+        VFDSettings.markLaunchPending()
+        return false
+    }
+
+    /// Marks the VFD theme as not yet settled and clears the mark after `launchGuardSeconds`.
+    static func markLaunchPending() {
+        UserDefaults.standard.set(true, forKey: VFDSettings.launchGuardKey)
+        DispatchQueue.main.asyncAfter(deadline: .now() + VFDSettings.launchGuardSeconds) {
+            UserDefaults.standard.set(false, forKey: VFDSettings.launchGuardKey)
+        }
+    }
 
     // MARK: Reading
 

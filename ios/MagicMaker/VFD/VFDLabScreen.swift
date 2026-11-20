@@ -1976,10 +1976,12 @@ extension VFDLabScreen {
         let end: Int = VFDW.slider(fb, L, c, top, w, "INTERVAL MS", valueText, frac, hint: VFDLabCopy.intervalHint,
                                    name: "slider:INTERVAL", canDec: value > low, canInc: value < high,
                                    onDec: {
+                                       ui.setBool(VFDLabKeys.intervalDrag, false)
                                        let next: Double = VFDLabScreen.snap(value - step, low, high, step)
                                        VFDLabScreen.commitInterval(ctx, next)
                                    },
                                    onInc: {
+                                       ui.setBool(VFDLabKeys.intervalDrag, false)
                                        let next: Double = VFDLabScreen.snap(value + step, low, high, step)
                                        VFDLabScreen.commitInterval(ctx, next)
                                    })
@@ -2026,12 +2028,15 @@ extension VFDLabScreen {
                                       _ c: Int, _ r: Int, _ w: Int) -> Int {
         let binX: Int = c + w - VFDLabGeo.trashW - 4
         let y: Int = r + 3
+        let end: Int = y + VFDW.line + 7 + 3
+        if !rowVisible(fb, r, end + 1 - r) {
+            return end + 1
+        }
         let limit: Int = binX - 6 - c - 2
         let upperLabel: String = VFDW.upper(preset.label)
         fb.textFit(c + 2, y, upperLabel, limit, .small, VFDInk.text)
         fb.textFit(c + 2, y + VFDW.line, preset.hex, limit, .small, VFDInk.highlight)
         trash(fb, binX, y + 5, VFDInk.dim)
-        let end: Int = y + VFDW.line + 7 + 3
         fb.hline(c, end, w, VFDInk.dim, step: 2)
         let item: MagicPacket = preset
         VFDW.tap(fb, c, r, binX - 4 - c, end - r, "preset:" + upperLabel,
@@ -2091,35 +2096,93 @@ extension VFDLabScreen {
         return y + VFDW.gap
     }
 
-    /// LabThemeRow: a dim box; the title (text, uppercased) with the theme's colours as
-    /// true-colour swatches right-aligned beside it; the transmit hex (highlight, middle-cut). Tap
-    /// sends it, HOLD loads it in the Lab.
+    /// LabThemeRow: a dim box; the title (text, uppercased) with the theme's colours as their
+    /// #RRGGBB codes (dim), each after a 5 x 5 true-colour swatch, right-aligned beside it, or on a
+    /// line of their own under the hex when both do not fit; the transmit hex (highlight,
+    /// middle-cut). Tap sends it, HOLD loads it in the Lab. A row outside the clip is only measured.
     fileprivate static func themeRow(_ ctx: VFDContext, _ fb: VFDFrameBuffer, _ theme: MdeHawkeyeTheme,
                                      _ c: Int, _ r: Int, _ w: Int) -> Int {
         let ic: Int = c + 4
         let iw: Int = w - 8
-        let sw: Int = VFDLabGeo.swatch
-        var y: Int = r + 4
         let codes: [String] = Array(theme.colors.prefix(5))
-        let n: Int = codes.count
-        let swatchesW: Int = n > 0 ? n * (sw + 2) - 2 : 0
-        var sx: Int = ic + iw - swatchesW
-        for code in codes {
-            VFDW.led(fb, sx, y, 0, size: sw, fill: themeRGB(code))
-            sx += sw + 2
-        }
-        let titleW: Int = n > 0 ? iw - swatchesW - 8 : iw
+        let codesW: Int = swatchCodesWidth(codes)
         let themeTitle: String = theme.title
-        fb.textFit(ic, y, VFDW.upper(themeTitle), titleW, .small, VFDInk.text)
+        let t: String = VFDW.upper(themeTitle)
+        let beside: Bool = VFDText.width(t) + 8 + codesW <= iw
+        let rows: Int = beside ? 1 : 2
+        let h: Int = 4 + rows * VFDW.line + 7 + 4
+        if !rowVisible(fb, r, h) {
+            return r + h + 2
+        }
+        var y: Int = r + 4
+        if beside {
+            drawSwatchCodes(fb, codes, ic + iw - codesW, y, ic + iw)
+        }
+        fb.textFit(ic, y, t, iw, .small, VFDInk.text)
         y += VFDW.line
         let hex: String = theme.transmitHex
         fb.text(ic, y, VFDLabText.fitMiddle(hex, iw), .small, VFDInk.highlight)
-        let h: Int = y + 7 + 4 - r
+        if !beside {
+            y += VFDW.line
+            drawSwatchCodes(fb, codes, ic, y, ic + iw)
+        }
         fb.box(c, r, w, h, VFDInk.dim)
-        VFDW.tap(fb, c, r, w, h, "theme:" + VFDW.upper(themeTitle),
+        VFDW.tap(fb, c, r, w, h, "theme:" + t,
                  action: { ctx.tx.transmit(hex: hex, label: themeTitle) },
                  long: { ctx.vm.loadInLab(hex: hex, label: themeTitle) })
         return r + h + 2
+    }
+
+    /// Width of the swatch codes: per colour a 5 x 5 swatch, 2 cells, "#RRGGBB"; 7 cells apart
+    /// (the spacing of the codes joined by a space).
+    fileprivate static func swatchCodesWidth(_ codes: [String]) -> Int {
+        var total: Int = 0
+        var i: Int = 0
+        for code in codes {
+            if i > 0 {
+                total += 7
+            }
+            total += 7 + VFDText.width(code)
+            i += 1
+        }
+        return total
+    }
+
+    /// The swatch codes from column x0 while they fit before `limit`; the first one that does not
+    /// is cut with "…" (when its swatch and a character still fit), then the rest are dropped.
+    fileprivate static func drawSwatchCodes(_ fb: VFDFrameBuffer, _ codes: [String], _ x0: Int, _ y: Int,
+                                            _ limit: Int) {
+        var x: Int = x0
+        var i: Int = 0
+        for code in codes {
+            if i > 0 {
+                x += 7
+            }
+            let textW: Int = VFDText.width(code)
+            let room: Int = limit - x - 7
+            if textW <= room {
+                fb.fill(x, y + 1, 5, 5, fb.rgb(themeRGB(code)))
+                fb.text(x + 7, y, code, .small, VFDInk.dim)
+                x += 7 + textW
+                i += 1
+                continue
+            }
+            let short: String = String(code.prefix(1)) + VFDText.ellipsis
+            if VFDText.width(short) <= room {
+                fb.fill(x, y + 1, 5, 5, fb.rgb(themeRGB(code)))
+                fb.textFit(x + 7, y, code, room, .small, VFDInk.dim)
+            }
+            break
+        }
+    }
+
+    /// Whether rows [r, r + h) (drawing rows) reach the current clip; rows outside it are skipped
+    /// cheaply (they would draw nothing).
+    fileprivate static func rowVisible(_ fb: VFDFrameBuffer, _ r: Int, _ h: Int) -> Bool {
+        let clip: (c: Int, r: Int, w: Int, h: Int) = fb.clipRect
+        let top: Int = r + fb.originY
+        let bottom: Int = top + h
+        return bottom > clip.r && top < clip.r + clip.h
     }
 
     /// "#RRGGBB" as a true colour; black when the text is not a colour (labThemeSwatch).
