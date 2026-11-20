@@ -31,6 +31,14 @@ struct VFDConfirmRequest {
 struct VFDMenuRequest {
     let title: String
     let items: [VFDMenuItem]
+    /// The current item: drawn as the selected row and scrolled into view on open.
+    let selected: Int?
+}
+
+/// A prompt or confirm waiting for the alert on screen to go away.
+private enum VFDQueuedAlert {
+    case prompt(VFDPromptRequest, String)
+    case confirm(VFDConfirmRequest)
 }
 
 struct VFDSheetItem: Identifiable {
@@ -66,12 +74,33 @@ struct VFDRootView: View {
     @ObservedObject private var settings: VFDSettings = VFDSettings.shared
     @StateObject private var renderer: VFDRenderer = VFDRenderer()
     @Environment(\.displayScale) private var displayScale: CGFloat
+    @Environment(\.scenePhase) private var scenePhase: ScenePhase
 
     init(tab: Binding<MainTab>) {
         self._tab = tab
     }
 
+    /// The tab's `onShow` runs on first appearance, on every tab change, on the return from the
+    /// background and when a VFD sheet closes.
     var body: some View {
+        overlays
+            .onAppear {
+                renderer.tabShown(tab)
+            }
+            .onChange(of: tab) { _, next in
+                renderer.tabChanged()
+                renderer.tabShown(next)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                renderer.scenePhaseChanged(phase, tab: tab)
+            }
+            .onChange(of: store.revision) { _, _ in
+                storeRevisionChanged()
+            }
+    }
+
+    /// The grid with the confirm alert and the VFD's sheet (the prompt alert sits on the grid).
+    private var overlays: some View {
         grid
             .alert(confirmTitle, isPresented: confirmPresented, presenting: renderer.confirmRequest) { req in
                 Button(req.confirmLabel, role: req.role) {
@@ -81,12 +110,24 @@ struct VFDRootView: View {
             } message: { req in
                 Text(req.message)
             }
-            .sheet(item: $renderer.sheetItem) { item in
+            .sheet(item: $renderer.sheetItem, onDismiss: {
+                sheetDismissed()
+            }) { item in
                 sheetContent(item)
             }
-            .onChange(of: tab) { _, _ in
-                renderer.tabChanged()
-            }
+    }
+
+    private func sheetDismissed() {
+        renderer.tabShown(tab)
+    }
+
+    /// WandScreen's onChange(of: store.revision): a library import can replace the new-wand names
+    /// and the quick button, so re-read them while WAND is the visible tab.
+    private func storeRevisionChanged() {
+        if tab != .wand { return }
+        vm.reloadNewWandNamesIfChanged()
+        vm.reloadWandQuickIfChanged()
+        renderer.requestRedraw()
     }
 
     /// The gesture sits on this stable full-screen view, not on the Canvas, so a clock change
@@ -194,7 +235,7 @@ struct VFDRootView: View {
         return Binding(
             get: { renderer.promptRequest != nil },
             set: { shown in
-                if !shown { renderer.promptRequest = nil }
+                if !shown { renderer.promptDismissed() }
             }
         )
     }
@@ -208,7 +249,7 @@ struct VFDRootView: View {
         return Binding(
             get: { renderer.confirmRequest != nil },
             set: { shown in
-                if !shown { renderer.confirmRequest = nil }
+                if !shown { renderer.confirmDismissed() }
             }
         )
     }
@@ -319,6 +360,12 @@ final class VFDRenderer: ObservableObject {
     static let holdSeconds: Double = 0.5
     /// Scroll region id of the open menu's list.
     static let menuRegion: String = "vfd.menu"
+    /// A queued alert shows no sooner than this many seconds after the last one closed, and only
+    /// once no alert controller is on screen any more (checked every alertPoll seconds, for at
+    /// most alertMaxWait seconds).
+    static let alertSettle: Double = 0.3
+    static let alertPoll: Double = 0.05
+    static let alertMaxWait: Double = 2.0
 
     private static let black: UInt32 = 0xFF00_0000
 
@@ -357,6 +404,21 @@ final class VFDRenderer: ObservableObject {
     private var menu: VFDMenuRequest?
     private var menuScroll: Int = 0
     private var menuMax: Int = 0
+    /// Row to scroll into view when the open menu is first drawn.
+    private var menuReveal: Int?
+
+    // alerts
+    /// Prompts and confirms asked for while an alert was up or still going away, in order.
+    private var alertQueue: [VFDQueuedAlert] = []
+    /// An alert was closed and may still be on screen (animating away).
+    private var alertClosing: Bool = false
+    private var alertClosedAt: Double = 0
+    private var alertCheckScheduled: Bool = false
+
+    // tab visibility (VFDScreen.onShow)
+    private var pendingShow: MainTab?
+    private var showScheduled: Bool = false
+    private var wentBackground: Bool = false
 
     // touches
     private var touch: VFDTouch?
@@ -416,40 +478,142 @@ final class VFDRenderer: ObservableObject {
 
     var menuOpen: Bool { return menu != nil }
 
+    /// An alert is up, or one closed and may still be animating away: new ones wait in the queue.
+    private var alertBusy: Bool {
+        return promptRequest != nil || confirmRequest != nil || alertClosing
+    }
+
     func presentPrompt(_ request: VFDPromptRequest, text: String) {
+        if alertBusy {
+            alertQueue.append(VFDQueuedAlert.prompt(request, text))
+            return
+        }
+        showPrompt(request, text: text)
+    }
+
+    private func showPrompt(_ request: VFDPromptRequest, text: String) {
         menu = nil
         promptText = text
         promptRequest = request
     }
 
+    /// OK on the prompt: the alert counts as closing before `onDone` runs, so a prompt or confirm
+    /// asked for there is queued until this one has gone.
     func finishPrompt(_ request: VFDPromptRequest) {
         let text: String = promptText
         promptRequest = nil
+        alertWillClose()
         request.onDone(text)
         requestRedraw()
     }
 
+    /// The prompt alert was dismissed (CANCEL, or SwiftUI after OK).
+    func promptDismissed() {
+        if promptRequest != nil {
+            promptRequest = nil
+        }
+        alertWillClose()
+    }
+
     func presentConfirm(_ request: VFDConfirmRequest) {
+        if alertBusy {
+            alertQueue.append(VFDQueuedAlert.confirm(request))
+            return
+        }
+        showConfirm(request)
+    }
+
+    private func showConfirm(_ request: VFDConfirmRequest) {
         menu = nil
         confirmRequest = request
     }
 
     func finishConfirm(_ request: VFDConfirmRequest) {
         confirmRequest = nil
+        alertWillClose()
         request.action()
         requestRedraw()
+    }
+
+    /// The confirm alert was dismissed (CANCEL, or SwiftUI after the confirm button).
+    func confirmDismissed() {
+        if confirmRequest != nil {
+            confirmRequest = nil
+        }
+        alertWillClose()
+    }
+
+    /// An alert is going away; the next queued one shows once it has fully gone.
+    private func alertWillClose() {
+        if !alertClosing {
+            alertClosing = true
+            alertClosedAt = Date().timeIntervalSinceReferenceDate
+        }
+        scheduleAlertCheck(after: VFDRenderer.alertSettle)
+    }
+
+    private func scheduleAlertCheck(after delay: Double) {
+        if alertCheckScheduled { return }
+        alertCheckScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self else { return }
+            self.alertCheckScheduled = false
+            self.checkAlertGone()
+        }
+    }
+
+    /// Presenting while the last alert is still on screen would be dropped by SwiftUI, so wait
+    /// until no alert controller is presented (or alertMaxWait has passed), then show the next.
+    private func checkAlertGone() {
+        if !alertClosing { return }
+        let waited: Double = Date().timeIntervalSinceReferenceDate - alertClosedAt
+        if waited < VFDRenderer.alertMaxWait && VFDRenderer.alertOnScreen() {
+            scheduleAlertCheck(after: VFDRenderer.alertPoll)
+            return
+        }
+        alertClosing = false
+        if promptRequest != nil || confirmRequest != nil { return }
+        if alertQueue.isEmpty { return }
+        let next: VFDQueuedAlert = alertQueue.removeFirst()
+        switch next {
+        case .prompt(let request, let text):
+            showPrompt(request, text: text)
+        case .confirm(let request):
+            showConfirm(request)
+        }
+        requestRedraw()
+    }
+
+    /// Whether any window still presents an alert controller (SwiftUI alerts are presented as
+    /// one, and stay in the chain until their dismissal animation has finished).
+    private static func alertOnScreen() -> Bool {
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                var next: UIViewController? = window.rootViewController
+                var depth: Int = 0
+                while let vc = next, depth < 32 {
+                    if vc is UIAlertController { return true }
+                    next = vc.presentedViewController
+                    depth += 1
+                }
+            }
+        }
+        return false
     }
 
     func presentMenu(_ request: VFDMenuRequest) {
         menu = request
         menuScroll = 0
         menuMax = 0
+        menuReveal = request.selected
         fling = nil
         requestRedraw()
     }
 
     func closeMenu() {
         menu = nil
+        menuReveal = nil
         requestRedraw()
     }
 
@@ -485,6 +649,51 @@ final class VFDRenderer: ObservableObject {
         requestRedraw()
     }
 
+    // MARK: tab visibility
+
+    /// `tab` became visible: run its screen's `onShow` (never inside drawing), then redraw. Before
+    /// the first frame there is no context yet; it then runs right after that frame.
+    func tabShown(_ tab: MainTab) {
+        pendingShow = tab
+        runPendingShow()
+    }
+
+    /// The return from the background (active after background) shows the tab again; going
+    /// inactive and back (Control Center, a system alert) does not.
+    func scenePhaseChanged(_ phase: ScenePhase, tab: MainTab) {
+        if phase == .background {
+            wentBackground = true
+        } else if phase == .active && wentBackground {
+            wentBackground = false
+            tabShown(tab)
+        }
+    }
+
+    private func runPendingShow() {
+        guard let shown = pendingShow, let ctx = context else { return }
+        pendingShow = nil
+        ctx.beginShow(tab: shown.rawValue)
+        if shown == .wand {
+            // WandScreen.screenAppeared: an import made on another tab may have replaced these.
+            ctx.vm.reloadNewWandNamesIfChanged()
+            ctx.vm.reloadWandQuickIfChanged()
+        }
+        let screen: any VFDScreen.Type = VFDRenderer.screen(for: shown)
+        screen.onShow(ctx)
+        requestRedraw()
+    }
+
+    /// A show that came before the first frame runs on the next run loop turn after it.
+    private func scheduleShow() {
+        if showScheduled { return }
+        showScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.showScheduled = false
+            self.runPendingShow()
+        }
+    }
+
     // MARK: frame
 
     /// Compose a frame for the current state and paint it.
@@ -494,10 +703,14 @@ final class VFDRenderer: ObservableObject {
         guard let fb = self.fb, let probe = self.probe, let L = self.layout else { return }
         self.inputs = inputs
         let ctx: VFDContext = contextFor(inputs, fb: fb, L: L)
+        ctx.setDisplay(scale: Double(self.scale), pitch: self.pitch)
         let base: VFDBase = inputs.settings.base
         compose(ctx, fb: fb, probe: probe, L: L, inputs: inputs, base: base)
         paint(&gc, fb: fb, base: base)
         noteClock(fb.wantsAnimation || fling != nil)
+        if pendingShow != nil {
+            scheduleShow()
+        }
     }
 
     private func contextFor(_ inputs: VFDFrameInputs, fb: VFDFrameBuffer, L: VFDLayout) -> VFDContext {

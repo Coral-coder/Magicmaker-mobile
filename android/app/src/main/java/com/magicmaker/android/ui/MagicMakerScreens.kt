@@ -473,7 +473,7 @@ private fun ConfirmDeleteDialog(
     )
 }
 
-private fun liveSubtitle(pkt: ServiceState.LivePacket, includeNote: Boolean): String {
+internal fun liveSubtitle(pkt: ServiceState.LivePacket, includeNote: Boolean): String {
     val sb = StringBuilder("RSSI ${pkt.rssi}")
     if (pkt.address.isNotEmpty()) sb.append(" · ${pkt.address}")
     if (pkt.isBand) sb.append(" · BAND")
@@ -1680,10 +1680,10 @@ internal fun WandTab(
 private const val NEW_WAND_SIGNATURE = "CF0B00C020224EAC7807866"
 
 // Default for the programmable wand quick button: the New Wand "Off" code (tail 6F1D).
-private const val DEFAULT_WAND_QUICK_HEX = "8301CF0B00C020224EAC7807866F1D"
-private fun isNewWandHex(hex: String) = hex.uppercase().contains(NEW_WAND_SIGNATURE)
+internal const val DEFAULT_WAND_QUICK_HEX = "8301CF0B00C020224EAC7807866F1D"
+internal fun isNewWandHex(hex: String) = hex.uppercase().contains(NEW_WAND_SIGNATURE)
 
-private fun loadNewWandNames(prefs: SharedPreferences): Map<String, String> {
+internal fun loadNewWandNames(prefs: SharedPreferences): Map<String, String> {
     val raw = prefs.getString("newwand_names", null) ?: return emptyMap()
     return runCatching {
         val o = JSONObject(raw)
@@ -1691,7 +1691,7 @@ private fun loadNewWandNames(prefs: SharedPreferences): Map<String, String> {
     }.getOrDefault(emptyMap())
 }
 
-private fun saveNewWandName(prefs: SharedPreferences, hex: String, name: String): Map<String, String> {
+internal fun saveNewWandName(prefs: SharedPreferences, hex: String, name: String): Map<String, String> {
     val current = loadNewWandNames(prefs).toMutableMap()
     val key = hex.uppercase()
     val trimmed = name.trim()

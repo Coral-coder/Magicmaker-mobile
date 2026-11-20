@@ -33,6 +33,11 @@ protocol VFDScreen {
     static func headerRightColor(_ ctx: VFDContext) -> UInt8
     /// A "< BACK" action in the header (default none).
     static func back(_ ctx: VFDContext) -> (() -> Void)?
+    /// The tab became visible: the VFD view's first appearance, every tab change, the app's return
+    /// from the background, a sheet opened by the VFD closing. Runs on the main actor outside
+    /// `draw`, so it may change state (reload what the standard screen reloads in onAppear); a
+    /// redraw follows. It can run more than once per visit, so keep it idempotent (default none).
+    static func onShow(_ ctx: VFDContext)
 }
 
 extension VFDScreen {
@@ -43,22 +48,30 @@ extension VFDScreen {
     static func back(_ ctx: VFDContext) -> (() -> Void)? {
         return nil
     }
+
+    static func onShow(_ ctx: VFDContext) {
+    }
 }
 
 // MARK: - Overlay requests
 
 /// One row of `VFDContext.menu`: the label (uppercased when drawn), destructive rows in alarm
-/// ink, disabled rows dim with no tap.
+/// ink, disabled rows dim with no tap. `rgb`: a colour row (a wand colour, a palette entry): a
+/// 5 x 5 swatch of that true colour starts the row, then a blank glyph and the label,
+/// left-aligned (a trailing " ✓" survives when the label is cut).
 struct VFDMenuItem {
     let label: String
     let destructive: Bool
     let enabled: Bool
+    let rgb: VFDRGB?
     let action: () -> Void
 
-    init(_ label: String, destructive: Bool = false, enabled: Bool = true, action: @escaping () -> Void) {
+    init(_ label: String, destructive: Bool = false, enabled: Bool = true, rgb: VFDRGB? = nil,
+         action: @escaping () -> Void) {
         self.label = label
         self.destructive = destructive
         self.enabled = enabled
+        self.rgb = rgb
         self.action = action
     }
 }
@@ -122,6 +135,10 @@ final class VFDContext {
     private(set) var time: Double = 0
     /// Key of the tab being drawn ("scan" ... "settings").
     private(set) var tab: String = "scan"
+    /// Device pixels per screen point (3 or 2), as the renderer lays the grid out.
+    private(set) var displayScale: Double = 3
+    /// Device pixels per cell (5 at 3x, 4 at 2x).
+    private(set) var cellPitch: Int = 5
 
     weak var renderer: VFDRenderer?
     private let session: VFDSession
@@ -151,6 +168,32 @@ final class VFDContext {
     /// Switch the buffer between the two passes (renderer only).
     func use(_ fb: VFDFrameBuffer) {
         self.fb = fb
+    }
+
+    /// The grid's geometry on this screen (renderer only).
+    func setDisplay(scale: Double, pitch: Int) {
+        if scale.isFinite && scale > 0 {
+            displayScale = scale
+        }
+        if pitch > 0 {
+            cellPitch = pitch
+        }
+    }
+
+    /// Point the context at a tab about to show, between frames, for its `onShow` (renderer only).
+    func beginShow(tab: String) {
+        self.tab = tab
+        self.time = Date().timeIntervalSinceReferenceDate
+    }
+
+    // MARK: geometry
+
+    /// Screen points as whole cells at the renderer's pitch, rounded half to even (Python round(),
+    /// as the layouts' point sizes are converted): e.g. a standard view's 44 pt.
+    func cells(points: Double) -> Int {
+        let pitch: Int = max(1, cellPitch)
+        let px: Double = points * displayScale
+        return VFDMath.roundHalfEven(px / Double(pitch))
     }
 
     // MARK: state
@@ -195,7 +238,9 @@ final class VFDContext {
     // MARK: overlays
 
     /// System alert with one text field (numbers, names, IP addresses). `onDone` gets the text as
-    /// typed when OK is tapped; nothing happens on CANCEL.
+    /// typed when OK is tapped; nothing happens on CANCEL. Asked for while another alert is up or
+    /// still going away (e.g. from another prompt's `onDone` or a confirm's action), it waits and
+    /// shows once that one has fully gone, in order, so chained prompts need no delay.
     func prompt(title: String, message: String = "", text: String = "", keyboard: VFDKeyboard = .text,
                 onDone: @escaping (String) -> Void) {
         let request = VFDPromptRequest(title: title, message: message, keyboard: keyboard, onDone: onDone)
@@ -203,6 +248,7 @@ final class VFDContext {
     }
 
     /// System alert with CANCEL and `confirmLabel` (red when destructive), which runs `action`.
+    /// Chains like `prompt`: safe to call from another alert's completion.
     func confirm(title: String, message: String = "", confirmLabel: String = "OK", destructive: Bool = false,
                  action: @escaping () -> Void) {
         let request = VFDConfirmRequest(title: title, message: message, confirmLabel: confirmLabel,
@@ -212,9 +258,11 @@ final class VFDContext {
 
     /// A VFD-drawn modal menu over the content: the title boxed, one row per item, then CANCEL.
     /// While it is open it takes every tap; a tap outside it closes it. Picking an item closes the
-    /// menu first, then runs the item's action.
-    func menu(title: String, items: [VFDMenuItem]) {
-        renderer?.presentMenu(VFDMenuRequest(title: title, items: items))
+    /// menu first, then runs the item's action. `selected`: index of the current item; it is drawn
+    /// as the selected row (a solid block, label cut out, like a selected [OPTION]) and a long list
+    /// opens scrolled so that row is in view (centred where it can be).
+    func menu(title: String, items: [VFDMenuItem], selected: Int? = nil) {
+        renderer?.presentMenu(VFDMenuRequest(title: title, items: items, selected: selected))
     }
 
     var menuOpen: Bool { return renderer?.menuOpen ?? false }
