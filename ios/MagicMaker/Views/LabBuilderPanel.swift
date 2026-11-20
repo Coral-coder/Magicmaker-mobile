@@ -676,7 +676,7 @@ private struct LabPacketSummaryCard: View {
 }
 
 /// What the summary card says about a packet; every line comes from the packet itself.
-private struct LabPacketSummary {
+struct LabPacketSummary {
     enum Tone {
         case invalid
         case known
