@@ -251,7 +251,7 @@ enum VFDTxScreen: VFDScreen {
             VFDTxScreen.drawEmpty(fb, L, listTop: listTop, viewH: viewH)
             return
         }
-        let layout: VFDTxLayout = VFDTxLayout.build(st)
+        let layout: VFDTxLayout = VFDTxLayoutCache.current(st)
         let total: Int = layout.height
         let s: Int = ctx.scroll(VFDTxScreen.listRegion, limit: total - viewH)
         // The renderer's drag limit is contentRows minus the region's clipped height: register it
@@ -335,11 +335,14 @@ enum VFDTxScreen: VFDScreen {
             if screenTop + line.h < from - 2 { continue }
             if screenTop > to + 2 { break }
             let y: Int = listTop + line.y
+            // The layout is a memo of this library; never index past it all the same.
+            if line.group < 0 || line.group >= st.library.groups.count { continue }
             if line.row < 0 {
                 VFDTxScreen.drawHeader(target, ctx.L, ui, st, line.group, y: y)
             } else {
-                let row: VFDTxRow = st.library.groups[line.group].rows[line.row]
-                VFDTxScreen.drawRow(ctx, ui, st, target, row, y: y)
+                let rows: [VFDTxRow] = st.library.groups[line.group].rows
+                if line.row >= rows.count { continue }
+                VFDTxScreen.drawRow(ctx, ui, st, target, rows[line.row], y: y)
             }
         }
     }
@@ -347,6 +350,7 @@ enum VFDTxScreen: VFDScreen {
     /// MMListSectionHeader: chevron, title, 3-digit count; a tap folds or opens the section.
     fileprivate static func drawHeader(_ fb: VFDFrameBuffer, _ L: VFDLayout, _ ui: VFDUIState, _ st: VFDTxState,
                            _ groupIndex: Int, y: Int) {
+        if groupIndex < 0 || groupIndex >= st.library.groups.count { return }
         let group: VFDTxGroup = st.library.groups[groupIndex]
         let sectionTitle: String = group.section.title
         let folded: Bool = st.collapsed.contains(sectionTitle)
@@ -705,6 +709,8 @@ private enum VFDTxLibraryCache {
     static var revision: Int = Int.min
     static var count: Int = -1
     static var cached: VFDTxLibrary? = nil
+    /// Goes up every time `cached` is rebuilt (VFDTxLayoutCache's key).
+    static var generation: Int = 0
 
     static func current(_ store: MagicStore) -> VFDTxLibrary {
         let all: [MagicPacket] = store.allTransmitPackets()
@@ -715,6 +721,33 @@ private enum VFDTxLibraryCache {
         cached = built
         revision = store.revision
         count = all.count
+        generation &+= 1
+        return built
+    }
+}
+
+/// The list layout of the cached library, built again only when the library is rebuilt or the
+/// CLASS filter / folded sections change: VFDTxLayout.build walks every row of the library and
+/// the draw runs twice a frame (30 fps while a fling runs). A memo only: drawing stays free of
+/// visible state.
+@MainActor
+private enum VFDTxLayoutCache {
+    static var generation: Int = -1
+    static var visible: Set<String> = []
+    static var collapsed: Set<String> = []
+    static var cached: VFDTxLayout? = nil
+
+    /// The layout of st (whose library is VFDTxLibraryCache's current one).
+    static func current(_ st: VFDTxState) -> VFDTxLayout {
+        let gen: Int = VFDTxLibraryCache.generation
+        if let hit = cached, generation == gen, visible == st.visible, collapsed == st.collapsed {
+            return hit
+        }
+        let built: VFDTxLayout = VFDTxLayout.build(st)
+        cached = built
+        generation = gen
+        visible = st.visible
+        collapsed = st.collapsed
         return built
     }
 }

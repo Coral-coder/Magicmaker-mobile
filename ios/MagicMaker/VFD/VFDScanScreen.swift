@@ -967,7 +967,7 @@ extension VFDScanScreen {
     /// origin.
     private static func probe(_ fb: VFDFrameBuffer, edge: String, from r0: Int, to r1: Int,
                               draw: (VFDFrameBuffer, String?) -> Void) -> VFDFrameBuffer {
-        let buf: VFDFrameBuffer = VFDFrameBuffer(cols: fb.cols, rows: fb.rows, alarmInverted: fb.alarmInverted)
+        let buf: VFDFrameBuffer = VFDScanScratch.buffer(top: edge == "top", like: fb)
         let a: Int = max(0, r0)
         let b: Int = min(fb.rows, r1)
         buf.pushClip(0, a, fb.cols, max(0, b - a), dy: fb.originY)
@@ -1255,6 +1255,38 @@ extension VFDScanScreen {
         }
         ctx.dismissSheet()
         showToast(ctx, ok ? "Library imported" : "No file at path (or unreadable)")
+    }
+}
+
+// MARK: - Probe scratch buffers
+
+/// The two snapping probes' buffers (one per window edge: both are alive while a window snaps),
+/// kept between draws and cleared before each use. The strip animates SCAN at 30 fps and every
+/// draw snaps two windows, so fresh full-screen buffers would mean eight allocations a frame. A
+/// memo only: drawing stays free of visible state.
+@MainActor
+private enum VFDScanScratch {
+    static var topBuffer: VFDFrameBuffer? = nil
+    static var bottomBuffer: VFDFrameBuffer? = nil
+
+    /// A blank buffer the size of fb (no clips, taps, true colours), fb's alarm style.
+    static func buffer(top: Bool, like fb: VFDFrameBuffer) -> VFDFrameBuffer {
+        let cached: VFDFrameBuffer? = top ? topBuffer : bottomBuffer
+        if let buf = cached, buf.cols == fb.cols, buf.rows == fb.rows {
+            while buf.clipDepth > 0 {
+                buf.popClip()
+            }
+            buf.clear()
+            buf.alarmInverted = fb.alarmInverted
+            return buf
+        }
+        let made: VFDFrameBuffer = VFDFrameBuffer(cols: fb.cols, rows: fb.rows, alarmInverted: fb.alarmInverted)
+        if top {
+            topBuffer = made
+        } else {
+            bottomBuffer = made
+        }
+        return made
     }
 }
 

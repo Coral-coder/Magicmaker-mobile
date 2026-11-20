@@ -524,7 +524,20 @@ enum VFDColors {
     /// The band preview's loop phase 0..<1 at `time` (seconds since the reference date), the same
     /// phase `BandPreviewView` shows at that moment.
     static func bandPhase(_ time: Double) -> Double {
-        return BandLedAnimation.phase(time)
+        return loopPhase(time)
+    }
+
+    /// BandLedAnimation.phase(time), kept in 0..<1: a clock set before the reference date gives a
+    /// negative phase (and a non-finite time a NaN one), which BandLedAnimation.color turns into a
+    /// negative array index (ROTATE, STEPPER) or Int(NaN). Unchanged for every time >= 0.
+    private static func loopPhase(_ time: Double) -> Double {
+        let p: Double = BandLedAnimation.phase(time)
+        if !p.isFinite { return 0 }
+        if p < 0 {
+            let q: Double = p + 1
+            return (q >= 0 && q < 1) ? q : 0
+        }
+        return p < 1 ? p : 0
     }
 
     /// Band LED zone `zone` (0...4 = Z1 bottom-left, Z2 top-left, Z3 centre, Z4 top-right, Z5
@@ -532,7 +545,7 @@ enum VFDColors {
     /// mixed over the unlit cell colour; nil = off (draw the dim unlit ring:
     /// `VFDW.led(fb, x, y, nil)`, else `VFDW.led(fb, x, y, 0, fill: rgb)`).
     static func bandLED(_ model: BandEffectModel, zone: Int, time: Double) -> VFDRGB? {
-        let phase: Double = BandLedAnimation.phase(time)
+        let phase: Double = loopPhase(time)
         guard let led = BandLedAnimation.color(model, zone: zone, phase: phase) else { return nil }
         let bg: Double = Double(unlit.r) / 255.0
         let solid = led.composited(over: bg, bg, bg)
@@ -541,7 +554,7 @@ enum VFDColors {
 
     /// Whether the BUZZ line is in its bright half at `time` (BandPreviewView's 6 Hz blink).
     static func buzzOn(_ time: Double) -> Bool {
-        return BandLedAnimation.buzzOn(phase: BandLedAnimation.phase(time))
+        return BandLedAnimation.buzzOn(phase: loopPhase(time))
     }
 }
 

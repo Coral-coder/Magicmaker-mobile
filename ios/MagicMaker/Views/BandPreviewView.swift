@@ -154,7 +154,13 @@ enum BandLedAnimation {
 
     /// Loop phase 0..<1 at `seconds` since the reference date.
     static func phase(_ seconds: Double) -> Double {
-        return seconds.truncatingRemainder(dividingBy: period) / period
+        // Always in 0..<1, so the colour lookups never index with a negative or NaN position
+        // (a clock before 2001 gives negative seconds).
+        guard seconds.isFinite else { return 0 }
+        var r: Double = seconds.truncatingRemainder(dividingBy: period)
+        if r < 0 { r += period }
+        let t: Double = r / period
+        return t < 1 ? t : 0
     }
 
     /// The BUZZ line blinks at 6 per loop: true in the bright half.

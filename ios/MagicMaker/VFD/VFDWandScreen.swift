@@ -38,7 +38,9 @@ enum VFDWandScreen: VFDScreen {
         fb.pushClip(0, L.contentTop + scroll, fb.cols, L.contentH, dy: scroll)
         // The controls are anchored to the bottom of the content region; the library area fills
         // the rest (libraryArea .frame(maxHeight: .infinity) over the controls panel).
-        let probe: VFDFrameBuffer = VFDFrameBuffer(cols: fb.cols, rows: fb.rows)
+        // Only the returned row is used (the controls' rows do not depend on what they light), so
+        // the measuring pass draws into a 1-row buffer instead of a full-screen one per draw.
+        let probe: VFDFrameBuffer = VFDFrameBuffer(cols: fb.cols, rows: 1)
         let probeTop: Int = L.contentTop + 40
         let controlsH: Int = VFDWandScreen.drawControls(ctx, ui, st, probe, top: probeTop) - probeTop
         let ctop: Int = L.contentBottom - controlsH
@@ -60,7 +62,7 @@ enum VFDWandScreen: VFDScreen {
         if newWand {
             return store.newWandPackets()
         }
-        return VFDWandScreen.starlightColors(store.learnedStarlightPackets())
+        return VFDWandLibraryCache.starlight(store)
     }
 
     /// WandScreen.starlightColors.
@@ -817,6 +819,32 @@ private struct VFDWandState {
     /// StarlightWandView.glowColorIndex.
     let glowIndex: Int
     let keys: String
+}
+
+/// The Starlight colour list (WandScreen.starlightColors over learnedStarlightPackets(): a filter,
+/// a sort by label and a hex parse per learned code), built again only when the store's revision
+/// or its learned-colour count changes, as WandScreen reloads it on store.revision; the draw runs
+/// twice a frame. A memo only: drawing stays free of visible state.
+@MainActor
+private enum VFDWandLibraryCache {
+    static var owner: ObjectIdentifier? = nil
+    static var revision: Int = Int.min
+    static var learnedCount: Int = -1
+    static var colors: [MagicPacket] = []
+
+    static func starlight(_ store: MagicStore) -> [MagicPacket] {
+        let id: ObjectIdentifier = ObjectIdentifier(store)
+        let count: Int = store.learnedColors.count
+        if owner == id && revision == store.revision && learnedCount == count {
+            return colors
+        }
+        let built: [MagicPacket] = VFDWandScreen.starlightColors(store.learnedStarlightPackets())
+        owner = id
+        revision = store.revision
+        learnedCount = count
+        colors = built
+        return built
+    }
 }
 
 /// New Wand custom names as AppViewModel stores them ("newwand_names", one JSON object), read

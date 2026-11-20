@@ -884,9 +884,15 @@ extension VFDLabScreen {
         )
     }
 
-    /// The user presets by label, ignoring case; equal labels keep the library's order.
+    /// The user presets by label, ignoring case; equal labels keep the library's order. The Lab
+    /// draws twice per frame at 30 fps while its preview animates, so the order is sorted again
+    /// only when the presets differ from the last ones sorted (a memo; nothing is redrawn).
     fileprivate static func sortedPresets(_ store: MagicStore) -> [MagicPacket] {
         let list: [MagicPacket] = store.customPresets
+        let memo: VFDLabPresetOrder = VFDLabPresetOrder.shared
+        if memo.valid && memo.source == list {
+            return memo.sorted
+        }
         let lowered: [String] = list.map { (packet: MagicPacket) -> String in packet.label.lowercased() }
         let order: [Int] = Array(list.indices).sorted { (a: Int, b: Int) -> Bool in
             let left: String = lowered[a]
@@ -896,8 +902,24 @@ extension VFDLabScreen {
             }
             return a < b
         }
-        return order.map { (index: Int) -> MagicPacket in list[index] }
+        let sorted: [MagicPacket] = order.map { (index: Int) -> MagicPacket in list[index] }
+        memo.source = list
+        memo.sorted = sorted
+        memo.valid = true
+        return sorted
     }
+}
+
+/// The last `sortedPresets` result and the presets it was sorted from.
+@MainActor
+private final class VFDLabPresetOrder {
+    static let shared: VFDLabPresetOrder = VFDLabPresetOrder()
+
+    var source: [MagicPacket] = []
+    var sorted: [MagicPacket] = []
+    var valid: Bool = false
+
+    init() {}
 }
 
 // MARK: - Pinned band preview

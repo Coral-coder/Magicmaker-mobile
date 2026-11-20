@@ -732,10 +732,15 @@ final class VFDRenderer: ObservableObject {
         if !size.width.isFinite || !size.height.isFinite || size.width <= 0 || size.height <= 0 {
             return false
         }
-        let scale: CGFloat = inputs.scale > 0 ? inputs.scale : 2
+        // Int(_:) traps on an infinite or out-of-range Double: keep the scale and the pixel sizes
+        // in a sane range (real screens are 1x...3x and a few thousand pixels).
+        let scale: CGFloat = (inputs.scale > 0 && inputs.scale.isFinite) ? min(inputs.scale, 16) : 2
+        let widthD: Double = (Double(size.width) * Double(scale)).rounded()
+        let heightD: Double = (Double(size.height) * Double(scale)).rounded()
+        if !(widthD < 1_000_000) || !(heightD < 1_000_000) { return false }
         let pitch: Int = max(4, Int((5.0 * Double(scale) / 3.0).rounded()))
-        let widthPx: Int = Int((Double(size.width) * Double(scale)).rounded())
-        let heightPx: Int = Int((Double(size.height) * Double(scale)).rounded())
+        let widthPx: Int = Int(widthD)
+        let heightPx: Int = Int(heightD)
         let cols: Int = widthPx / pitch
         let rows: Int = heightPx / pitch
         if cols < 60 || rows < 150 { return false }

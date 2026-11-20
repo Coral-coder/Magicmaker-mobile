@@ -475,20 +475,26 @@ private final class VFDDiagModel {
     static let shared: VFDDiagModel = VFDDiagModel()
 
     private(set) var crashLog: String
+    /// Kotlin's isBlank of `crashLog`, worked out when the log is read: drawing asks for it
+    /// twice per pass, and trimming a log of up to 64 KB each time copies it.
+    private(set) var crashBlank: Bool
 
     /// Read once when the model is first used, so a first frame drawn before the first onShow
     /// (the VFD view opening on DIAG) already shows the file as it is.
     init() {
-        crashLog = CrashLog.read()
+        let log: String = CrashLog.read()
+        crashLog = log
+        crashBlank = VFDDiagModel.isBlank(log)
     }
 
-    /// Kotlin's isBlank.
-    var crashBlank: Bool {
-        return crashLog.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private static func isBlank(_ s: String) -> Bool {
+        return s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     func reload() {
-        crashLog = CrashLog.read()
+        let log: String = CrashLog.read()
+        crashLog = log
+        crashBlank = VFDDiagModel.isBlank(log)
     }
 }
 
