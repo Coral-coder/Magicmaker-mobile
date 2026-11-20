@@ -928,6 +928,11 @@ final class VFDRenderer: ObservableObject {
         let listTop: Int = inner.r
         let contentRows: Int = m.items.count * rowH
         menuMax = max(0, contentRows - listH)
+        if let reveal = menuReveal {
+            // First draw of a menu with a current item: open with that row in view.
+            menuReveal = nil
+            menuScroll = VFDRenderer.revealScroll(reveal, count: m.items.count, shownRows: shownRows, rowH: rowH)
+        }
         menuScroll = max(0, min(menuScroll, menuMax))
         // Taps on the panel between the rows do nothing (only taps outside it close the menu).
         fb.tap(c, top, w, panelH, name: "menu:panel")
@@ -936,17 +941,14 @@ final class VFDRenderer: ObservableObject {
         let offset: Int = min(menuMax, ((menuScroll + rowH / 2) / rowH) * rowH)
         fb.pushClip(0, listTop, fb.cols, listH)
         var y: Int = listTop - offset
+        var index: Int = 0
         for item in m.items {
             if y + rowH > listTop && y < listTop + listH {
-                let action: () -> Void = item.action
-                VFDW.button(fb, L, inner.c, y, inner.w, item.label, enabled: item.enabled,
-                            name: "menu:" + VFDW.upper(item.label), alarm: item.destructive,
-                            action: { [weak self] in
-                                self?.closeMenu()
-                                action()
-                            })
+                let current: Bool = m.selected == index
+                drawMenuRow(item, current: current, fb: fb, L: L, c: inner.c, y: y, w: inner.w)
             }
             y += rowH
+            index += 1
         }
         fb.popClip()
         if menuMax > 0 {
@@ -958,6 +960,78 @@ final class VFDRenderer: ObservableObject {
                         self?.closeMenu()
                     })
         VFDW.panel(fb, L, c, top, w, panelH, title: hasTitle ? m.title : nil, color: VFDInk.highlight)
+    }
+
+    /// One menu row, ctrlH tall. Without `rgb`: VFDW.button (the current row as the primary
+    /// block). With it: the same box or block, a 5 x 5 swatch of the true colour in the first
+    /// glyph slot, a blank glyph slot, then the label left-aligned; on a block the swatch keeps an
+    /// unlit ring and the label is cut out, as on a selected BASE COLOUR chip. Tap
+    /// "menu:<LABEL>" when enabled: it closes the menu, then runs the item's action.
+    private func drawMenuRow(_ item: VFDMenuItem, current: Bool, fb: VFDFrameBuffer, L: VFDLayout,
+                             c: Int, y: Int, w: Int) {
+        let name: String = "menu:" + VFDW.upper(item.label)
+        let action: () -> Void = item.action
+        let pick: () -> Void = { [weak self] in
+            self?.closeMenu()
+            action()
+        }
+        guard let color = item.rgb else {
+            VFDW.button(fb, L, c, y, w, item.label, primary: current, enabled: item.enabled, name: name,
+                        alarm: item.destructive, action: pick)
+            return
+        }
+        let ty: Int = y + VFDW.ctrlText
+        let sx: Int = c + 3
+        let tx: Int = sx + 2 * VFDW.adv
+        let label: String = VFDRenderer.fitKeepingTick(VFDW.upper(item.label), c + w - 2 - tx)
+        var solid: Bool = false
+        var border: UInt8 = item.enabled ? VFDInk.highlight : VFDInk.dim
+        var ink: UInt8 = item.enabled ? VFDInk.text : VFDInk.dim
+        if item.enabled && item.destructive {
+            if fb.alarmInverted {
+                solid = true
+            } else {
+                border = VFDInk.alarm
+                ink = VFDInk.alarm
+            }
+        } else if item.enabled && current {
+            solid = true
+        }
+        if solid {
+            fb.fill(c, y, w, VFDW.ctrlH, VFDInk.highlight)
+            fb.fill(sx - 1, ty, 7, 7, VFDInk.unlit)
+            ink = VFDInk.unlit
+        } else {
+            fb.box(c, y, w, VFDW.ctrlH, border)
+        }
+        let swatch: UInt8 = fb.rgb(color)
+        fb.fill(sx, ty + 1, 5, 5, swatch)
+        fb.text(tx, ty, label, .small, ink)
+        if item.enabled {
+            VFDW.tap(fb, c, y, w, VFDW.ctrlH, name, action: pick)
+        }
+    }
+
+    /// VFDText.fit, except that a trailing " ✓" (the current item's tick) survives the cut.
+    private static func fitKeepingTick(_ s: String, _ maxCols: Int) -> String {
+        let tick: String = " ✓"
+        if !s.hasSuffix(tick) || VFDText.width(s) <= maxCols {
+            return VFDText.fit(s, maxCols)
+        }
+        let head: String = VFDText.fit(String(s.dropLast(2)), maxCols - 2 * VFDW.adv)
+        if head.isEmpty {
+            return VFDText.fit("✓", maxCols)
+        }
+        return head + tick
+    }
+
+    /// The list offset (whole rows) that centres row `index` in a window of `shownRows` rows,
+    /// as far as the list allows.
+    private static func revealScroll(_ index: Int, count: Int, shownRows: Int, rowH: Int) -> Int {
+        if index < 0 || index >= count || shownRows <= 0 { return 0 }
+        let first: Int = index - (shownRows - 1) / 2
+        let lastFirst: Int = max(0, count - shownRows)
+        return max(0, min(first, lastFirst)) * rowH
     }
 
     // MARK: paint

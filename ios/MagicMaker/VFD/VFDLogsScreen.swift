@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UIKit
 
@@ -41,11 +42,16 @@ enum VFDLogsScreen: VFDScreen {
         })
     }
 
+    /// LogsScreen's .task blocks run each time it appears: the logs are listed again (the open
+    /// log and its filters stay, as the VFD keeps a tab's state while the app runs).
+    static func onShow(_ ctx: VFDContext) {
+        VFDLogsModel.shared.show(ctx)
+    }
+
     static func draw(_ ctx: VFDContext) -> Int? {
         let fb: VFDFrameBuffer = ctx.fb
         let L: VFDLayout = ctx.L
         let model: VFDLogsModel = VFDLogsModel.shared
-        model.sync(ctx)
         let c: Int = L.left
         let w: Int = L.width
         // The status line, the banner and the hairline stay put (iOS keeps them above the List).
@@ -553,15 +559,13 @@ private func vfdLogsReadFile(_ path: String) -> VFDLogsOpenLog {
 }
 
 /// LogsScreen's @State, kept while the app runs. The file work runs off the main thread like the
-/// standard screen's .task(id:) blocks: `sync` (called at the top of every draw) only notes which
+/// standard screen's .task(id:) blocks: `update` (run when the tab is shown, after every action,
+/// when a read lands and when recording starts or stops; never while drawing) notes which
 /// listing, read or summary the current state wants and starts it once; the results land later
-/// and redraw. Drawing itself never sees a change made during the frame.
+/// and redraw. Drawing only reads this state.
 @MainActor
 private final class VFDLogsModel {
     static let shared: VFDLogsModel = VFDLogsModel()
-    /// A frame gap this long means the tab was left and opened again (it redraws at least once a
-    /// second while shown): list the logs again, as LogsScreen does when it appears.
-    static let revisitGap: Double = 2.5
 
     private(set) var logs: [LogFile] = []
     private(set) var logsLoaded: Bool = false
@@ -581,8 +585,13 @@ private final class VFDLogsModel {
 
     /// REFRESH, NAME, ADD ALL and DELETE list the logs again and re-read the open one.
     private var refreshTick: Int = 0
+    /// Each show of the tab lists the logs again, as LogsScreen does when it appears.
     private var visit: Int = 0
-    private var lastFrame: Double = 0
+    /// The context of the last show: the loads redraw through it, and the recording watcher
+    /// checks with it that LOGS is still the tab on screen.
+    private weak var context: VFDContext? = nil
+    /// LogsSessionWatcher: the scan engine's change announcements.
+    private var scanWatch: AnyCancellable? = nil
     private var listDone: String? = nil
     private var listRunning: String? = nil
     private var readDone: String? = nil
@@ -620,14 +629,38 @@ private final class VFDLogsModel {
 
     // MARK: loading
 
-    func sync(_ ctx: VFDContext) {
-        let t: Double = ctx.time
-        if lastFrame > 0 && t - lastFrame > VFDLogsModel.revisitGap {
+    /// The tab was shown (VFDLogsScreen.onShow): list the logs again, unless a listing is still
+    /// on its way (one visit can be reported twice, e.g. a tab change that also closes a sheet).
+    func show(_ ctx: VFDContext) {
+        context = ctx
+        watchScan(ctx.scan)
+        if listRunning == nil {
             visit += 1
         }
-        if t > lastFrame {
-            lastFrame = t
+        update()
+    }
+
+    /// LogsSessionWatcher: the logs are listed again when recording starts or stops while LOGS is
+    /// on screen. The engine announces each change before it lands, so the check runs after it.
+    private func watchScan(_ scan: ScanEngine) {
+        if scanWatch != nil { return }
+        scanWatch = scan.objectWillChange.sink { _ in
+            _ = Task { @MainActor in
+                VFDLogsModel.shared.scanChanged()
+            }
         }
+    }
+
+    private func scanChanged() {
+        guard let ctx = context, ctx.renderer != nil, ctx.tab == MainTab.logs.rawValue else { return }
+        update()
+    }
+
+    /// Starts what the current state wants that is neither done nor on its way: the listing for
+    /// this REFRESH count, visit and recording session, the open log's rows, the summary for the
+    /// current filters.
+    private func update() {
+        guard let ctx = context else { return }
         let scan: ScanEngine = ctx.scan
         let rec: String = scan.recordSessionActive ? "1" : "0"
         let listKey: String = "\(refreshTick)|\(visit)|" + rec + "|" + scan.activeSessionName
@@ -696,6 +729,8 @@ private final class VFDLogsModel {
         guard let path = selectedPath, path == open.path else { return }
         loaded = open
         loadGeneration += 1
+        // The new rows want their summary.
+        update()
         ctx.redraw()
     }
 
@@ -727,6 +762,7 @@ private final class VFDLogsModel {
 
     func refresh() {
         refreshTick += 1
+        update()
     }
 
     func toggleSelection(_ log: LogFile) {
@@ -734,6 +770,7 @@ private final class VFDLogsModel {
         forgetOpenLog()
         selectedPath = next
         resetFilters()
+        update()
     }
 
     /// No log open (after a delete, or when the open one is gone).
@@ -741,6 +778,7 @@ private final class VFDLogsModel {
         forgetOpenLog()
         selectedPath = nil
         resetFilters()
+        update()
     }
 
     /// Nothing of the previous log may show while another one is read; results still on their
@@ -768,15 +806,18 @@ private final class VFDLogsModel {
         } else {
             selectedCats.insert(category)
         }
+        update()
     }
 
     /// Single choice: tapping a source shows only that one; tapping it again shows all.
     func toggleSource(_ address: String) {
         selectedAddr = selectedAddr == address ? "" : address
+        update()
     }
 
     func toggleBandOnly() {
         bandOnly = !bandOnly
+        update()
     }
 
     func toggleAnalyzing() {
@@ -785,6 +826,7 @@ private final class VFDLogsModel {
 
     func toggleHideNoise() {
         hideNoise = !hideNoise
+        update()
     }
 
     func showToast(_ text: String, at time: Double) {

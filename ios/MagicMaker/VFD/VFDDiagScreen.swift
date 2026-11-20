@@ -32,12 +32,16 @@ enum VFDDiagScreen: VFDScreen {
         return nil
     }
 
+    /// DiagScreen reads the crash log each time it appears.
+    static func onShow(_ ctx: VFDContext) {
+        VFDDiagModel.shared.reload()
+    }
+
     static func draw(_ ctx: VFDContext) -> Int? {
         let fb: VFDFrameBuffer = ctx.fb
         let L: VFDLayout = ctx.L
         let ui: VFDUIState = ctx.ui
         let model: VFDDiagModel = VFDDiagModel.shared
-        model.sync(ctx)
         let c: Int = L.left
         let w: Int = L.width
         var y: Int = L.contentTop
@@ -463,40 +467,28 @@ private struct VFDDiagStatus {
     let middle: Bool
 }
 
-/// The crash log as DiagScreen holds it: read when the tab is opened (a frame gap means it was
-/// left and opened again, as DiagScreen reads it on appear), when the box is opened and after
-/// CLEAR. The file is small; `sync` reads it at the top of the draw, before anything is drawn,
-/// so both passes of a frame see the same text.
+/// The crash log as DiagScreen holds it: read each time the tab is shown (onShow; DiagScreen
+/// reads it on appear), when the box is opened and after CLEAR. The file is small and read on the
+/// main thread, as DiagScreen does. Drawing only reads `crashLog`.
 @MainActor
 private final class VFDDiagModel {
     static let shared: VFDDiagModel = VFDDiagModel()
-    static let revisitGap: Double = 2.5
 
-    private(set) var crashLog: String = ""
-    private var read: Bool = false
-    private var lastFrame: Double = 0
+    private(set) var crashLog: String
 
-    init() {}
+    /// Read once when the model is first used, so a first frame drawn before the first onShow
+    /// (the VFD view opening on DIAG) already shows the file as it is.
+    init() {
+        crashLog = CrashLog.read()
+    }
 
     /// Kotlin's isBlank.
     var crashBlank: Bool {
         return crashLog.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    func sync(_ ctx: VFDContext) {
-        let t: Double = ctx.time
-        let revisit: Bool = lastFrame > 0 && t - lastFrame > VFDDiagModel.revisitGap
-        if !read || revisit {
-            reload()
-        }
-        if t > lastFrame {
-            lastFrame = t
-        }
-    }
-
     func reload() {
         crashLog = CrashLog.read()
-        read = true
     }
 }
 

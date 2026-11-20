@@ -38,7 +38,7 @@ enum VFDMapScreen: VFDScreen {
 
     static func headerRight(_ ctx: VFDContext) -> (text: String, action: () -> Void)? {
         return (text: "REFRESH", action: {
-            VFDMapModel.shared.refresh()
+            VFDMapModel.shared.refresh(ctx)
         })
     }
 
@@ -47,11 +47,15 @@ enum VFDMapScreen: VFDScreen {
         return VFDMapModel.shared.data == nil ? VFDInk.dim : VFDInk.highlight
     }
 
+    /// MapScreen loads each time it appears (.task(id: loadTick)).
+    static func onShow(_ ctx: VFDContext) {
+        VFDMapModel.shared.show(ctx)
+    }
+
     static func draw(_ ctx: VFDContext) -> Int? {
         let fb: VFDFrameBuffer = ctx.fb
         let L: VFDLayout = ctx.L
         let model: VFDMapModel = VFDMapModel.shared
-        model.sync(ctx)
         let c: Int = L.left
         let w: Int = L.width
         // The map does not scroll with the content: undo the scroll offset.
@@ -745,14 +749,12 @@ private func vfdMapLoadData() -> VFDMapLoad {
 
 // MARK: - Screen state
 
-/// MapScreen's @State, kept while the app runs. `sync` (called at the top of every draw) starts
-/// a load when none has been made for the current REFRESH count or tab visit (MapScreen loads
-/// each time it appears); the load runs off the main thread and lands later with a redraw.
+/// MapScreen's @State, kept while the app runs. Each show of the tab and each REFRESH starts a
+/// load (MapScreen loads each time it appears); the load runs off the main thread and lands later
+/// with a redraw. Drawing only reads this state.
 @MainActor
 private final class VFDMapModel {
     static let shared: VFDMapModel = VFDMapModel()
-    /// A frame gap this long means the tab was left and opened again.
-    static let revisitGap: Double = 2.5
 
     private(set) var data: CaptureMapData? = nil
     private(set) var load: VFDMapLoad? = nil
@@ -763,35 +765,41 @@ private final class VFDMapModel {
     /// Tag of the tapped pin ("c|<cell>" or "t|<source>").
     private(set) var selection: String? = nil
 
+    /// REFRESH count.
     private var loadTick: Int = 0
+    /// Shows of the tab.
     private var visit: Int = 0
-    private var lastFrame: Double = 0
     private var loadDone: String? = nil
     private var loadRunning: String? = nil
 
     init() {}
 
-    func sync(_ ctx: VFDContext) {
-        let t: Double = ctx.time
-        if lastFrame > 0 && t - lastFrame > VFDMapModel.revisitGap {
+    /// The tab was shown (VFDMapScreen.onShow): load again, unless a load is still on its way
+    /// (one visit can be reported twice, e.g. a tab change that also closes a sheet).
+    func show(_ ctx: VFDContext) {
+        if loadRunning == nil {
             visit += 1
         }
-        if t > lastFrame {
-            lastFrame = t
-        }
+        update(ctx)
+    }
+
+    /// Starts a load when none has been made, or is on its way, for this REFRESH count and visit.
+    private func update(_ ctx: VFDContext) {
         let key: String = "\(loadTick)|\(visit)"
         if key != loadDone && key != loadRunning {
             start(key, ctx)
         }
     }
 
+    /// MapScreen.load: LOADING… (and REFRESH disabled) with no pin selected until the new points
+    /// land.
     private func start(_ key: String, _ ctx: VFDContext) {
         loadRunning = key
+        data = nil
+        load = nil
+        selection = nil
+        ctx.redraw()
         Task { @MainActor in
-            self.data = nil
-            self.load = nil
-            self.selection = nil
-            ctx.redraw()
             let result: VFDMapLoad = await Task.detached(priority: .userInitiated) { () -> VFDMapLoad in
                 vfdMapLoadData()
             }.value
@@ -816,9 +824,10 @@ private final class VFDMapModel {
     }
 
     /// REFRESH (disabled while loading).
-    func refresh() {
+    func refresh(_ ctx: VFDContext) {
         if data == nil { return }
         loadTick += 1
+        update(ctx)
     }
 
     func setMode(_ index: Int) {

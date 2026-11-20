@@ -362,7 +362,17 @@ enum VFDTxScreen: VFDScreen {
                         _ row: VFDTxRow, y: Int) {
         let L: VFDLayout = ctx.L
         let packet: MagicPacket = row.packet
-        VFDW.packetRow(fb, L, L.left, y, L.width, packet.label, packet.hex, subtitle: row.subtitle,
+        let withSwatches: Bool = !row.swatches.isEmpty
+        if withSwatches {
+            // The subtitle line (VFDW.packetRow's rows): after "CATEGORY · " the true-colour
+            // swatches of the named colours, then the names, dim like the rest of the line.
+            let hexRows: Int = packet.hex.isEmpty ? 0 : VFDW.line
+            let sy: Int = y + 3 + hexRows + VFDW.line
+            let x0: Int = L.left + 2 + VFDText.length(VFDW.upper(row.lead)) * VFDW.adv
+            VFDTxSwatches.draw(fb, x0, sy, row.swatches, VFDW.upper(row.colorNames), L.left + L.width, VFDInk.dim)
+        }
+        VFDW.packetRow(fb, L, L.left, y, L.width, packet.label, packet.hex,
+                       subtitle: withSwatches ? row.lead : row.subtitle,
                        selected: packet.id == st.selectedId, hexColor: VFDInk.dim,
                        action: {
                            VFDTxScreen.selectPacket(ctx, ui, packet)
@@ -545,16 +555,100 @@ enum VFDTxScreen: VFDScreen {
 private struct VFDTxRow {
     let packet: MagicPacket
     let subtitle: String
+    /// The subtitle before the colour names ("CATEGORY · "), or the whole subtitle.
+    let lead: String
+    /// The colour names of the subtitle (packet.colors), "" when it names none.
+    let colorNames: String
+    /// True colours of the named palette colours, drawn between `lead` and `colorNames`.
+    let swatches: [VFDRGB]
 
     init(packet: MagicPacket) {
         self.packet = packet
         let category: String = packet.category.rawValue
         if packet.colors.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.subtitle = category
+            self.lead = category
+            self.colorNames = ""
+            self.swatches = []
         } else {
             self.subtitle = category + " · " + packet.colors
+            self.lead = category + " · "
+            self.colorNames = packet.colors
+            self.swatches = VFDTxSwatches.named(packet.hex, packet.colors)
         }
     }
+}
+
+/// Colour names with true-colour swatches beside them (the library rows' subtitles).
+private enum VFDTxSwatches {
+    /// The true colours behind a classifier's colour names: each distinct palette colour that
+    /// BandEffectModel reads from `hex` (a wand code's own colour when it reads none) and whose
+    /// name is in `names`, in the order the names first appear there; at most five, OFF left out.
+    static func named(_ hex: String, _ names: String) -> [VFDRGB] {
+        let text: String = names.lowercased()
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }
+        let model: BandEffectModel = BandEffectModel.from(hex)
+        var indices: [Int] = model.colors
+        for zone in model.perLed {
+            if let index = zone {
+                indices.append(index)
+            }
+        }
+        if indices.isEmpty {
+            let upperHex: String = hex.uppercased()
+            if upperHex.contains("CF9B") || upperHex.contains("CF0B") {
+                indices.append(MagicClassifier.starlightColorIndex(hex))
+            }
+        }
+        var found: [VFDTxNamedSwatch] = []
+        var seen = Set<Int>()
+        for raw in indices {
+            let index: Int = raw & 0x1F
+            if !seen.insert(index).inserted { continue }
+            let name: String = StarlightColors.nameFor(index).lowercased()
+            if name == "off" { continue }
+            guard let range = text.range(of: name) else { continue }
+            let pos: Int = text.distance(from: text.startIndex, to: range.lowerBound)
+            found.append(VFDTxNamedSwatch(pos: pos, order: found.count, rgb: VFDColors.starlightGlow(index)))
+        }
+        found.sort(by: { (a: VFDTxNamedSwatch, b: VFDTxNamedSwatch) -> Bool in
+            if a.pos != b.pos { return a.pos < b.pos }
+            return a.order < b.order
+        })
+        var out: [VFDRGB] = []
+        for item in found.prefix(5) {
+            out.append(item.rgb)
+        }
+        return out
+    }
+
+    /// `swatches` as 5 x 5 true-colour squares 7 cells apart from column x0 on text row r, then
+    /// `names` 4 cells after the last one, cut to end before `limit` (exclusive); without
+    /// swatches (or room for them) just the names at x0. Returns the end column (as fb.text).
+    @discardableResult
+    static func draw(_ fb: VFDFrameBuffer, _ x0: Int, _ r: Int, _ swatches: [VFDRGB], _ names: String,
+                     _ limit: Int, _ color: UInt8) -> Int {
+        var n: Int = swatches.count
+        // Keep room for at least two characters of the names.
+        while n > 0 && x0 + 7 * n + 2 + VFDText.width(count: 2) > limit {
+            n -= 1
+        }
+        var x: Int = x0
+        if n > 0 {
+            for i in 0..<n {
+                fb.fill(x0 + 7 * i, r + 1, 5, 5, fb.rgb(swatches[i]))
+            }
+            x = x0 + 7 * n + 2
+        }
+        return fb.textFit(x, r, names, limit - x, .small, color)
+    }
+}
+
+/// One swatch of `VFDTxSwatches.named`: where its colour's name first appears, and the colour.
+private struct VFDTxNamedSwatch {
+    let pos: Int
+    let order: Int
+    let rgb: VFDRGB
 }
 
 private struct VFDTxGroup {

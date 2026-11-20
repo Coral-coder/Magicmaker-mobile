@@ -570,7 +570,7 @@ object VFDScanScreen : VFDScreen {
                             val now: Boolean = ui.storedBool(key, true, prefs = VFDUIState.mainPrefs)
                             ui.setStoredBool(key, !now, prefs = VFDUIState.mainPrefs)
                         })
-        y = statusLines(fb, L, s, c, y, w)
+        y = statusLines(fb, L, s, c, y + 2, w)
         y = chipRows(ctx, fb, s, c, y + 3, w)
         y = bandSection(ctx, fb, L, s, c, y + 5, w, glue)
         y = librarySection(ctx, fb, L, s, c, y + 4, w, glue)

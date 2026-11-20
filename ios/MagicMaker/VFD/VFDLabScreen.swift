@@ -756,18 +756,99 @@ extension VFDLabScreen {
 
     // MARK: pickers
 
-    /// LabPalettePicker's sheet as a VFD menu: one row per option, the current one ticked.
+    /// LabPalettePicker's sheet as a VFD menu: one row per option, the current one ticked and
+    /// drawn as the selected row, the list opened at it; a palette option ("#15 Red") starts with
+    /// a swatch of its true colour, as the sheet's rows do.
     fileprivate static func openPicker(_ ctx: VFDContext, _ title: String, _ options: [(Int, String)],
                                        _ selected: Int, _ pick: @escaping (Int) -> Void) {
         if options.isEmpty { return }
         var items: [VFDMenuItem] = []
+        var current: Int? = nil
+        var row: Int = 0
         for option in options {
             let id: Int = option.0
-            let shown: String = id == selected ? option.1 + " ✓" : option.1
-            items.append(VFDMenuItem(shown, action: { pick(id) }))
+            let isCurrent: Bool = id == selected
+            if isCurrent && current == nil {
+                current = row
+            }
+            let shown: String = isCurrent ? option.1 + " ✓" : option.1
+            let swatch: VFDRGB? = VFDLabOptions.swatch(option.1)
+            items.append(VFDMenuItem(shown, rgb: swatch, action: { pick(id) }))
+            row += 1
         }
-        ctx.menu(title: title, items: items)
+        ctx.menu(title: title, items: items, selected: current)
     }
+
+    // MARK: colour names with their swatches
+
+    /// The true colours behind a classifier's colour names: each distinct palette colour that
+    /// BandEffectModel reads from `hex` (a wand code's own colour when it reads none) and whose
+    /// name is in `names`, in the order the names first appear there; at most five, OFF left out.
+    fileprivate static func namedSwatches(_ hex: String, _ names: String) -> [VFDRGB] {
+        let text: String = names.lowercased()
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [] }
+        let model: BandEffectModel = BandEffectModel.from(hex)
+        var indices: [Int] = model.colors
+        for zone in model.perLed {
+            if let index = zone {
+                indices.append(index)
+            }
+        }
+        if indices.isEmpty {
+            let upperHex: String = hex.uppercased()
+            if upperHex.contains("CF9B") || upperHex.contains("CF0B") {
+                indices.append(MagicClassifier.starlightColorIndex(hex))
+            }
+        }
+        var found: [VFDLabNamedSwatch] = []
+        var seen = Set<Int>()
+        for raw in indices {
+            let index: Int = raw & 0x1F
+            if !seen.insert(index).inserted { continue }
+            let name: String = StarlightColors.nameFor(index).lowercased()
+            if name == "off" { continue }
+            guard let range = text.range(of: name) else { continue }
+            let pos: Int = text.distance(from: text.startIndex, to: range.lowerBound)
+            found.append(VFDLabNamedSwatch(pos: pos, order: found.count, rgb: VFDColors.starlightGlow(index)))
+        }
+        found.sort(by: { (a: VFDLabNamedSwatch, b: VFDLabNamedSwatch) -> Bool in
+            if a.pos != b.pos { return a.pos < b.pos }
+            return a.order < b.order
+        })
+        var out: [VFDRGB] = []
+        for item in found.prefix(5) {
+            out.append(item.rgb)
+        }
+        return out
+    }
+
+    /// `swatches` as 5 x 5 true-colour squares 7 cells apart from column x0 on text row r, then
+    /// `names` 4 cells after the last one, cut to end before `limit` (exclusive); without
+    /// swatches (or room for them) just the names at x0. Returns the end column (as fb.text).
+    @discardableResult
+    fileprivate static func swatchNames(_ fb: VFDFrameBuffer, _ x0: Int, _ r: Int, _ swatches: [VFDRGB],
+                                        _ names: String, _ limit: Int, _ color: UInt8) -> Int {
+        var n: Int = swatches.count
+        // Keep room for at least two characters of the names.
+        while n > 0 && x0 + 7 * n + 2 + VFDText.width(count: 2) > limit {
+            n -= 1
+        }
+        var x: Int = x0
+        if n > 0 {
+            for i in 0..<n {
+                fb.fill(x0 + 7 * i, r + 1, 5, 5, fb.rgb(swatches[i]))
+            }
+            x = x0 + 7 * n + 2
+        }
+        return fb.textFit(x, r, names, limit - x, .small, color)
+    }
+}
+
+/// One swatch of `namedSwatches`: where its colour's name first appears, and the colour.
+private struct VFDLabNamedSwatch {
+    let pos: Int
+    let order: Int
+    let rgb: VFDRGB
 }
 
 // MARK: - Model
@@ -1280,7 +1361,7 @@ extension VFDLabScreen {
         y = VFDW.section(fb, L, c, y - (VFDW.sectionGap - VFDW.gap) + 3, w, "PACKET BUILDER")
         y = note(fb, c, y, w, VFDLabCopy.builderIntro)
         y = typeSection(ctx, fb, L, m, c, y, w)
-        y = summaryCard(fb, m.summary, c, y + 2, w)
+        y = summaryCard(fb, m.summary, c, y + 2, w, hex: m.built)
         y = typeFields(ctx, fb, L, m, c, y, w)
         if LabPacketBuilder.framingApplies(m.state.type) {
             y = framingSection(ctx, fb, L, m, c, y, w)
@@ -1346,9 +1427,10 @@ extension VFDLabScreen {
     }
 
     /// LabPacketSummaryCard: a 1-cell box in the tone colour around YOU ARE BUILDING, the headline
-    /// (mid, tone), the colours, the details (wrapped at " · ") and the reject reason (alarm).
+    /// (mid, tone), the colours (after true-colour swatches of the colours of `hex`, the packet
+    /// the summary describes), the details (wrapped at " · ") and the reject reason (alarm).
     fileprivate static func summaryCard(_ fb: VFDFrameBuffer, _ s: LabPacketSummary, _ c: Int, _ top: Int,
-                                        _ w: Int) -> Int {
+                                        _ w: Int, hex: String) -> Int {
         var tone: UInt8 = VFDInk.highlight
         switch s.tone {
         case .known:
@@ -1376,7 +1458,8 @@ extension VFDLabScreen {
         }
         r -= 1
         if !s.colors.isEmpty {
-            fb.textFit(ic, r, VFDW.upper(s.colors), iw, .small, VFDInk.dim)
+            let swatches: [VFDRGB] = namedSwatches(hex, s.colors)
+            swatchNames(fb, ic, r, swatches, VFDW.upper(s.colors), ic + iw, VFDInk.dim)
             r += VFDW.line
         }
         let parts: [String] = s.details.map { (d: String) -> String in VFDW.upper(d) }
@@ -1847,8 +1930,16 @@ extension VFDLabScreen {
             y = linesBlock(fb, c, y, VFDLabText.wrapLines(text, w, maxLines: 2), VFDInk.highlight) - VFDW.gap
             let colours: String = classified.colors.trimmingCharacters(in: .whitespacesAndNewlines)
             if !colours.isEmpty {
-                let line: String = VFDText.fit("COLORS: " + VFDW.upper(classified.colors), w)
-                y = linesBlock(fb, c, y, [line], VFDInk.dim) - VFDW.gap
+                let swatches: [VFDRGB] = namedSwatches(m.state.hex, classified.colors)
+                if swatches.isEmpty {
+                    let line: String = VFDText.fit("COLORS: " + VFDW.upper(classified.colors), w)
+                    y = linesBlock(fb, c, y, [line], VFDInk.dim) - VFDW.gap
+                } else {
+                    // "COLORS:", the colours' true-colour swatches, then their names.
+                    let x0: Int = fb.text(c, y, "COLORS: ", .small, VFDInk.dim)
+                    swatchNames(fb, x0, y, swatches, VFDW.upper(classified.colors), c + w, VFDInk.dim)
+                    y += VFDW.line
+                }
             }
         } else {
             y = linesBlock(fb, c, y, ["Unclassified / raw payload"], VFDInk.dim) - VFDW.gap

@@ -9,7 +9,8 @@ import SwiftUI
 /// same "Delete auto rule?" question). The option pickers are VFD menus listing the same options
 /// (system + user presets + learned packets, + New Wand codes for responses); the rule name is a
 /// text prompt. The builder lives in this tab's UI state while the app runs (AutoScreen keeps it
-/// in @State). The standard AUTO screen has no colour content, so nothing here uses true colours.
+/// in @State). The only true colours are the picker rows' swatches of wand colour codes (Starlight
+/// colours, New Wand codes) in their glow colour; the pickers open at the field's current value.
 @MainActor
 enum VFDAutoScreen: VFDScreen {
     static let title: String = "AUTO"
@@ -392,21 +393,45 @@ extension VFDAutoScreen {
                 options = PacketPatterns.systemResponses
             }
         }
+        // The field's current value is the selected row, and the list opens at it.
+        let b: VFDAutoBuilder = builder(autoUI(ctx))
+        let currentId: String = trigger ? b.triggerId : b.pickResponseId
+        var selected: Int? = nil
         var items: [VFDMenuItem] = []
         items.reserveCapacity(options.count)
+        var row: Int = 0
         for option in options {
             let picked: PacketPattern = option
             let text: String = option.label.isEmpty ? option.id : option.label
-            items.append(VFDMenuItem(text, action: {
+            if selected == nil && option.id == currentId {
+                selected = row
+            }
+            items.append(VFDMenuItem(text, rgb: wandSwatch(option.defaultHex), action: {
                 if trigger {
                     VFDAutoScreen.pickTrigger(ctx, picked)
                 } else {
                     VFDAutoScreen.pickResponse(ctx, picked)
                 }
             }))
+            row += 1
         }
         let title: String = trigger ? "When I hear" : "Add response to stack"
-        ctx.menu(title: title, items: items)
+        ctx.menu(title: title, items: items, selected: selected)
+    }
+
+    /// The glow colour of an option that is one wand colour code (a Starlight colour or a New Wand
+    /// code), as the WAND tab shows it, for the option's menu swatch; nil for any other packet.
+    private static func wandSwatch(_ hex: String) -> VFDRGB? {
+        if hex.isEmpty { return nil }
+        let model: BandEffectModel = BandEffectModel.from(hex)
+        if model.kind != BandEffectModel.Kind.wand { return nil }
+        let upper: String = HexUtils.canonicalHex(hex).uppercased()
+        if upper.contains(NewWandCatalog.prefix) {
+            // NewWandCatalog's colour: the last byte's low 5 bits.
+            let value: Int = Int(String(upper.suffix(2)), radix: 16) ?? 0
+            return VFDColors.starlightGlow(value & 0x1F)
+        }
+        return VFDColors.starlightGlow(MagicClassifier.starlightColorIndex(hex))
     }
 
     private static func pickTrigger(_ ctx: VFDContext, _ option: PacketPattern) {

@@ -32,7 +32,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /** A clustered capture (receiver) location — where we were standing when we heard packets. */
-private data class CapturePoint(
+internal data class CapturePoint(
     val lat: Double,
     val lng: Double,
     val count: Int,
@@ -41,7 +41,7 @@ private data class CapturePoint(
 )
 
 /** An estimated transmitter position derived from RSSI-weighted observations of one MAC. */
-private data class TxEstimate(
+internal data class TxEstimate(
     val address: String,
     val lat: Double,
     val lng: Double,
@@ -51,7 +51,7 @@ private data class TxEstimate(
     val label: String,
 )
 
-private data class MapData(val captures: List<CapturePoint>, val transmitters: List<TxEstimate>)
+internal data class MapData(val captures: List<CapturePoint>, val transmitters: List<TxEstimate>)
 
 private enum class MapMode(val label: String) { CAPTURES("CAPTURES"), TRANSMITTERS("TRANSMITTERS"), BOTH("BOTH") }
 
@@ -260,7 +260,7 @@ private class TxAccum {
  * radius. Approximate — phone RSSI is noisy — but it points at the source. Streams the logs
  * in one pass with bounded memory so even a flood of pings can't stall or OOM the load.
  */
-private fun loadMapData(store: MagicStore): MapData {
+internal fun loadMapData(store: MagicStore): MapData {
     val captureAgg = HashMap<String, CapturePoint>()
     val byAddress = HashMap<String, TxAccum>()
 

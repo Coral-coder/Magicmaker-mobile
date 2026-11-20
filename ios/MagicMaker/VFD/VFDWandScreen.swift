@@ -198,12 +198,10 @@ enum VFDWandScreen: VFDScreen {
         return UserDefaults.standard.string(forKey: "wand_quick_label") ?? "OFF"
     }
 
-    /// Points to whole cells on this screen (wand.py _pt): pitch 5 px at 3x, 4 px at 2x.
-    fileprivate static func cells(_ points: Int) -> Int {
-        let scale: Double = VFDWandScale.current()
-        let pitch: Int = max(4, Int((5.0 * scale / 3.0).rounded()))
-        let px: Double = Double(points) * scale
-        return VFDMath.roundHalfEven(px / Double(pitch))
+    /// Points to whole cells on this screen (wand.py _pt) at the renderer's scale and pitch
+    /// (5 px at 3x, 4 px at 2x).
+    fileprivate static func cells(_ ctx: VFDContext, _ points: Int) -> Int {
+        return ctx.cells(points: Double(points))
     }
 
     // MARK: - Starlight
@@ -215,8 +213,8 @@ enum VFDWandScreen: VFDScreen {
         let L: VFDLayout = ctx.L
         let c: Int = L.left
         let w: Int = L.width
-        let pickTop: Int = bottom - VFDWandScreen.cells(8) - VFDWandScreen.pickH
-        let wandBottom: Int = pickTop - VFDWandScreen.cells(10)
+        let pickTop: Int = bottom - VFDWandScreen.cells(ctx, 8) - VFDWandScreen.pickH
+        let wandBottom: Int = pickTop - VFDWandScreen.cells(ctx, 10)
         let avail: Int = wandBottom - top
         if avail >= 24 {
             let H: Int = VFDWandArtCache.fit(avail)
@@ -312,7 +310,7 @@ enum VFDWandScreen: VFDScreen {
     fileprivate static func pickerRow(_ ctx: VFDContext, _ ui: VFDUIState, _ st: VFDWandState,
                                       _ fb: VFDFrameBuffer, _ c: Int, _ r: Int, _ w: Int) {
         let h: Int = VFDWandScreen.pickH
-        let sendW: Int = VFDWandScreen.cells(96)
+        let sendW: Int = VFDWandScreen.cells(ctx, 96)
         let gap: Int = 6
         let bw: Int = w - sendW - gap
         fb.box(c, r, bw, h, VFDInk.dim)
@@ -602,14 +600,11 @@ enum VFDWandScreen: VFDScreen {
         let hexDraft: String = vm.wandQuickHex
         ctx.prompt(title: "QUICK BUTTON", message: "Label", text: labelDraft, keyboard: .text,
                    onDone: { (label: String) in
-                       // The first alert must be gone before the second can show.
-                       Task { @MainActor in
-                           try? await Task.sleep(nanoseconds: 500_000_000)
-                           ctx.prompt(title: "QUICK BUTTON", message: "Hex (8301...)", text: hexDraft,
-                                      keyboard: .hex, onDone: { (hex: String) in
-                                          vm.setWandQuick(label: label, hex: hex)
-                                      })
-                       }
+                       // The renderer queues the second alert until the first has gone.
+                       ctx.prompt(title: "QUICK BUTTON", message: "Hex (8301...)", text: hexDraft,
+                                  keyboard: .hex, onDone: { (hex: String) in
+                                      vm.setWandQuick(label: label, hex: hex)
+                                  })
                    })
     }
 
@@ -703,34 +698,41 @@ enum VFDWandScreen: VFDScreen {
         VFDWandScreen.transmitColor(ctx, ui, entries[current.index])
     }
 
-    /// The picker's menu: every colour (name and code), then DELETE for the one shown.
+    /// The picker's menu: every colour (its glow swatch, name and code), opened at the colour
+    /// shown, then DELETE for that one (with its swatch too).
     fileprivate static func colorMenu(_ ctx: VFDContext, _ ui: VFDUIState) {
         let entries: [MagicPacket] = VFDWandScreen.library(ctx.store, newWand: false)
         let current = VFDWandScreen.picker(ctx, ui, entries)
-        // A menu row's label fits in the panel's button (content width - 12 cells).
-        let maxChars: Int = VFDText.maxChars(ctx.L.width - 12)
+        // A colour row's label starts after its swatch (content width - 25 cells of room).
+        let maxChars: Int = VFDText.maxChars(ctx.L.width - 25)
         var items: [VFDMenuItem] = []
         var i: Int = 0
         for packet in entries {
             let index: Int = i
-            let name: String = VFDW.upper(StarlightColors.nameFor(MagicClassifier.starlightColorIndex(packet.hex)))
+            let colorIndex: Int = MagicClassifier.starlightColorIndex(packet.hex)
+            let name: String = VFDW.upper(StarlightColors.nameFor(colorIndex))
             let prefix: String = name + "  ·  "
             let room: Int = maxChars - VFDText.length(prefix)
             let hexUpper: String = packet.hex.uppercased()
             let shownHex: String = room >= 8 ? VFDWandScreen.middle(hexUpper, chars: room) : hexUpper
-            items.append(VFDMenuItem(prefix + shownHex, action: {
+            let glow: VFDRGB = VFDColors.starlightGlow(colorIndex)
+            items.append(VFDMenuItem(prefix + shownHex, rgb: glow, action: {
                 VFDWandScreen.pick(ctx, ui, entries, index)
             }))
             i += 1
         }
+        var selected: Int? = nil
         if current.index >= 0 && current.index < entries.count {
+            selected = current.index
             let shown: MagicPacket = entries[current.index]
-            let shownName: String = StarlightColors.nameFor(MagicClassifier.starlightColorIndex(shown.hex))
-            items.append(VFDMenuItem("DELETE " + VFDW.upper(shownName), destructive: true, action: {
+            let shownIndex: Int = MagicClassifier.starlightColorIndex(shown.hex)
+            let shownName: String = StarlightColors.nameFor(shownIndex)
+            let shownGlow: VFDRGB = VFDColors.starlightGlow(shownIndex)
+            items.append(VFDMenuItem("DELETE " + VFDW.upper(shownName), destructive: true, rgb: shownGlow, action: {
                 VFDWandScreen.askDeleteColor(ctx, shown)
             }))
         }
-        ctx.menu(title: "WAND COLOR", items: items)
+        ctx.menu(title: "WAND COLOR", items: items, selected: selected)
     }
 
     /// Every learned Starlight packet the list shows as this colour.
@@ -844,26 +846,6 @@ private enum VFDWandNames {
         text = stored
         names = out
         return out
-    }
-}
-
-/// The screen's scale (2 or 3), from the window scene the app runs in.
-@MainActor
-private enum VFDWandScale {
-    static var known: Double = 0
-
-    static func current() -> Double {
-        if known > 0 { return known }
-        for scene in UIApplication.shared.connectedScenes {
-            if let windowScene = scene as? UIWindowScene {
-                let s: Double = Double(windowScene.screen.scale)
-                if s > 0 {
-                    known = s
-                    return s
-                }
-            }
-        }
-        return 3
     }
 }
 
