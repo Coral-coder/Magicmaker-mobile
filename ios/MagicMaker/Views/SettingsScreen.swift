@@ -58,6 +58,8 @@ struct SettingsScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
                 header
+                SettingsAppearanceSection()
+                    .padding(.top, 8)
                 transmissionSection
                 SettingsScanFilterSection(onChange: { on in scanFilterChanged(on) })
                     .padding(.top, 8)
@@ -354,6 +356,97 @@ struct SettingsScreen: View {
         } else {
             vm.noteRelaySettingPending("show_control_only")
         }
+    }
+}
+
+// MARK: - Appearance
+
+/// THEME (STANDARD / VFD) and, under the VFD theme, its BASE COLOUR: the six presets and CUSTOM
+/// with the system colour picker. Both themes read these from `VFDSettings`.
+private struct SettingsAppearanceSection: View {
+    @ObservedObject private var settings: VFDSettings = VFDSettings.shared
+
+    init() {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("APPEARANCE")
+                .font(MMTheme.techHeader())
+                .foregroundStyle(MMTheme.cyan)
+            Text("THEME")
+                .font(MMTheme.techLabel())
+                .foregroundStyle(MMTheme.textDim)
+            themePicker
+            if settings.theme == .vfd {
+                baseColourBlock
+                    .padding(.top, 4)
+            }
+        }
+    }
+
+    private var themePicker: some View {
+        Picker("THEME", selection: $settings.theme) {
+            ForEach(VFDTheme.allCases) { theme in
+                Text(theme.label).tag(theme)
+            }
+        }
+        .pickerStyle(.segmented)
+    }
+
+    private var baseColourBlock: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text("BASE COLOUR")
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(MMTheme.textDim)
+                Spacer(minLength: 4)
+                Text(settings.base.rgb.hex)
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(MMTheme.cyan)
+            }
+            LazyVGrid(columns: baseColumns, alignment: .leading, spacing: 4) {
+                ForEach(0..<VFDSettings.baseItems.count, id: \.self) { index in
+                    baseChip(index)
+                }
+            }
+            if settings.baseIsCustom {
+                VFDBaseColorPicker(title: "CUSTOM COLOUR")
+                    .padding(.top, 2)
+            }
+        }
+    }
+
+    private var baseColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 4), count: 4)
+    }
+
+    private func baseChip(_ index: Int) -> some View {
+        let items: [String] = VFDSettings.baseItems
+        let name: String = index >= 0 && index < items.count ? items[index] : ""
+        let selected: Bool = settings.baseIndex == index
+        let swatch: Color = VFDSettings.color(settings.itemRGB(index))
+        let lineColor: Color = selected ? MMTheme.cyan : MMTheme.panelLine
+        let traits: AccessibilityTraits = selected ? .isSelected : []
+        return Button {
+            settings.selectBase(index: index)
+        } label: {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(swatch)
+                    .frame(width: 10, height: 10)
+                Text(name)
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(selected ? MMTheme.cyan : MMTheme.textDim)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 28)
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(lineColor, lineWidth: 0.5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(traits)
     }
 }
 

@@ -9,13 +9,10 @@ struct BandPreviewView: View {
     var compact: Bool = false
     var title: String = "BAND PREVIEW"
 
-    private let period: Double = 2.4
-    private let z3 = 2   // centre zone index
-
     var body: some View {
         let model = BandEffectModel.from(hex)
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-            let t = (context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period)) / period
+            let t = BandLedAnimation.phase(context.date.timeIntervalSinceReferenceDate)
             HStack(spacing: 12) {
                 Canvas { ctx, size in
                     let w = min(size.width, size.height)
@@ -37,8 +34,9 @@ struct BandPreviewView: View {
                         CGPoint(x: face.maxX - inset, y: face.maxY - inset),
                     ]
                     for (z, p) in points.enumerated() {
-                        let c = ledColor(model, z, t) ?? dim
-                        if c != dim {
+                        let lit: Color? = BandLedAnimation.color(model, zone: z, phase: t)?.color
+                        let c = lit ?? dim
+                        if lit != nil {
                             ctx.fill(Path(ellipseIn: CGRect(x: p.x - ledR * 2.2, y: p.y - ledR * 2.2, width: ledR * 4.4, height: ledR * 4.4)), with: .color(c.opacity(0.30)))
                         }
                         ctx.fill(Path(ellipseIn: CGRect(x: p.x - ledR, y: p.y - ledR, width: ledR * 2, height: ledR * 2)), with: .color(c))
@@ -63,7 +61,7 @@ struct BandPreviewView: View {
                             .truncationMode(.middle)
                     } else {
                     Text(title).font(MMTheme.techLabel(9)).foregroundStyle(MMTheme.textDim)
-                    Text(model.kind == .none ? "NO EFFECT" : kindName(model.kind))
+                    Text(model.kind == .none ? "NO EFFECT" : BandLedAnimation.kindName(model.kind))
                         .font(MMTheme.techHeader())
                         .foregroundStyle(model.kind == .none ? MMTheme.textDim : MMTheme.cyan)
                     Text(model.note.uppercased() + (model.approximate ? " · APPROX." : ""))
@@ -76,7 +74,7 @@ struct BandPreviewView: View {
                     }
                     if model.buzz > 0 {
                         let name = LabPacketBuilder.vibrationPatterns.first { $0.id == model.buzz }?.label ?? "#\(model.buzz)"
-                        let on = (t * 6).truncatingRemainder(dividingBy: 1) < 0.5
+                        let on = BandLedAnimation.buzzOn(phase: t)
                         Text("BUZZ · \(name.uppercased())")
                             .font(MMTheme.techLabel(9))
                             .foregroundStyle(on ? MMTheme.cyan : MMTheme.cyanDim)
@@ -90,8 +88,82 @@ struct BandPreviewView: View {
         }
         .background(MMTheme.navy)
     }
+}
 
-    private func kindName(_ k: BandEffectModel.Kind) -> String {
+// MARK: - Band LED animation (shared with the VFD theme)
+
+/// One band LED's colour as the band preview draws it: sRGB channels 0...1 and an opacity over the
+/// dark band face. `color` is what `BandPreviewView` paints; `composited(over:_:_:)` gives the solid
+/// colour it shows as over a background, which is what the VFD theme lights its cells in.
+struct BandLedColor: Equatable {
+    var red: Double
+    var green: Double
+    var blue: Double
+    var opacity: Double
+
+    init(red: Double, green: Double, blue: Double, opacity: Double = 1.0) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+    }
+
+    /// Starlight palette colour `index` (low 5 bits), opaque.
+    static func palette(_ index: Int) -> BandLedColor {
+        let c = starlightGlowRGB(index)
+        return BandLedColor(red: c.red, green: c.green, blue: c.blue)
+    }
+
+    static let white = BandLedColor(red: 1, green: 1, blue: 1)
+
+    /// This colour with its opacity multiplied by `amount` (SwiftUI `Color.opacity`).
+    func opacity(_ amount: Double) -> BandLedColor {
+        return BandLedColor(red: red, green: green, blue: blue, opacity: opacity * amount)
+    }
+
+    var color: Color {
+        let solid = Color(red: red, green: green, blue: blue)
+        return opacity >= 1.0 ? solid : solid.opacity(opacity)
+    }
+
+    /// The solid colour this LED shows as over the background (red, green, blue in 0...1).
+    func composited(over bgRed: Double, _ bgGreen: Double, _ bgBlue: Double) -> (red: Double, green: Double, blue: Double) {
+        let a: Double = min(max(opacity, 0.0), 1.0)
+        let r: Double = red * a + bgRed * (1.0 - a)
+        let g: Double = green * a + bgGreen * (1.0 - a)
+        let b: Double = blue * a + bgBlue * (1.0 - a)
+        return (red: r, green: g, blue: b)
+    }
+
+    /// Straight per-channel mix from a to b (opaque), as the preview's crossfades blend.
+    static func blend(_ a: BandLedColor, _ b: BandLedColor, _ f: Double) -> BandLedColor {
+        let r: Double = a.red + (b.red - a.red) * f
+        let g: Double = a.green + (b.green - a.green) * f
+        let bl: Double = a.blue + (b.blue - a.blue) * f
+        return BandLedColor(red: r, green: g, blue: bl)
+    }
+}
+
+/// The band preview's animation: a 2.4 s loop over the five zones of a decoded `BandEffectModel`.
+/// `BandPreviewView` and the VFD theme (band preview, SCAN's LAST LIGHTS strip) both draw from it.
+enum BandLedAnimation {
+    /// Seconds per loop.
+    static let period: Double = 2.4
+    /// Zone index of the centre LED (Z3).
+    static let centreZone: Int = 2
+
+    /// Loop phase 0..<1 at `seconds` since the reference date.
+    static func phase(_ seconds: Double) -> Double {
+        return seconds.truncatingRemainder(dividingBy: period) / period
+    }
+
+    /// The BUZZ line blinks at 6 per loop: true in the bright half.
+    static func buzzOn(phase t: Double) -> Bool {
+        return (t * 6).truncatingRemainder(dividingBy: 1) < 0.5
+    }
+
+    /// The effect name the preview shows for a kind.
+    static func kindName(_ k: BandEffectModel.Kind) -> String {
         switch k {
         case .pulseBurst: return "PULSE BURST"
         case .repeatFade: return "REPEAT FADE"
@@ -100,103 +172,111 @@ struct BandPreviewView: View {
         }
     }
 
-    /// Colour of zone `z` (0..4 = Z1..Z5) at phase `t` in 0..1, or nil for off.
-    private func ledColor(_ m: BandEffectModel, _ z: Int, _ t: Double) -> Color? {
-        func pal(_ idx: Int?) -> Color? { idx.map { starlightGlowColor($0) } }
-        let rest = pal(m.perLed.indices.contains(z) ? m.perLed[z] : nil)
-        let breathe = 0.75 + 0.25 * sin(2 * Double.pi * t)
+    /// Colour of zone `z` (0...4 = Z1...Z5) at phase `t` in 0..<1, or nil for off.
+    static func color(_ m: BandEffectModel, zone z: Int, phase t: Double) -> BandLedColor? {
+        func pal(_ idx: Int?) -> BandLedColor? {
+            guard let i = idx else { return nil }
+            return BandLedColor.palette(i)
+        }
+        func led(_ i: Int) -> Int? {
+            return (i >= 0 && i < m.perLed.count) ? m.perLed[i] : nil
+        }
+        let z3: Int = centreZone
+        let rest: BandLedColor? = pal(led(z))
+        let breathe: Double = 0.75 + 0.25 * sin(2 * Double.pi * t)
         switch m.kind {
-        case .none, .ping: return nil
-        case .single, .wand: return rest?.opacity(breathe)
-        case .dual: return rest
+        case .none, .ping:
+            return nil
+        case .single, .wand:
+            return rest?.opacity(breathe)
+        case .dual:
+            return rest
         case .toggle:
-            let a = m.perLed.compactMap { $0 }.first
-            let b = m.perLed.compactMap { $0 }.first { $0 != a } ?? a
+            let lit: [Int] = m.perLed.compactMap { $0 }
+            let a: Int? = lit.first
+            let b: Int? = lit.first(where: { $0 != a }) ?? a
             return pal((t * 4).truncatingRemainder(dividingBy: 1) < 0.5 ? a : b)
         case .rainbow:
             if m.note.contains("cycle"), m.perLed.allSatisfy({ $0 != nil }) {
-                let shift = Int(t * 5)
-                return pal(m.perLed[(z + shift) % 5])
+                let shift: Int = Int(t * 5)
+                return pal(led((z + shift) % 5))
             }
             return rest
         case .rotate:
-            let order = [1, 2, 3, 4, 0]
-            let pos = order.firstIndex(of: z) ?? 0
-            let step = Int(t * 10)
-            return pal(m.perLed[order[(pos + step) % 5]])
+            let order: [Int] = [1, 2, 3, 4, 0]
+            let pos: Int = order.firstIndex(of: z) ?? 0
+            let step: Int = Int(t * 10)
+            return pal(led(order[(pos + step) % 5]))
         case .crossfade:
             guard let a = pal(m.colors.first) else { return nil }
-            let b = pal(m.colors.count > 1 ? m.colors[1] : m.colors[0]) ?? a
-            let f = 0.5 - 0.5 * cos(2 * Double.pi * t)
-            return z == z3 ? blend(b, a, f) : blend(a, b, f)
+            let second: Int? = m.colors.count > 1 ? m.colors[1] : m.colors.first
+            let b: BandLedColor = pal(second) ?? a
+            let f: Double = 0.5 - 0.5 * cos(2 * Double.pi * t)
+            return z == z3 ? BandLedColor.blend(b, a, f) : BandLedColor.blend(a, b, f)
         case .pulseBurst:
-            let pos = (t * 2.4).truncatingRemainder(dividingBy: 1.5)
+            let pos: Double = (t * 2.4).truncatingRemainder(dividingBy: 1.5)
             if pos >= 1 { return rest?.opacity(0.05) }
-            let sub = pos.truncatingRemainder(dividingBy: 0.5)
-            let bright = sub < 0.25 ? sub / 0.25 : 1 - (sub - 0.25) / 0.25
+            let sub: Double = pos.truncatingRemainder(dividingBy: 0.5)
+            let bright: Double = sub < 0.25 ? sub / 0.25 : 1 - (sub - 0.25) / 0.25
             return rest?.opacity(0.1 + 0.9 * bright)
         case .circle:
             if z == z3 { return rest?.opacity(0.15) }
-            let corners = [0, 1, 3, 4]
-            let pos = corners.firstIndex(of: z) ?? 0
-            let head = Int(t * 8) % 4
-            let d = (pos - head + 4) % 4
-            let base = rest ?? starlightGlowColor(0x19)
+            let corners: [Int] = [0, 1, 3, 4]
+            let pos: Int = corners.firstIndex(of: z) ?? 0
+            let head: Int = Int(t * 8) % 4
+            let d: Int = (pos - head + 4) % 4
+            let base: BandLedColor = rest ?? BandLedColor.palette(0x19)
             return (d == 0 || d == 2) ? base : base.opacity(0.3)
         case .twinkle:
-            let r = sin(Double(z) * 12.9898 + t * 40) * 43758.5453
-            let v = r - floor(r)
+            let r: Double = sin(Double(z) * 12.9898 + t * 40) * 43758.5453
+            let v: Double = r - floor(r)
             return v > 0.6 ? rest : rest?.opacity(0.12)
         case .alternate:
             if z == z3 { return rest }
-            let half = (t * 2.4).truncatingRemainder(dividingBy: 1) < 0.5
-            let isA = z == 0 || z == 3
+            let half: Bool = (t * 2.4).truncatingRemainder(dividingBy: 1) < 0.5
+            let isA: Bool = z == 0 || z == 3
             return isA == half ? rest : rest?.opacity(0.08)
         case .repeatFade:
-            let pos = (t * 2.4).truncatingRemainder(dividingBy: 1.25)
-            let bright = pos < 1 ? 1 - pos : 0
+            let pos: Double = (t * 2.4).truncatingRemainder(dividingBy: 1.25)
+            let bright: Double = pos < 1 ? 1 - pos : 0
             return rest?.opacity(0.05 + 0.95 * bright)
         case .lightning:
-            let phase = (t * 3).truncatingRemainder(dividingBy: 1)
-            return (phase < 0.08 || (phase > 0.16 && phase < 0.22)) ? .white : Color.white.opacity(0.15)
+            let phase: Double = (t * 3).truncatingRemainder(dividingBy: 1)
+            let flash: Bool = phase < 0.08 || (phase > 0.16 && phase < 0.22)
+            return flash ? BandLedColor.white : BandLedColor.white.opacity(0.15)
         case .strobe:
-            let pos = (t * 5).truncatingRemainder(dividingBy: 5)
-            if pos < 0.5 { return starlightGlowColor(0x11) }
-            if pos < 1 { return starlightGlowColor(0x13) }
-            return starlightGlowColor(0x13).opacity(0.05)
+            let pos: Double = (t * 5).truncatingRemainder(dividingBy: 5)
+            if pos < 0.5 { return BandLedColor.palette(0x11) }
+            if pos < 1 { return BandLedColor.palette(0x13) }
+            return BandLedColor.palette(0x13).opacity(0.05)
         case .stepper:
             guard !m.colors.isEmpty else { return rest }
-            let step = (Int(t * 4.8) + z) % m.colors.count
+            let step: Int = (Int(t * 4.8) + z) % m.colors.count
             return pal(m.colors[step])
         case .rgb:
-            let v = m.rgb ?? 0x9E9E9E
-            return Color(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255).opacity(breathe)
+            let v: Int = m.rgb ?? 0x9E9E9E
+            let r: Double = Double((v >> 16) & 0xFF) / 255
+            let g: Double = Double((v >> 8) & 0xFF) / 255
+            let b: Double = Double(v & 0xFF) / 255
+            return BandLedColor(red: r, green: g, blue: b).opacity(breathe)
         case .flicker:
-            let r = sin(Double(z + 1) * 78.233 + Double(Int(t * 40)) * 12.9898) * 43758.5453
+            let r: Double = sin(Double(z + 1) * 78.233 + Double(Int(t * 40)) * 12.9898) * 43758.5453
             return rest?.opacity(0.25 + 0.75 * (r - floor(r)))
         case .centrePulse:
             if z != z3 { return rest?.opacity(0.35) }
             return rest?.opacity(0.2 + 0.8 * (0.5 + 0.5 * sin(2 * Double.pi * t)))
         case .comet:
             if z == z3 { return rest?.opacity(0.12) }
-            let corners = [0, 1, 3, 4]
-            let d = ((corners.firstIndex(of: z) ?? 0) - Int(t * 8) % 4 + 4) % 4
-            return d == 0 ? rest : (d == 3 ? rest?.opacity(0.45) : rest?.opacity(0.08))
+            let corners: [Int] = [0, 1, 3, 4]
+            let d: Int = ((corners.firstIndex(of: z) ?? 0) - Int(t * 8) % 4 + 4) % 4
+            if d == 0 { return rest }
+            return d == 3 ? rest?.opacity(0.45) : rest?.opacity(0.08)
         case .complex:
-            let v = 0.5 + 0.5 * sin(2 * Double.pi * t + Double(z) * 1.3)
-            let a = m.colors.first.map { starlightGlowColor($0) } ?? rest ?? starlightGlowColor(0x15)
-            let b = m.colors.count > 1 ? starlightGlowColor(m.colors[1]) : starlightGlowColor(0x0F)
-            return blend(a, b, v)
+            let v: Double = 0.5 + 0.5 * sin(2 * Double.pi * t + Double(z) * 1.3)
+            let first: BandLedColor? = m.colors.first.map { BandLedColor.palette($0) }
+            let a: BandLedColor = first ?? rest ?? BandLedColor.palette(0x15)
+            let b: BandLedColor = m.colors.count > 1 ? BandLedColor.palette(m.colors[1]) : BandLedColor.palette(0x0F)
+            return BandLedColor.blend(a, b, v)
         }
-    }
-
-    private func blend(_ a: Color, _ b: Color, _ f: Double) -> Color {
-        let ua = UIColor(a), ub = UIColor(b)
-        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
-        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
-        ua.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
-        ub.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
-        let k = CGFloat(f)
-        return Color(red: r1 + (r2 - r1) * k, green: g1 + (g2 - g1) * k, blue: b1 + (b2 - b1) * k)
     }
 }

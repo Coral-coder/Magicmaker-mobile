@@ -3,27 +3,33 @@ import SwiftUI
 private let defaultGlowIndex = 0x1B
 private let wandAspect: CGFloat = 600.0 / 750.0
 private let upperGlowFraction: CGFloat = 0.94
-private let starlightOrange = Color(red: 1, green: 0.6, blue: 0)
 
-func starlightGlowColor(_ index: Int) -> Color {
+/// The wand glow colour of starlight palette index `index` (its low 5 bits) as sRGB channels 0...1.
+/// `starlightGlowColor` draws it; the VFD theme lights cells in it (`VFDColors.starlightGlow`).
+func starlightGlowRGB(_ index: Int) -> (red: Double, green: Double, blue: Double) {
     let i = index & 0x1F
     switch i {
-    case 0x00, 0x16, 0x17, 0x18: return Color(red: 0, green: 0.9, blue: 1)
-    case 0x01, 0x05, 0x07: return Color(red: 0.73, green: 0.53, blue: 0.99)
-    case 0x02, 0x03, 0x04: return Color(red: 0.27, green: 0.54, blue: 1)
-    case 0x06: return Color(red: 0.88, green: 0.75, blue: 0.91)
-    case 0x08...0x0E: return Color(red: 1, green: 0.25, blue: 0.51)
-    case 0x0F, 0x11: return Color(red: 1, green: 0.67, blue: 0.25)
-    case 0x10: return Color(red: 1, green: 0.96, blue: 0.62)
-    case 0x12, 0x1A: return Color(red: 0.8, green: 1, blue: 0.56)
-    case 0x13, 0x14: return starlightOrange
-    case 0x15: return Color(red: 1, green: 0.32, blue: 0.32)
-    case 0x19: return Color(red: 0.41, green: 0.94, blue: 0.68)
-    case 0x1B, 0x1C: return Color(red: 0.82, green: 0.94, blue: 1)
-    case 0x1D: return Color(red: 0.31, green: 0.31, blue: 0.31)
-    case 0x1E: return Color(red: 0.81, green: 0.58, blue: 0.85)
-    default: return Color(red: 0.7, green: 0.53, blue: 1)
+    case 0x00, 0x16, 0x17, 0x18: return (red: 0, green: 0.9, blue: 1)
+    case 0x01, 0x05, 0x07: return (red: 0.73, green: 0.53, blue: 0.99)
+    case 0x02, 0x03, 0x04: return (red: 0.27, green: 0.54, blue: 1)
+    case 0x06: return (red: 0.88, green: 0.75, blue: 0.91)
+    case 0x08...0x0E: return (red: 1, green: 0.25, blue: 0.51)
+    case 0x0F, 0x11: return (red: 1, green: 0.67, blue: 0.25)
+    case 0x10: return (red: 1, green: 0.96, blue: 0.62)
+    case 0x12, 0x1A: return (red: 0.8, green: 1, blue: 0.56)
+    case 0x13, 0x14: return (red: 1, green: 0.6, blue: 0)
+    case 0x15: return (red: 1, green: 0.32, blue: 0.32)
+    case 0x19: return (red: 0.41, green: 0.94, blue: 0.68)
+    case 0x1B, 0x1C: return (red: 0.82, green: 0.94, blue: 1)
+    case 0x1D: return (red: 0.31, green: 0.31, blue: 0.31)
+    case 0x1E: return (red: 0.81, green: 0.58, blue: 0.85)
+    default: return (red: 0.7, green: 0.53, blue: 1)
     }
+}
+
+func starlightGlowColor(_ index: Int) -> Color {
+    let c = starlightGlowRGB(index)
+    return Color(red: c.red, green: c.green, blue: c.blue)
 }
 
 private struct WandGlowEnvelope {

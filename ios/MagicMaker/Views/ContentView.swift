@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The ten tabs, in Android's order (`AppTab` in `MagicMakerScreens.kt`). LINK is the iPhone side
 /// of Android's RELAY tab. The raw values are the ids `AppViewModel.requestedTab` uses
-/// (`AppViewModel.labTabId` is "lab").
-private enum MainTab: String, CaseIterable, Identifiable {
+/// (`AppViewModel.labTabId` is "lab"). Shared with the VFD theme, whose tab bar uses the same keys.
+enum MainTab: String, CaseIterable, Identifiable {
     case scan, tx, wand, auto, link, logs, map, diag, lab, settings
 
     var id: String { rawValue }
@@ -42,7 +42,9 @@ private enum MainTab: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject var vm: AppViewModel
-    /// Opens like Android, on SCAN.
+    /// The theme: the standard screens below, or the VFD display.
+    @ObservedObject private var vfdSettings: VFDSettings = VFDSettings.shared
+    /// Opens like Android, on SCAN. Both themes show and change this tab.
     @State private var tab: MainTab = .scan
 
     /// The relay link and status poll. Kept here, not built in `body`, so a redraw does not
@@ -50,19 +52,8 @@ struct ContentView: View {
     private let relayPoll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(spacing: 0) {
-            TelemetryBar()
-            tabContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .background(MMTheme.navy)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            MMScrollTabBar(
-                selection: $tab,
-                tabs: MainTab.allCases,
-                title: { $0.title },
-                icon: { $0.icon }
-            )
+        ZStack {
+            themedContent
         }
         .onAppear {
             startRelayLink()
@@ -82,6 +73,34 @@ struct ContentView: View {
         }
         .onChange(of: vm.requestedTab) { _, requested in
             followRequestedTab(requested)
+        }
+    }
+
+    /// Only the content changes with the theme; the relay poll and the hooks above stay.
+    @ViewBuilder
+    private var themedContent: some View {
+        if vfdSettings.theme == .vfd {
+            VFDRootView(tab: $tab)
+                .preferredColorScheme(.dark)
+        } else {
+            standardContent
+        }
+    }
+
+    private var standardContent: some View {
+        VStack(spacing: 0) {
+            TelemetryBar()
+            tabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(MMTheme.navy)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            MMScrollTabBar(
+                selection: $tab,
+                tabs: MainTab.allCases,
+                title: { $0.title },
+                icon: { $0.icon }
+            )
         }
     }
 

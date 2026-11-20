@@ -13,6 +13,9 @@ Coordinates
 Colours
     The buffer only holds palette indices: 0 UNLIT, 1 HIGHLIGHT, 2 TEXT, 3 DIM, 4 ALARM.
     palette_for(base) turns them into RGB at render time, so a base-colour change is a palette swap.
+    Indices 5..255 are true colours for colour content (band LEDs, wand glow, colour swatches):
+    fb.rgb((r, g, b)) allocates one for the current frame (fb.true_colors, deduplicated, reset by
+    clear()); every primitive accepts it like an ink. Text and chrome never use true colours.
 
 Drawing state (FrameBuffer)
     A clip-rectangle stack plus a vertical origin offset. push_clip(c, r, w, h, dy=0) intersects the
@@ -45,6 +48,8 @@ import sys
 
 UNLIT, HIGHLIGHT, TEXT, DIM, ALARM = 0, 1, 2, 3, 4
 NUM_COLORS = 5
+FIRST_TRUE_COLOR = NUM_COLORS      # fb.rgb() hands out indices FIRST_TRUE_COLOR .. 255
+MAX_TRUE_COLORS = 256 - FIRST_TRUE_COLOR
 
 BACKGROUND_RGB = (0x00, 0x00, 0x00)
 UNLIT_RGB = (0x09, 0x09, 0x09)
@@ -342,6 +347,8 @@ class FrameBuffer:
         self.rows = rows
         self.cells = bytearray(cols * rows)
         self.taps = []                         # (c, r, w, h, name) in screen cells, last = topmost
+        self.scroll_regions = []               # (id, c, r, w, h, content_rows) in screen cells
+        self.true_colors = []                  # RGB of index FIRST_TRUE_COLOR + i, this frame only
         self.alarm_inverted = alarm_inverted   # set from vfd.alarm_inverted(base); used by alarm()
         self._clip = (0, 0, cols, rows)        # screen cells: c0, r0, c1, r1 (c1/r1 exclusive)
         self._oy = 0                           # vertical origin offset added to every row
@@ -388,10 +395,13 @@ class FrameBuffer:
             self.pop_clip()
 
     def clear(self, color=UNLIT):
-        """Set every cell to color (ignores the clip) and forget all tap rectangles."""
+        """Set every cell to color (ignores the clip) and forget all tap rectangles, scroll regions
+        and true colours."""
         self._check(color)
         self.cells[:] = bytes([color]) * (self.cols * self.rows)
         self.taps = []
+        self.scroll_regions = []
+        self.true_colors = []
 
     def get(self, c, r):
         """Palette index at screen cell (c, r), ignoring clip and origin; 0 outside the buffer."""
@@ -399,10 +409,35 @@ class FrameBuffer:
             return self.cells[r * self.cols + c]
         return UNLIT
 
-    @staticmethod
-    def _check(color):
-        if not (isinstance(color, int) and 0 <= color < NUM_COLORS):
-            raise ValueError("color must be a palette index 0..%d, got %r" % (NUM_COLORS - 1, color))
+    def _check(self, color):
+        top = NUM_COLORS + len(self.true_colors)
+        if not (isinstance(color, int) and 0 <= color < top):
+            raise ValueError("color must be a palette index 0..%d, got %r" % (top - 1, color))
+
+    # --- true colours ---------------------------------------------------------------------------
+
+    def rgb(self, rgb):
+        """Cell index for a true colour (r, g, b) (0..255 each, or '#RRGGBB') in this frame:
+        FIRST_TRUE_COLOR + its position in fb.true_colors. The same colour gets the same index; once
+        all MAX_TRUE_COLORS slots are used, the nearest colour already in the table (smallest squared
+        RGB distance, the first one on a tie) is returned instead."""
+        if isinstance(rgb, str):
+            _, rgb = _resolve_base(rgb if rgb.startswith("#") else "#" + rgb)
+        key = tuple(_clamp(int(v), 0, 255) for v in rgb)
+        if len(key) != 3:
+            raise ValueError("true colour must be (r, g, b), got %r" % (rgb,))
+        for i, have in enumerate(self.true_colors):
+            if have == key:
+                return FIRST_TRUE_COLOR + i
+        if len(self.true_colors) < MAX_TRUE_COLORS:
+            self.true_colors.append(key)
+            return FIRST_TRUE_COLOR + len(self.true_colors) - 1
+        best, best_d = 0, None
+        for i, (r, g, b) in enumerate(self.true_colors):
+            d = (r - key[0]) ** 2 + (g - key[1]) ** 2 + (b - key[2]) ** 2
+            if best_d is None or d < best_d:
+                best, best_d = i, d
+        return FIRST_TRUE_COLOR + best
 
     # --- primitives -----------------------------------------------------------------------------
 
@@ -626,6 +661,24 @@ class FrameBuffer:
                 return name
         return None
 
+    def scroll_region(self, region_id, c, r, w, h, content_rows):
+        """Record a sub-area that scrolls on its own (a list under pinned rows): drags that start
+        inside it scroll it instead of the page. Drawing coordinates, clipped like tap(); content_rows
+        is the height of everything it scrolls. Later regions are on top. Not drawn."""
+        r += self._oy
+        c0, r0, c1, r1 = self._clip
+        ca, cb = max(c, c0), min(c + w, c1)
+        ra, rb = max(r, r0), min(r + h, r1)
+        if ca < cb and ra < rb:
+            self.scroll_regions.append((region_id, ca, ra, cb - ca, rb - ra, content_rows))
+
+    def scroll_region_at(self, c, r):
+        """Id of the topmost scroll region containing screen cell (c, r), or None."""
+        for rid, tc, tr, tw, th, _ in reversed(self.scroll_regions):
+            if tc <= c < tc + tw and tr <= r < tr + th:
+                return rid
+        return None
+
     # --- debugging ------------------------------------------------------------------------------
 
     def ascii(self, c=0, r=0, w=None, h=None):
@@ -666,36 +719,36 @@ def _resample(values, w):
 
 def render_image(fb, device, base="AMBER"):
     """The frame buffer as a PIL RGB image of device.px_w x device.px_h: pure black canvas, each
-    cell a (pitch-1) x (pitch-1) square at (c*pitch, r*pitch), unlit #090909, lit = palette colour;
-    leftover pixels at the right/bottom edges stay black."""
+    cell a (pitch-1) x (pitch-1) square at (c*pitch, r*pitch), unlit #090909, lit = palette colour
+    (indices 0..4) or true colour (fb.true_colors from index 5); leftover pixels at the right/bottom
+    edges stay black."""
     from PIL import Image, ImageDraw
 
     p = device.pitch
     if p < 2:
         raise ValueError("pitch must be >= 2 (1 px gap)")
-    pal = palette_for(base)
+    pal = palette_for(base) + list(getattr(fb, "true_colors", []))
     flat = []
-    for rgb in pal:
+    for rgb in pal[:256]:
         flat.extend(rgb)
-    gap = len(pal)                  # extra palette entry for the black gap
-    flat.extend(BACKGROUND_RGB)
     flat.extend([0] * (768 - len(flat)))
 
     cells = Image.frombytes("P", (fb.cols, fb.rows), bytes(fb.cells))
     nearest = getattr(Image, "Resampling", Image).NEAREST
     big = cells.resize((fb.cols * p, fb.rows * p), nearest)
-    draw = ImageDraw.Draw(big)
-    bw, bh = big.size
+    big.putpalette(flat)
+    big = big.convert("RGB")
+    draw = ImageDraw.Draw(big)          # the 1 px black gaps, drawn after the palette lookup so
+    bw, bh = big.size                   # all 256 indices stay free for cells
     for c in range(fb.cols):
         x = c * p + p - 1
-        draw.line([(x, 0), (x, bh - 1)], fill=gap)
+        draw.line([(x, 0), (x, bh - 1)], fill=BACKGROUND_RGB)
     for r in range(fb.rows):
         y = r * p + p - 1
-        draw.line([(0, y), (bw - 1, y)], fill=gap)
-    big.putpalette(flat)
+        draw.line([(0, y), (bw - 1, y)], fill=BACKGROUND_RGB)
 
     canvas = Image.new("RGB", (device.px_w, device.px_h), BACKGROUND_RGB)
-    canvas.paste(big.convert("RGB").crop((0, 0, min(bw, device.px_w), min(bh, device.px_h))), (0, 0))
+    canvas.paste(big.crop((0, 0, min(bw, device.px_w), min(bh, device.px_h))), (0, 0))
     return canvas
 
 

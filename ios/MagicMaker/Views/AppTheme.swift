@@ -99,15 +99,22 @@ struct TelemetryBar: View {
         .background(MMTheme.navy)
     }
 
+    private var line: String {
+        TelemetryBar.telemetryLine(vm: vm, scan: scan, tx: tx)
+    }
+
     /// BLE:OFF while Bluetooth is not ready, BLE:SCAN while scanning, otherwise BLE:LINK.
-    private var radioToken: String {
+    @MainActor
+    private static func radioToken(scan: ScanEngine) -> String {
         if scan.bluetoothStatus != "Bluetooth ready" { return "BLE:OFF" }
         if scan.scanActive { return "BLE:SCAN" }
         return "BLE:LINK"
     }
 
-    private var line: String {
-        var text: String = "MM/RF " + radioToken
+    /// The telemetry line for the app state. The VFD theme draws the same text in its header.
+    @MainActor
+    static func telemetryLine(vm: AppViewModel, scan: ScanEngine, tx: TxEngine) -> String {
+        var text: String = "MM/RF " + radioToken(scan: scan)
         text += " | RX:\(scan.packetsHeard)"
         text += " | TX-AUTO:\(scan.autoResponsesSent)"
         if scan.scanActive { text += " | SCAN:ON" }

@@ -7,6 +7,22 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		4B287684E7BD9826D90D0DF5 /* VFDWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 173EF2B7EC427BE8752B80FF /* VFDWidgets.swift */; };
+		39CE5C30DBD413C7BBFDB9BF /* VFDWandScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB45CDB7E17141645CC418 /* VFDWandScreen.swift */; };
+		9D3E38C9A205D22DB5237E64 /* VFDTxScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 671BFCC7A3652D02E5C373B1 /* VFDTxScreen.swift */; };
+		81E628F4E74A053DCE18C5A2 /* VFDSettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D12D856D4474C999D7FDE95B /* VFDSettingsScreen.swift */; };
+		7403D98A1F2B7CA65736AE00 /* VFDSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13818B66ABB361CB9B13B4DE /* VFDSettings.swift */; };
+		D0F34695F7A115FC266D85E3 /* VFDScanScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64DAFF57A27110A3D4A4BBDA /* VFDScanScreen.swift */; };
+		58C5B22DA9F32A9AAC3F912C /* VFDRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92C3A6726F87DC5F0C396DD3 /* VFDRootView.swift */; };
+		1DD09C9F5B21F4435D086B0F /* VFDMapScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D697F6CB0BFBEE1D12539E8 /* VFDMapScreen.swift */; };
+		BCBA83577D24959550271AAF /* VFDLogsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8B02F43FBB51A2042045689 /* VFDLogsScreen.swift */; };
+		35719E4E6B6481B3FC4A5D84 /* VFDLinkScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13E88235F4CFF34F03E81FB /* VFDLinkScreen.swift */; };
+		DCE34BA9A1E00AF413CFC21D /* VFDLabScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5889C9018B05AB443A7B32 /* VFDLabScreen.swift */; };
+		17304EC4E55EC4E68841B875 /* VFDGlyphs.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8E9EF38E0FC3C933DE17178 /* VFDGlyphs.swift */; };
+		907D372C98C9EFF8D61B814D /* VFDDiagScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6743E0B00C7A0E4EDD438287 /* VFDDiagScreen.swift */; };
+		1221D7B517FB7C88FA5FB1B8 /* VFDCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7D3F7FCC2CF2A6D8227803F /* VFDCore.swift */; };
+		93A0AF01AB17F185F8A1818F /* VFDContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C1D9ECD19FD3AF4B05ECE57 /* VFDContext.swift */; };
+		2465FE6366517C2865DBF37A /* VFDAutoScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E05852F20FFF48F6E50703BE /* VFDAutoScreen.swift */; };
 		1318D50336B52BF2B7CA0F0B /* MapMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EF965165682BF3E7A56E44D /* MapMath.swift */; };
 		4507810A1CA1E0D1B5503C54 /* LogAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = 899C5DB75C5AE4881E523D65 /* LogAnalysis.swift */; };
 		0441246529914B34B0A886CE /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE8BBC1022B0D23830E9274C /* SettingsScreen.swift */; };
@@ -64,6 +80,22 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		173EF2B7EC427BE8752B80FF /* VFDWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDWidgets.swift; sourceTree = "<group>"; };
+		2EDB45CDB7E17141645CC418 /* VFDWandScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDWandScreen.swift; sourceTree = "<group>"; };
+		671BFCC7A3652D02E5C373B1 /* VFDTxScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDTxScreen.swift; sourceTree = "<group>"; };
+		D12D856D4474C999D7FDE95B /* VFDSettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDSettingsScreen.swift; sourceTree = "<group>"; };
+		13818B66ABB361CB9B13B4DE /* VFDSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDSettings.swift; sourceTree = "<group>"; };
+		64DAFF57A27110A3D4A4BBDA /* VFDScanScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDScanScreen.swift; sourceTree = "<group>"; };
+		92C3A6726F87DC5F0C396DD3 /* VFDRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDRootView.swift; sourceTree = "<group>"; };
+		1D697F6CB0BFBEE1D12539E8 /* VFDMapScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDMapScreen.swift; sourceTree = "<group>"; };
+		C8B02F43FBB51A2042045689 /* VFDLogsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDLogsScreen.swift; sourceTree = "<group>"; };
+		A13E88235F4CFF34F03E81FB /* VFDLinkScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDLinkScreen.swift; sourceTree = "<group>"; };
+		FF5889C9018B05AB443A7B32 /* VFDLabScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDLabScreen.swift; sourceTree = "<group>"; };
+		B8E9EF38E0FC3C933DE17178 /* VFDGlyphs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDGlyphs.swift; sourceTree = "<group>"; };
+		6743E0B00C7A0E4EDD438287 /* VFDDiagScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDDiagScreen.swift; sourceTree = "<group>"; };
+		C7D3F7FCC2CF2A6D8227803F /* VFDCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDCore.swift; sourceTree = "<group>"; };
+		5C1D9ECD19FD3AF4B05ECE57 /* VFDContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDContext.swift; sourceTree = "<group>"; };
+		E05852F20FFF48F6E50703BE /* VFDAutoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDAutoScreen.swift; sourceTree = "<group>"; };
 		3EF965165682BF3E7A56E44D /* MapMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapMath.swift; sourceTree = "<group>"; };
 		899C5DB75C5AE4881E523D65 /* LogAnalysis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogAnalysis.swift; sourceTree = "<group>"; };
 		CE8BBC1022B0D23830E9274C /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
@@ -122,6 +154,29 @@
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		F709DDD741EE34A3DD7624AC /* VFD */ = {
+			isa = PBXGroup;
+			children = (
+				173EF2B7EC427BE8752B80FF /* VFDWidgets.swift */,
+				2EDB45CDB7E17141645CC418 /* VFDWandScreen.swift */,
+				671BFCC7A3652D02E5C373B1 /* VFDTxScreen.swift */,
+				D12D856D4474C999D7FDE95B /* VFDSettingsScreen.swift */,
+				13818B66ABB361CB9B13B4DE /* VFDSettings.swift */,
+				64DAFF57A27110A3D4A4BBDA /* VFDScanScreen.swift */,
+				92C3A6726F87DC5F0C396DD3 /* VFDRootView.swift */,
+				1D697F6CB0BFBEE1D12539E8 /* VFDMapScreen.swift */,
+				C8B02F43FBB51A2042045689 /* VFDLogsScreen.swift */,
+				A13E88235F4CFF34F03E81FB /* VFDLinkScreen.swift */,
+				FF5889C9018B05AB443A7B32 /* VFDLabScreen.swift */,
+				B8E9EF38E0FC3C933DE17178 /* VFDGlyphs.swift */,
+				6743E0B00C7A0E4EDD438287 /* VFDDiagScreen.swift */,
+				C7D3F7FCC2CF2A6D8227803F /* VFDCore.swift */,
+				5C1D9ECD19FD3AF4B05ECE57 /* VFDContext.swift */,
+				E05852F20FFF48F6E50703BE /* VFDAutoScreen.swift */,
+			);
+			path = VFD;
+			sourceTree = "<group>";
+		};
 		76F0CB789C650CC0FE1CCC8C /* ViewModels */ = {
 			isa = PBXGroup;
 			children = (
@@ -203,6 +258,7 @@
 		D2E59D43C42A37462916EFF2 /* MagicMaker */ = {
 			isa = PBXGroup;
 			children = (
+				F709DDD741EE34A3DD7624AC /* VFD */,
 				3E37DEFFC05D2AC1FAC1C8F2 /* Assets.xcassets */,
 				8602255608055BB152278E8A /* MagicMakerApp.swift */,
 				9D434489A5D76027E15694FC /* BLE */,
@@ -309,6 +365,22 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4B287684E7BD9826D90D0DF5 /* VFDWidgets.swift in Sources */,
+				39CE5C30DBD413C7BBFDB9BF /* VFDWandScreen.swift in Sources */,
+				9D3E38C9A205D22DB5237E64 /* VFDTxScreen.swift in Sources */,
+				81E628F4E74A053DCE18C5A2 /* VFDSettingsScreen.swift in Sources */,
+				7403D98A1F2B7CA65736AE00 /* VFDSettings.swift in Sources */,
+				D0F34695F7A115FC266D85E3 /* VFDScanScreen.swift in Sources */,
+				58C5B22DA9F32A9AAC3F912C /* VFDRootView.swift in Sources */,
+				1DD09C9F5B21F4435D086B0F /* VFDMapScreen.swift in Sources */,
+				BCBA83577D24959550271AAF /* VFDLogsScreen.swift in Sources */,
+				35719E4E6B6481B3FC4A5D84 /* VFDLinkScreen.swift in Sources */,
+				DCE34BA9A1E00AF413CFC21D /* VFDLabScreen.swift in Sources */,
+				17304EC4E55EC4E68841B875 /* VFDGlyphs.swift in Sources */,
+				907D372C98C9EFF8D61B814D /* VFDDiagScreen.swift in Sources */,
+				1221D7B517FB7C88FA5FB1B8 /* VFDCore.swift in Sources */,
+				93A0AF01AB17F185F8A1818F /* VFDContext.swift in Sources */,
+				2465FE6366517C2865DBF37A /* VFDAutoScreen.swift in Sources */,
 				1318D50336B52BF2B7CA0F0B /* MapMath.swift in Sources */,
 				4507810A1CA1E0D1B5503C54 /* LogAnalysis.swift in Sources */,
 				0441246529914B34B0A886CE /* SettingsScreen.swift in Sources */,

@@ -945,8 +945,9 @@ def menu_button(fb, L, x, y, label_text, enabled=True, name=None):
 
 
 # ---------------------------------------------------------------------------------------------
-# Band LEDs (SCAN's LAST LIGHTS strip and LAB's band preview): packet colours are never shown as
-# RGB; each named colour gets a fill pattern and a legend entry with its name.
+# Band LEDs (SCAN's LAST LIGHTS strip and LAB's band preview): in the previews each named colour
+# gets a fill pattern and a legend entry with its name; the app fills them with the packet's true
+# colour instead (led(..., fill=(r, g, b))), the name text staying beside them.
 # ---------------------------------------------------------------------------------------------
 
 N_PATTERNS = 5
@@ -960,17 +961,21 @@ def _disc(size):
             if (i - m) ** 2 + (j - m) ** 2 <= rad * rad - 0.5}
 
 
-def led(fb, x, y, kind, size=7, color=HIGHLIGHT):
+def led(fb, x, y, kind, size=7, color=HIGHLIGHT, fill=None):
     """A round LED / legend swatch size x size with its top-left at (x, y), filled with pattern
     `kind`: 0 solid, 1 checker, 2 ring with a centre dot, 3 horizontal stripes, 4 vertical stripes;
-    None = unlit (a dotted dim ring)."""
+    None = unlit (a dotted dim ring). fill=(r, g, b): a solid disc in that true colour (fb.rgb)
+    instead of the pattern; kind=None still draws the unlit ring."""
     disc = _disc(size)
     edge = {(i, j) for (i, j) in disc
             if any((i + di, j + dj) not in disc for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)))}
     m = size // 2
+    true_col = fb.rgb(fill) if fill is not None and kind is not None else None
     for (i, j) in disc:
         if kind is None:
             on, col = (i, j) in edge and (i + j) % 2 == 0, DIM
+        elif true_col is not None:
+            on, col = True, true_col
         else:
             k = kind % N_PATTERNS
             col = color

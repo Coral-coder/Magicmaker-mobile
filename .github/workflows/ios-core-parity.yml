@@ -7,6 +7,12 @@ name: iOS core parity
 #            against ios/ParityCheck/vectors.json (what the Android core returns).
 #   vectors  regenerates vectors.json from the Android sources (tools/parity) and fails if the
 #            committed file is out of date, so the Swift core is never checked against old answers.
+#   vfd      compiles the Foundation-only VFD theme core (ios/MagicMaker/VFD: glyphs, frame buffer,
+#            widgets) with ios/VFDCheck/main.swift and replays tools/vfd/golden/ops.txt, which must
+#            give tools/vfd/golden/expected.txt (what the Python preview renderer draws).
+#
+# Regenerate the VFD golden files after changing tools/vfd/vfd.py or widgets.py:
+#   python3 tools/vfd/golden.py
 #
 # Regenerate the vectors after changing the Android core:
 #   cd tools/parity && ../../android/gradlew --no-daemon -q run
@@ -22,6 +28,9 @@ on:
       # The generator also reads these two: the E905 zone-mask list and the packets in the notes.
       - "android/app/src/main/java/com/magicmaker/android/ui/LabPacketBuilderPanel.kt"
       - "docs/PROTOCOL.md"
+      - "ios/MagicMaker/VFD/**"
+      - "ios/VFDCheck/**"
+      - "tools/vfd/**"
       - ".github/workflows/ios-core-parity.yml"
   workflow_dispatch:
 
@@ -142,3 +151,84 @@ jobs:
             echo "::error file=ios/ParityCheck/vectors.json,title=Parity vectors are stale::ios/ParityCheck/vectors.json does not match the Android core. Regenerate it with 'cd tools/parity && ../../android/gradlew --no-daemon -q run' and commit the result."
             exit 1
           fi
+
+  vfd:
+    name: VFD core matches the Python reference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      # Same helper as the parity job: the first 60 problem lines in at most 8 ::error:: commands.
+      - name: Annotation helper
+        run: |
+          cat > /tmp/annotate.sh <<'EOF'
+          #!/usr/bin/env bash
+          # usage: annotate.sh <title> <file with one problem per line>
+          head -n 60 "$2" | awk -v title="$1" '
+            {
+              gsub(/%/, "%25")
+              gsub(/\r/, "%0D")
+              block = (count % 8 == 0) ? $0 : block "%0A" $0
+              count++
+              if (count % 8 == 0) { printf "::error title=%s::%s\n", title, block; block = "" }
+            }
+            END { if (count % 8 != 0) printf "::error title=%s::%s\n", title, block }
+          '
+          EOF
+          chmod +x /tmp/annotate.sh
+
+      # The golden files must be what the Python reference draws today.
+      - name: Golden files are current
+        run: |
+          if ! python3 tools/vfd/golden.py --check; then
+            echo "::error file=tools/vfd/golden/expected.txt,title=VFD golden files are stale::tools/vfd/golden does not match tools/vfd/golden.py and the Python renderer. Regenerate it with 'python3 tools/vfd/golden.py' and commit the result."
+            exit 1
+          fi
+
+      # The three Foundation-only VFD files are one module with the checker. Swift 5 mode, as in
+      # the app target.
+      - name: Compile the VFD core with the golden checker
+        run: |
+          set -o pipefail
+          if ! swiftc -O -swift-version 5 -o /tmp/vfdcheck \
+            ios/MagicMaker/VFD/VFDGlyphs.swift \
+            ios/MagicMaker/VFD/VFDCore.swift \
+            ios/MagicMaker/VFD/VFDWidgets.swift \
+            ios/VFDCheck/main.swift 2>&1 | tee /tmp/vfd-compile.log
+          then
+            grep -E "error:" /tmp/vfd-compile.log > /tmp/vfd-problems.txt || true
+            if [ ! -s /tmp/vfd-problems.txt ]; then
+              tail -n 60 /tmp/vfd-compile.log > /tmp/vfd-problems.txt
+            fi
+            /tmp/annotate.sh "VFD core does not compile on Linux" /tmp/vfd-problems.txt
+            exit 1
+          fi
+
+      # On a mismatch: the checker's summary and first mismatches, then the first differing lines
+      # of the readable per-page dumps (< Python reference, > Swift). A checker that died before
+      # its summary (a trap) gets the end of its output first instead.
+      - name: Compare the Swift VFD core with the Python reference
+        run: |
+          set -o pipefail
+          if ! /tmp/vfdcheck tools/vfd/golden 2>&1 | tee /tmp/vfd-run.log
+          then
+            grep -E "^VFD:" /tmp/vfd-run.log > /tmp/vfd-problems.txt || true
+            if [ ! -s /tmp/vfd-problems.txt ]; then
+              echo "VFD: the checker stopped before its summary; the end of its output:" > /tmp/vfd-problems.txt
+              tail -n 20 /tmp/vfd-run.log >> /tmp/vfd-problems.txt
+            fi
+            grep -E "^MISMATCH " /tmp/vfd-run.log | head -n 25 >> /tmp/vfd-problems.txt || true
+            python3 tools/vfd/golden.py --dump /tmp/vfd-python > /dev/null || true
+            /tmp/vfdcheck tools/vfd/golden --dump /tmp/vfd-swift > /dev/null 2>&1 || true
+            diff -r /tmp/vfd-python /tmp/vfd-swift 2>&1 | grep -E "^(diff|Only|[<>])" | cut -c1-300 \
+              | head -n 30 >> /tmp/vfd-problems.txt || true
+            if [ ! -s /tmp/vfd-problems.txt ]; then
+              tail -n 60 /tmp/vfd-run.log > /tmp/vfd-problems.txt
+            fi
+            /tmp/annotate.sh "Swift VFD core differs from the Python reference" /tmp/vfd-problems.txt
+            exit 1
+          fi
+          grep -E "^VFD:" /tmp/vfd-run.log >> "$GITHUB_STEP_SUMMARY" || true
