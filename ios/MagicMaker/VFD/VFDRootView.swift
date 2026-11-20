@@ -1,11 +1,15 @@
+import Combine
+import QuartzCore
 import SwiftUI
 import UIKit
 
-// The VFD theme's whole screen: one full-screen Canvas painting the cell frame buffer (palette
-// inks and true colours, 1 px black gaps; pixel for pixel what tools/vfd/vfd.py render_image
-// makes), the chrome and the current tab drawn in two passes with edge snapping
-// (render_previews.draw_screen), touch handling on the cell grid (tap, hold, scroll with a
-// fling, slider drags, swipes), the overlays and the animation clock.
+// The VFD theme's whole screen: one full-screen UIKit view (VFDDisplayView) showing the cell frame
+// buffer as an image scaled up by whole device pixels with the 1 px black gaps over it (pixel for
+// pixel what tools/vfd/vfd.py render_image makes), the chrome and the current tab drawn in two
+// passes with edge snapping (render_previews.draw_screen), touch handling on the cell grid (tap,
+// hold, scroll with a fling, slider drags, swipes), the overlays and the animation clock. The view
+// draws when the renderer asks and on its own clock, and takes the touches itself, so neither
+// depends on SwiftUI updating it; SwiftUI hosts it and shows the alerts and the sheet.
 
 // MARK: - Overlay requests
 
@@ -46,7 +50,7 @@ struct VFDSheetItem: Identifiable {
     let content: () -> AnyView
 }
 
-/// What one frame is drawn from: the engines, the theme, the tab and the screen's safe area.
+/// What one frame is drawn from: the engines, the theme and the tab.
 struct VFDFrameInputs {
     let vm: AppViewModel
     let store: MagicStore
@@ -54,16 +58,42 @@ struct VFDFrameInputs {
     let tx: TxEngine
     let settings: VFDSettings
     let tab: MainTab
+    let selectTab: (MainTab) -> Void
+}
+
+/// Where one frame is drawn: the display view's size (points), device pixels per point and the
+/// safe-area insets (points) the grid keeps clear as whole rows.
+struct VFDDisplayMetrics {
+    let size: CGSize
     let scale: CGFloat
     let insetTop: CGFloat
     let insetBottom: CGFloat
-    let selectTab: (MainTab) -> Void
+}
+
+/// The cell grid on the screen: cols x rows cells of pitch x pitch device pixels from the top-left
+/// corner, at `scale` device pixels per point.
+struct VFDGridGeometry: Equatable {
+    let cols: Int
+    let rows: Int
+    let pitch: Int
+    let scale: CGFloat
+}
+
+/// One composed frame: the cols x rows cell image (one pixel per cell), the grid it is shown on and
+/// what the clock does next.
+struct VFDPaintedFrame {
+    let image: CGImage?
+    let grid: VFDGridGeometry
+    /// Something on screen animates or a fling runs: the clock runs at 30 fps.
+    let animating: Bool
+    /// Seconds between slow clock ticks: 1, or 0.5 on a red-ish base (the 1 Hz alarm blink).
+    let slowInterval: Double
 }
 
 // MARK: - View
 
-/// The VFD theme: the whole screen is one cell grid drawn by `VFDRenderer`. ContentView shows it
-/// instead of the standard layout and shares its tab selection.
+/// The VFD theme: the whole screen is one cell grid drawn by `VFDRenderer` into a `VFDDisplayView`.
+/// ContentView shows it instead of the standard layout and shares its tab selection.
 @MainActor
 struct VFDRootView: View {
     @Binding var tab: MainTab
@@ -73,7 +103,6 @@ struct VFDRootView: View {
     @EnvironmentObject var tx: TxEngine
     @ObservedObject private var settings: VFDSettings = VFDSettings.shared
     @StateObject private var renderer: VFDRenderer = VFDRenderer()
-    @Environment(\.displayScale) private var displayScale: CGFloat
     @Environment(\.scenePhase) private var scenePhase: ScenePhase
 
     init(tab: Binding<MainTab>) {
@@ -130,79 +159,29 @@ struct VFDRootView: View {
         renderer.requestRedraw()
     }
 
-    /// The gesture sits on this stable full-screen view, not on the Canvas, so a clock change
-    /// (which swaps the TimelineView) never cancels a drag in progress. Its local coordinates are
-    /// screen points, like the Canvas's.
+    /// The UIKit display, full screen (the grid keeps the safe-area rows clear itself), with the
+    /// prompt alert. It draws when the renderer asks and on its own clock and takes the touches
+    /// itself; each update here hands it fresh inputs and draws again.
     private var grid: some View {
-        GeometryReader { proxy in
-            clock(proxy)
-        }
-        .ignoresSafeArea()
-        .background(Color.black)
-        .contentShape(Rectangle())
-        .gesture(touchGesture)
-        .alert(promptTitle, isPresented: promptPresented, presenting: renderer.promptRequest) { req in
-            TextField("", text: $renderer.promptText)
-                .keyboardType(req.keyboard.uiKeyboardType)
-                .textInputAutocapitalization(req.keyboard.capitalization)
-                .autocorrectionDisabled()
-            Button("CANCEL", role: .cancel) { }
-            Button("OK") {
-                renderer.finishPrompt(req)
-            }
-        } message: { req in
-            Text(req.message)
-        }
-    }
-
-    /// 30 fps while the last frame animated (or a fling runs), else once a second (twice on a
-    /// red-ish base, for the 1 Hz alarm blink).
-    @ViewBuilder
-    private func clock(_ proxy: GeometryProxy) -> some View {
-        let inputs: VFDFrameInputs = frameInputs(proxy)
-        if renderer.fastClock {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
-                canvas(inputs, timeline.date)
-            }
-        } else {
-            TimelineView(.periodic(from: slowClockStart, by: slowClockInterval)) { timeline in
-                canvas(inputs, timeline.date)
-            }
-        }
-    }
-
-    /// Rebuilt on every tick and state change, so each one draws a fresh frame.
-    private func canvas(_ inputs: VFDFrameInputs, _ date: Date) -> some View {
-        let renderer: VFDRenderer = self.renderer
-        return Canvas(opaque: true) { gc, size in
-            renderer.render(&gc, size: size, inputs: inputs)
-        }
-    }
-
-    private var touchGesture: some Gesture {
-        let renderer: VFDRenderer = self.renderer
-        return DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                renderer.touchChanged(value)
-            }
-            .onEnded { value in
-                renderer.touchEnded(value)
+        VFDDisplay(renderer: renderer, inputs: frameInputs)
+            .ignoresSafeArea()
+            .background(Color.black)
+            .alert(promptTitle, isPresented: promptPresented, presenting: renderer.promptRequest) { req in
+                TextField("", text: $renderer.promptText)
+                    .keyboardType(req.keyboard.uiKeyboardType)
+                    .textInputAutocapitalization(req.keyboard.capitalization)
+                    .autocorrectionDisabled()
+                Button("CANCEL", role: .cancel) { }
+                Button("OK") {
+                    renderer.finishPrompt(req)
+                }
+            } message: { req in
+                Text(req.message)
             }
     }
 
-    /// Ticks land just after whole (and half) seconds, so clocks and the alarm blink change on time.
-    private var slowClockStart: Date {
-        let now: Double = Date().timeIntervalSinceReferenceDate
-        return Date(timeIntervalSinceReferenceDate: now.rounded(.down) + 0.02)
-    }
-
-    private var slowClockInterval: Double {
-        return VFDPalette.alarmInverted(settings.base) ? 0.5 : 1.0
-    }
-
-    private func frameInputs(_ proxy: GeometryProxy) -> VFDFrameInputs {
+    private var frameInputs: VFDFrameInputs {
         let binding: Binding<MainTab> = $tab
-        let insets: EdgeInsets = proxy.safeAreaInsets
         return VFDFrameInputs(
             vm: vm,
             store: store,
@@ -210,9 +189,6 @@ struct VFDRootView: View {
             tx: tx,
             settings: settings,
             tab: tab,
-            scale: displayScale,
-            insetTop: insets.top,
-            insetBottom: insets.bottom,
             selectTab: { next in binding.wrappedValue = next }
         )
     }
@@ -252,6 +228,525 @@ struct VFDRootView: View {
                 if !shown { renderer.confirmDismissed() }
             }
         )
+    }
+}
+
+// MARK: - Display
+
+/// Hosts the `VFDDisplayView` and hands it the renderer and each fresh set of frame inputs.
+@MainActor
+struct VFDDisplay: UIViewRepresentable {
+    let renderer: VFDRenderer
+    let inputs: VFDFrameInputs
+
+    func makeUIView(context: Context) -> VFDDisplayView {
+        let view: VFDDisplayView = VFDDisplayView(frame: CGRect.zero)
+        view.attach(renderer: renderer, inputs: inputs)
+        return view
+    }
+
+    /// The engines, the theme, the tab or an overlay changed: draw again from the fresh inputs.
+    func updateUIView(_ uiView: VFDDisplayView, context: Context) {
+        uiView.attach(renderer: renderer, inputs: inputs)
+    }
+
+    static func dismantleUIView(_ uiView: VFDDisplayView, coordinator: ()) {
+        uiView.detach()
+    }
+}
+
+/// One touch sample: when (UITouch.timestamp, seconds) and where (display points).
+private struct VFDTouchSample {
+    let time: TimeInterval
+    let point: CGPoint
+}
+
+/// The VFD screen in UIKit. The renderer's cols x rows cell image sits in a layer scaled up by
+/// whole device pixels (nearest neighbour, pitch x pitch device pixels per cell); a static shape
+/// layer over it blacks out the right column and bottom row of every cell (1 device pixel); the
+/// rest of the view is black. It composes and paints when the renderer asks (requestRedraw,
+/// coalesced to the next run loop turn) and on its clock: 30 fps while the last frame animated or
+/// a fling runs, else just after every whole second (and half second on a red-ish base); no clock
+/// while off screen or in the background. Touches go to the renderer in the view's points, which
+/// are the image's (origin top-left of the screen).
+@MainActor
+final class VFDDisplayView: UIView {
+    /// The release velocity is measured over the samples of the last this many seconds.
+    private static let velocityWindow: TimeInterval = 0.1
+    /// Most touch samples kept.
+    private static let maxSamples: Int = 64
+    /// Slow clock ticks land this long after a whole (or half) second.
+    private static let slowTickOffset: Double = 0.02
+
+    private var renderer: VFDRenderer?
+    private var inputs: VFDFrameInputs?
+    private let imageLayer: CALayer = CALayer()
+    private let gapLayer: CAShapeLayer = CAShapeLayer()
+    /// The grid the two layers are laid out for.
+    private var grid: VFDGridGeometry?
+    private var laidOutSize: CGSize = CGSize(width: -1, height: -1)
+
+    // clock
+    private lazy var clockProxy: VFDClockProxy = VFDClockProxy(view: self)
+    private var displayLink: CADisplayLink?
+    private var slowTimer: Timer?
+    /// The interval `slowTimer` was set for.
+    private var slowTimerInterval: Double = 0
+    /// From the last frame.
+    private var animating: Bool = false
+    private var slowInterval: Double = 1
+
+    /// The app is in the background: nothing is drawn and the clock stops. Read live rather than
+    /// cached from a notification, so a view made while the app still reported .background (a
+    /// scene connecting at launch, a Bluetooth relaunch brought forward) never stays dark.
+    private var inBackground: Bool {
+        return UIApplication.shared.applicationState == UIApplication.State.background
+    }
+
+    // engines
+    private var observed: [ObjectIdentifier] = []
+    private var subscriptions: [AnyCancellable] = []
+
+    // touches
+    /// The one touch followed (the first finger down); the others are ignored.
+    private var tracked: UITouch?
+    private var samples: [VFDTouchSample] = []
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setUp()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setUp()
+    }
+
+    private func setUp() {
+        backgroundColor = UIColor.black
+        isOpaque = true
+        isUserInteractionEnabled = true
+        isMultipleTouchEnabled = false
+        isAccessibilityElement = true
+        accessibilityLabel = "VFD display"
+        // One element for the whole grid: with VoiceOver on, touches still go straight to it.
+        accessibilityTraits = UIAccessibilityTraits.allowsDirectInteraction
+
+        let still: [String: CAAction] = VFDDisplayView.stillActions()
+        imageLayer.actions = still
+        imageLayer.contentsGravity = CALayerContentsGravity.resize
+        imageLayer.magnificationFilter = CALayerContentsFilter.nearest
+        imageLayer.minificationFilter = CALayerContentsFilter.nearest
+        imageLayer.backgroundColor = UIColor.black.cgColor
+        imageLayer.isOpaque = true
+        layer.addSublayer(imageLayer)
+
+        gapLayer.actions = still
+        gapLayer.fillColor = UIColor.black.cgColor
+        gapLayer.strokeColor = nil
+        gapLayer.lineWidth = 0
+        gapLayer.fillRule = CAShapeLayerFillRule.nonZero
+        layer.addSublayer(gapLayer)
+
+        let center: NotificationCenter = NotificationCenter.default
+        center.addObserver(self, selector: #selector(VFDDisplayView.appDidEnterBackground(_:)),
+                           name: UIApplication.didEnterBackgroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(VFDDisplayView.appWillEnterForeground(_:)),
+                           name: UIApplication.willEnterForegroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(VFDDisplayView.appDidBecomeActive(_:)),
+                           name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    /// No implicit animation on the layers (a new frame never cross-fades).
+    private static func stillActions() -> [String: CAAction] {
+        let none: NSNull = NSNull()
+        return [
+            "contents": none,
+            "bounds": none,
+            "position": none,
+            "frame": none,
+            "path": none,
+            "contentsScale": none,
+            "hidden": none,
+        ]
+    }
+
+    // MARK: SwiftUI
+
+    /// The renderer and the latest inputs (makeUIView, updateUIView): draw again.
+    func attach(renderer: VFDRenderer, inputs: VFDFrameInputs) {
+        if let old = self.renderer, old !== renderer {
+            old.detach(display: self)
+        }
+        self.renderer = renderer
+        self.inputs = inputs
+        renderer.attach(display: self)
+        observe(inputs)
+        renderer.requestRedraw()
+    }
+
+    /// SwiftUI removed the view (dismantleUIView): stop the clock, the observers and any touch.
+    func detach() {
+        stopClock()
+        subscriptions.removeAll()
+        observed = []
+        cancelTracking()
+        renderer?.detach(display: self)
+    }
+
+    // MARK: drawing
+
+    /// Compose and paint one frame now (a redraw the renderer asked for, a clock tick). Nothing is
+    /// drawn off screen or in the background; coming back draws again.
+    func paintNow() {
+        guard let renderer = self.renderer, let inputs = self.inputs else { return }
+        if window == nil || inBackground {
+            stopClock()
+            return
+        }
+        let painted: VFDPaintedFrame? = renderer.renderFrame(metrics: currentMetrics(), inputs: inputs)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let p = painted {
+            if grid != p.grid {
+                applyGrid(p.grid)
+            }
+            if let image = p.image {
+                imageLayer.contents = image
+            } else {
+                imageLayer.contents = nil
+            }
+        } else {
+            // Too small to lay the grid out: black, as before.
+            imageLayer.contents = nil
+        }
+        CATransaction.commit()
+        animating = painted?.animating ?? false
+        slowInterval = painted?.slowInterval ?? 1.0
+        updateClock()
+    }
+
+    /// The view's size, device pixels per point and safe-area insets. The window's insets come
+    /// first (a prompt's keyboard never changes them); the view's own until the window has any.
+    private func currentMetrics() -> VFDDisplayMetrics {
+        var scale: CGFloat = traitCollection.displayScale
+        if !(scale > 0) || !scale.isFinite {
+            scale = window?.windowScene?.screen.scale ?? 0
+        }
+        let own: UIEdgeInsets = safeAreaInsets
+        var top: CGFloat = own.top
+        var bottom: CGFloat = own.bottom
+        if let w = window {
+            let insets: UIEdgeInsets = w.safeAreaInsets
+            if insets.top > 0 || own.top <= 0 {
+                top = insets.top
+                bottom = insets.bottom
+            }
+        }
+        return VFDDisplayMetrics(size: bounds.size, scale: scale, insetTop: top, insetBottom: bottom)
+    }
+
+    /// Lays the image and the gap lines out for a new grid (inside the paint's transaction).
+    private func applyGrid(_ g: VFDGridGeometry) {
+        grid = g
+        let scale: CGFloat = (g.scale > 0 && g.scale.isFinite) ? g.scale : 1
+        let rect: CGRect = CGRect(x: 0, y: 0, width: CGFloat(g.cols * g.pitch) / scale,
+                                  height: CGFloat(g.rows * g.pitch) / scale)
+        imageLayer.frame = rect
+        gapLayer.frame = rect
+        gapLayer.contentsScale = scale
+        gapLayer.path = VFDDisplayView.makeGapPath(g, scale: scale)
+    }
+
+    /// The right column and bottom row of every cell, 1 device pixel wide, in points (as
+    /// vfd.render_image: cell c lights device pixels c * pitch ..< c * pitch + pitch - 1, and pixel
+    /// c * pitch + pitch - 1 is black).
+    private static func makeGapPath(_ g: VFDGridGeometry, scale: CGFloat) -> CGPath {
+        let path: CGMutablePath = CGMutablePath()
+        let px: CGFloat = 1.0 / scale
+        let fullW: CGFloat = CGFloat(g.cols * g.pitch) / scale
+        let fullH: CGFloat = CGFloat(g.rows * g.pitch) / scale
+        var c: Int = 0
+        while c < g.cols {
+            let x: CGFloat = CGFloat(c * g.pitch + g.pitch - 1) / scale
+            path.addRect(CGRect(x: x, y: 0, width: px, height: fullH))
+            c += 1
+        }
+        var r: Int = 0
+        while r < g.rows {
+            let y: CGFloat = CGFloat(r * g.pitch + g.pitch - 1) / scale
+            path.addRect(CGRect(x: 0, y: y, width: fullW, height: px))
+            r += 1
+        }
+        return path
+    }
+
+    // MARK: clock
+
+    /// 30 fps while the last frame animated (or a fling runs), else the slow tick; nothing while
+    /// off screen or in the background.
+    private func updateClock() {
+        if window == nil || inBackground || renderer == nil {
+            stopClock()
+            return
+        }
+        if animating {
+            stopSlowTimer()
+            startDisplayLink()
+        } else {
+            stopDisplayLink()
+            scheduleSlowTick()
+        }
+    }
+
+    private func startDisplayLink() {
+        if displayLink != nil { return }
+        let link: CADisplayLink = CADisplayLink(target: clockProxy,
+                                                selector: #selector(VFDClockProxy.frameTick(_:)))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 30, preferred: 30)
+        link.add(to: RunLoop.main, forMode: RunLoop.Mode.common)
+        displayLink = link
+    }
+
+    private func stopDisplayLink() {
+        guard let link = displayLink else { return }
+        displayLink = nil
+        link.invalidate()
+    }
+
+    /// Sets the next slow tick, unless one is already set for the current interval.
+    private func scheduleSlowTick() {
+        if let timer = slowTimer, timer.isValid, slowTimerInterval == slowInterval { return }
+        stopSlowTimer()
+        let now: Double = Date().timeIntervalSinceReferenceDate
+        let next: Double = VFDDisplayView.nextSlowTick(after: now, interval: slowInterval)
+        let timer: Timer = Timer(timeInterval: max(0.001, next - now), target: clockProxy,
+                                 selector: #selector(VFDClockProxy.slowTick(_:)), userInfo: nil,
+                                 repeats: false)
+        RunLoop.main.add(timer, forMode: RunLoop.Mode.common)
+        slowTimer = timer
+        slowTimerInterval = slowInterval
+    }
+
+    private func stopSlowTimer() {
+        guard let timer = slowTimer else { return }
+        slowTimer = nil
+        timer.invalidate()
+    }
+
+    private func stopClock() {
+        stopDisplayLink()
+        stopSlowTimer()
+    }
+
+    /// A display link frame (from the clock proxy).
+    fileprivate func clockFrame() {
+        paintNow()
+    }
+
+    /// A slow tick (from the clock proxy); that timer has fired and is done.
+    fileprivate func clockTick() {
+        slowTimer = nil
+        paintNow()
+    }
+
+    /// The first tick after `now`: `slowTickOffset` past a multiple of `interval` seconds of the
+    /// reference date, so clocks and the alarm blink change on time.
+    private static func nextSlowTick(after now: Double, interval: Double) -> Double {
+        let step: Double = (interval > 0 && interval.isFinite) ? interval : 1
+        let k: Double = ((now - slowTickOffset) / step).rounded(.down)
+        return (k + 1) * step + slowTickOffset
+    }
+
+    // MARK: lifecycle
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if bounds.size != laidOutSize {
+            laidOutSize = bounds.size
+            renderer?.requestRedraw()
+        }
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        renderer?.requestRedraw()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            stopClock()
+            cancelTracking()
+        } else {
+            renderer?.requestRedraw()
+        }
+    }
+
+    @objc private func appDidEnterBackground(_ note: Notification) {
+        stopClock()
+    }
+
+    /// Draws again (which restarts the clock); a draw that still finds the app in the background
+    /// is skipped, and the activation below draws once it is in front.
+    @objc private func appWillEnterForeground(_ note: Notification) {
+        renderer?.requestRedraw()
+    }
+
+    @objc private func appDidBecomeActive(_ note: Notification) {
+        renderer?.requestRedraw()
+    }
+
+    // MARK: engines
+
+    /// Draw again on every change the engines and the theme announce, without waiting for SwiftUI
+    /// to update the view. They announce before they change, so the redraw runs on a later turn.
+    private func observe(_ inputs: VFDFrameInputs) {
+        let ids: [ObjectIdentifier] = [
+            ObjectIdentifier(inputs.vm),
+            ObjectIdentifier(inputs.store),
+            ObjectIdentifier(inputs.scan),
+            ObjectIdentifier(inputs.tx),
+            ObjectIdentifier(inputs.settings),
+        ]
+        if ids == observed { return }
+        observed = ids
+        var subs: [AnyCancellable] = []
+        subs.append(watch(inputs.vm.objectWillChange))
+        subs.append(watch(inputs.store.objectWillChange))
+        subs.append(watch(inputs.scan.objectWillChange))
+        subs.append(watch(inputs.tx.objectWillChange))
+        subs.append(watch(inputs.settings.objectWillChange))
+        subscriptions = subs
+    }
+
+    private func watch<P: Publisher>(_ publisher: P) -> AnyCancellable where P.Failure == Never {
+        return publisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] (_: P.Output) -> Void in
+                self?.engineChanged()
+            }
+    }
+
+    private func engineChanged() {
+        renderer?.requestRedraw()
+    }
+
+    // MARK: touches
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let old = tracked {
+            if VFDDisplayView.isLive(old, event) { return }
+            // The last touch never ended here: forget it before the new one starts.
+            cancelTracking()
+        }
+        guard let touch = touches.first, let renderer = self.renderer else { return }
+        tracked = touch
+        samples.removeAll(keepingCapacity: true)
+        let point: CGPoint = touch.location(in: self)
+        addSample(touch.timestamp, point)
+        renderer.touchBegan(point)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = tracked, touches.contains(touch) else { return }
+        addSamples(touch, event)
+        renderer?.touchMoved(touch.location(in: self))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = tracked, touches.contains(touch) else { return }
+        let point: CGPoint = touch.location(in: self)
+        addSamples(touch, event)
+        let velocity: CGVector = releaseVelocity()
+        tracked = nil
+        samples.removeAll(keepingCapacity: true)
+        renderer?.touchEnded(point, velocity: velocity)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = tracked, touches.contains(touch) else { return }
+        cancelTracking()
+    }
+
+    /// Whether `touch` is still down in `event` (one that ended or was cancelled without this view
+    /// hearing of it is not).
+    private static func isLive(_ touch: UITouch, _ event: UIEvent?) -> Bool {
+        if touch.phase == UITouch.Phase.ended || touch.phase == UITouch.Phase.cancelled {
+            return false
+        }
+        guard let all = event?.allTouches else { return false }
+        return all.contains(touch)
+    }
+
+    /// Drop the followed touch; the renderer forgets it with no tap, swipe or fling.
+    private func cancelTracking() {
+        if tracked == nil { return }
+        tracked = nil
+        samples.removeAll(keepingCapacity: true)
+        renderer?.touchCancelled()
+    }
+
+    /// Every position the touch passed through since the last event (coalesced touches).
+    private func addSamples(_ touch: UITouch, _ event: UIEvent?) {
+        if let list = event?.coalescedTouches(for: touch), !list.isEmpty {
+            for t in list {
+                addSample(t.timestamp, t.location(in: self))
+            }
+        } else {
+            addSample(touch.timestamp, touch.location(in: self))
+        }
+    }
+
+    /// Keeps the samples of the last velocityWindow seconds.
+    private func addSample(_ time: TimeInterval, _ point: CGPoint) {
+        samples.append(VFDTouchSample(time: time, point: point))
+        while samples.count > 1
+            && (time - samples[0].time > VFDDisplayView.velocityWindow
+                || samples.count > VFDDisplayView.maxSamples) {
+            samples.removeFirst()
+        }
+    }
+
+    /// Points per second from the oldest to the newest sample of the last velocityWindow seconds;
+    /// zero when the finger rested before it lifted.
+    private func releaseVelocity() -> CGVector {
+        guard let first = samples.first, let last = samples.last else { return CGVector(dx: 0, dy: 0) }
+        let dt: TimeInterval = last.time - first.time
+        if !(dt > 0.004) { return CGVector(dx: 0, dy: 0) }
+        let vx: CGFloat = (last.point.x - first.point.x) / CGFloat(dt)
+        let vy: CGFloat = (last.point.y - first.point.y) / CGFloat(dt)
+        if !vx.isFinite || !vy.isFinite { return CGVector(dx: 0, dy: 0) }
+        return CGVector(dx: vx, dy: vy)
+    }
+}
+
+/// CADisplayLink and Timer keep their target: they get this proxy, which holds the display view
+/// weakly, so a scheduled clock never keeps the view alive. A tick after the view has gone stops
+/// that clock.
+@MainActor
+private final class VFDClockProxy: NSObject {
+    weak var view: VFDDisplayView?
+
+    init(view: VFDDisplayView) {
+        self.view = view
+        super.init()
+    }
+
+    @objc func frameTick(_ link: CADisplayLink) {
+        guard let view = self.view else {
+            link.invalidate()
+            return
+        }
+        view.clockFrame()
+    }
+
+    @objc func slowTick(_ timer: Timer) {
+        guard let view = self.view else {
+            timer.invalidate()
+            return
+        }
+        view.clockTick()
     }
 }
 
@@ -339,14 +834,11 @@ private struct VFDChrome {
 
 // MARK: - Renderer
 
-/// Draws VFD frames and handles touches. Frames are composed on demand (a state change, an
-/// action, the clock) into two reused frame buffers and painted from a reused bitmap.
+/// Composes VFD frames and handles touches. Frames are composed on demand (a state change, an
+/// action, the display's clock) into two reused frame buffers and turned into a cell image from a
+/// reused bitmap; `VFDDisplayView` shows them and feeds the touches in.
 @MainActor
 final class VFDRenderer: ObservableObject {
-    /// Bumped to draw again.
-    @Published private(set) var tick: Int = 0
-    /// The clock runs at 30 fps while true.
-    @Published private(set) var fastClock: Bool = false
     @Published var promptRequest: VFDPromptRequest?
     @Published var promptText: String = ""
     @Published var confirmRequest: VFDConfirmRequest?
@@ -358,6 +850,9 @@ final class VFDRenderer: ObservableObject {
     static let swipeDistance: CGFloat = 40
     /// Seconds held still for a long press.
     static let holdSeconds: Double = 0.5
+    /// A fling carries the scroll on by the release velocity times this many seconds (about what
+    /// DragGesture's predictedEndLocation added).
+    static let flingProjection: Double = 0.25
     /// Scroll region id of the open menu's list.
     static let menuRegion: String = "vfd.menu"
     /// A queued alert shows no sooner than this many seconds after the last one closed, and only
@@ -370,6 +865,8 @@ final class VFDRenderer: ObservableObject {
     private static let black: UInt32 = 0xFF00_0000
 
     private let session: VFDSession = VFDSession.shared
+    /// The view the frames are drawn into: requestRedraw makes it compose and paint.
+    private weak var display: VFDDisplayView?
 
     // geometry
     private var scale: CGFloat = 0
@@ -384,12 +881,9 @@ final class VFDRenderer: ObservableObject {
     private var probe: VFDFrameBuffer?
     private var tabList: [(key: String, label: String)] = []
     private var bitmap: CGContext?
-    private var gapPath: Path = Path()
     private var lut: [UInt32] = [UInt32](repeating: 0, count: 256)
     private var inkBase: VFDBase?
     private var inkPacked: [UInt32] = []
-    private var windowInsets: UIEdgeInsets?
-    private var insetsSize: CGSize = .zero
 
     // frames
     private var context: VFDContext?
@@ -397,8 +891,6 @@ final class VFDRenderer: ObservableObject {
     private var currentTab: String = ""
     private var pageMax: Int = 0
     private var redrawPending: Bool = false
-    private var clockPending: Bool = false
-    private var wantFast: Bool = false
 
     // menu
     private var menu: VFDMenuRequest?
@@ -448,29 +940,30 @@ final class VFDRenderer: ObservableObject {
         }
     }
 
-    // MARK: redraw and clock
+    // MARK: display and redraw
 
-    /// Draw again on the next run loop turn (coalesced).
+    /// `view` draws this renderer's frames from now on.
+    func attach(display view: VFDDisplayView) {
+        display = view
+    }
+
+    /// `view` went away: redraws stop going to it (a newer view keeps them).
+    func detach(display view: VFDDisplayView) {
+        if display === view {
+            display = nil
+        }
+    }
+
+    /// Draw again on the next run loop turn (coalesced): the display view composes and paints.
     func requestRedraw() {
         if redrawPending { return }
         redrawPending = true
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            // A clock frame since the request has drawn it already.
+            if !self.redrawPending { return }
             self.redrawPending = false
-            self.tick &+= 1
-        }
-    }
-
-    private func noteClock(_ fast: Bool) {
-        wantFast = fast
-        if fast == fastClock || clockPending { return }
-        clockPending = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.clockPending = false
-            if self.fastClock != self.wantFast {
-                self.fastClock = self.wantFast
-            }
+            self.display?.paintNow()
         }
     }
 
@@ -696,21 +1189,26 @@ final class VFDRenderer: ObservableObject {
 
     // MARK: frame
 
-    /// Compose a frame for the current state and paint it.
-    func render(_ gc: inout GraphicsContext, size: CGSize, inputs: VFDFrameInputs) {
-        gc.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color.black))
-        guard prepare(size: size, inputs: inputs) else { return }
-        guard let fb = self.fb, let probe = self.probe, let L = self.layout else { return }
+    /// Compose a frame for the current state on the display view's geometry and turn it into the
+    /// cols x rows cell image. Nil while the view is too small to lay the grid out.
+    func renderFrame(metrics: VFDDisplayMetrics, inputs: VFDFrameInputs) -> VFDPaintedFrame? {
+        // This frame answers every redraw asked for so far.
+        redrawPending = false
+        guard prepare(metrics) else { return nil }
+        guard let fb = self.fb, let probe = self.probe, let L = self.layout else { return nil }
         self.inputs = inputs
         let ctx: VFDContext = contextFor(inputs, fb: fb, L: L)
         ctx.setDisplay(scale: Double(self.scale), pitch: self.pitch)
         let base: VFDBase = inputs.settings.base
         compose(ctx, fb: fb, probe: probe, L: L, inputs: inputs, base: base)
-        paint(&gc, fb: fb, base: base)
-        noteClock(fb.wantsAnimation || fling != nil)
+        let image: CGImage? = makeImage(fb, base: base)
+        let grid: VFDGridGeometry = VFDGridGeometry(cols: cols, rows: rows, pitch: pitch, scale: scale)
+        let animating: Bool = fb.wantsAnimation || fling != nil
+        let slowInterval: Double = VFDPalette.alarmInverted(base) ? 0.5 : 1.0
         if pendingShow != nil {
             scheduleShow()
         }
+        return VFDPaintedFrame(image: image, grid: grid, animating: animating, slowInterval: slowInterval)
     }
 
     private func contextFor(_ inputs: VFDFrameInputs, fb: VFDFrameBuffer, L: VFDLayout) -> VFDContext {
@@ -725,16 +1223,17 @@ final class VFDRenderer: ObservableObject {
         return ctx
     }
 
-    /// Grid geometry from the screen: pitch 5 px at 3x (4 px at 2x), cols / rows = whole cells,
-    /// safe rows = the safe-area insets rounded up to whole cells. Rebuilds the buffers when it
-    /// changes. False while the size is too small to lay out.
-    private func prepare(size: CGSize, inputs: VFDFrameInputs) -> Bool {
+    /// Grid geometry from the display view: pitch 5 px at 3x (4 px at 2x), cols / rows = whole
+    /// cells, safe rows = the safe-area insets rounded up to whole cells. Rebuilds the buffers when
+    /// it changes. False while the size is too small to lay out.
+    private func prepare(_ metrics: VFDDisplayMetrics) -> Bool {
+        let size: CGSize = metrics.size
         if !size.width.isFinite || !size.height.isFinite || size.width <= 0 || size.height <= 0 {
             return false
         }
         // Int(_:) traps on an infinite or out-of-range Double: keep the scale and the pixel sizes
         // in a sane range (real screens are 1x...3x and a few thousand pixels).
-        let scale: CGFloat = (inputs.scale > 0 && inputs.scale.isFinite) ? min(inputs.scale, 16) : 2
+        let scale: CGFloat = (metrics.scale > 0 && metrics.scale.isFinite) ? min(metrics.scale, 16) : 2
         let widthD: Double = (Double(size.width) * Double(scale)).rounded()
         let heightD: Double = (Double(size.height) * Double(scale)).rounded()
         if !(widthD < 1_000_000) || !(heightD < 1_000_000) { return false }
@@ -744,9 +1243,8 @@ final class VFDRenderer: ObservableObject {
         let cols: Int = widthPx / pitch
         let rows: Int = heightPx / pitch
         if cols < 60 || rows < 150 { return false }
-        let insets: (top: CGFloat, bottom: CGFloat) = safeInsets(size: size, inputs: inputs)
-        let top: Int = VFDRenderer.safeRows(insets.top, scale: scale, pitch: pitch)
-        let bottom: Int = VFDRenderer.safeRows(insets.bottom, scale: scale, pitch: pitch)
+        let top: Int = VFDRenderer.safeRows(metrics.insetTop, scale: scale, pitch: pitch)
+        let bottom: Int = VFDRenderer.safeRows(metrics.insetBottom, scale: scale, pitch: pitch)
         let same: Bool = cols == self.cols && rows == self.rows && pitch == self.pitch
             && scale == self.scale && top == safeTop && bottom == safeBottom
         if same && fb != nil && layout != nil && bitmap != nil {
@@ -766,35 +1264,8 @@ final class VFDRenderer: ObservableObject {
         self.probe = VFDFrameBuffer(cols: cols, rows: rows)
         self.tabList = VFDW.defaultTabs(L)
         self.bitmap = VFDRenderer.makeBitmap(cols: cols, rows: rows)
-        self.gapPath = VFDRenderer.makeGapPath(cols: cols, rows: rows, pitch: pitch, scale: scale)
         self.touch = nil
         return bitmap != nil
-    }
-
-    /// The window's safe-area insets (they ignore the keyboard of a prompt); the view's own
-    /// until the window has laid out.
-    private func safeInsets(size: CGSize, inputs: VFDFrameInputs) -> (top: CGFloat, bottom: CGFloat) {
-        let known: CGFloat = windowInsets?.top ?? 0
-        if windowInsets == nil || size != insetsSize || known <= 0 {
-            windowInsets = VFDRenderer.windowSafeInsets()
-            insetsSize = size
-        }
-        if let w = windowInsets, w.top > 0 || inputs.insetTop <= 0 {
-            return (top: max(0, w.top), bottom: max(0, w.bottom))
-        }
-        return (top: max(0, inputs.insetTop), bottom: max(0, inputs.insetBottom))
-    }
-
-    private static func windowSafeInsets() -> UIEdgeInsets? {
-        var fallback: UIWindow? = nil
-        for scene in UIApplication.shared.connectedScenes {
-            guard let windowScene = scene as? UIWindowScene else { continue }
-            for window in windowScene.windows {
-                if window.isKeyWindow { return window.safeAreaInsets }
-                if fallback == nil { fallback = window }
-            }
-        }
-        return fallback?.safeAreaInsets
     }
 
     private static func safeRows(_ inset: CGFloat, scale: CGFloat, pitch: Int) -> Int {
@@ -1039,20 +1510,10 @@ final class VFDRenderer: ObservableObject {
         return max(0, min(first, lastFirst)) * rowH
     }
 
-    // MARK: paint
+    // MARK: image
 
-    /// The cells as a cols x rows bitmap scaled by whole pixels (nearest neighbour) to
-    /// cols * pitch x rows * pitch device pixels, then the black 1 px gap lines; the edge strips
-    /// past the grid stay black.
-    private func paint(_ gc: inout GraphicsContext, fb: VFDFrameBuffer, base: VFDBase) {
-        guard let image = makeImage(fb, base: base) else { return }
-        let w: CGFloat = CGFloat(cols * pitch) / scale
-        let h: CGFloat = CGFloat(rows * pitch) / scale
-        let picture: Image = Image(decorative: image, scale: 1.0).interpolation(.none).antialiased(false)
-        gc.draw(picture, in: CGRect(x: 0, y: 0, width: w, height: h))
-        gc.fill(gapPath, with: .color(Color.black), style: FillStyle(eoFill: false, antialiased: false))
-    }
-
+    /// The cells as a cols x rows image, one pixel per cell (the display view scales it up by whole
+    /// device pixels and draws the gap lines over it).
     private func makeImage(_ fb: VFDFrameBuffer, base: VFDBase) -> CGImage? {
         guard let bitmap = self.bitmap, let raw = bitmap.data else { return nil }
         let width: Int = cols
@@ -1131,35 +1592,19 @@ final class VFDRenderer: ObservableObject {
                          space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
     }
 
-    /// The right column and bottom row of every cell pitch, 1 device pixel wide.
-    private static func makeGapPath(cols: Int, rows: Int, pitch: Int, scale: CGFloat) -> Path {
-        var path = Path()
-        let px: CGFloat = 1.0 / scale
-        let fullW: CGFloat = CGFloat(cols * pitch) / scale
-        let fullH: CGFloat = CGFloat(rows * pitch) / scale
-        var c: Int = 0
-        while c < cols {
-            let x: CGFloat = CGFloat(c * pitch + pitch - 1) / scale
-            path.addRect(CGRect(x: x, y: 0, width: px, height: fullH))
-            c += 1
-        }
-        var r: Int = 0
-        while r < rows {
-            let y: CGFloat = CGFloat(r * pitch + pitch - 1) / scale
-            path.addRect(CGRect(x: 0, y: y, width: fullW, height: px))
-            r += 1
-        }
-        return path
-    }
-
     // MARK: touches
 
-    /// One DragGesture(minimumDistance: 0) drives everything: it reports the touch down at
-    /// once, so a hold is timed from there.
-    func touchChanged(_ value: DragGesture.Value) {
-        guard var t = currentTouch(value) else { return }
-        let dx: CGFloat = value.location.x - t.start.x
-        let dy: CGFloat = value.location.y - t.start.y
+    /// Finger down at `point` (the display view's points, origin top-left of the screen). A hold
+    /// is timed from here.
+    func touchBegan(_ point: CGPoint) {
+        beginTouch(at: point)
+    }
+
+    /// The finger moved. Ignored while no touch is down (a tab change or a new grid dropped it).
+    func touchMoved(_ point: CGPoint) {
+        guard var t = touch else { return }
+        let dx: CGFloat = point.x - t.start.x
+        let dy: CGFloat = point.y - t.start.y
         switch t.mode {
         case .pending:
             let dist: CGFloat = (dx * dx + dy * dy).squareRoot()
@@ -1167,32 +1612,33 @@ final class VFDRenderer: ObservableObject {
             decideAxis(&t, dx: dx, dy: dy)
             touch = t
             if t.mode == .scroll {
-                scroll(t, to: value.location)
+                scroll(t, to: point)
             } else if t.mode == .slide {
-                slide(t, at: value.location, ended: false)
+                slide(t, at: point, ended: false)
             }
         case .scroll:
-            scroll(t, to: value.location)
+            scroll(t, to: point)
         case .slide:
-            slide(t, at: value.location, ended: false)
+            slide(t, at: point, ended: false)
         case .held, .swipe, .ignored:
             break
         }
     }
 
-    func touchEnded(_ value: DragGesture.Value) {
-        guard let t = currentTouch(value) else { return }
+    /// The finger lifted at `point`, moving at `velocity` (points per second).
+    func touchEnded(_ point: CGPoint, velocity: CGVector) {
+        guard let t = touch else { return }
         touch = nil
-        let dx: CGFloat = value.location.x - t.start.x
-        let dy: CGFloat = value.location.y - t.start.y
+        let dx: CGFloat = point.x - t.start.x
+        let dy: CGFloat = point.y - t.start.y
         let dist: CGFloat = (dx * dx + dy * dy).squareRoot()
         switch t.mode {
         case .pending:
             if dist < VFDRenderer.slop {
-                tap(t, at: value.location)
+                tap(t, at: point)
             }
         case .slide:
-            slide(t, at: value.location, ended: true)
+            slide(t, at: point, ended: true)
         case .swipe:
             if dx <= -VFDRenderer.swipeDistance, let left = t.hit?.swipeLeft {
                 left()
@@ -1202,21 +1648,16 @@ final class VFDRenderer: ObservableObject {
                 requestRedraw()
             }
         case .scroll:
-            startFling(t, value)
+            startFling(t, velocity: velocity)
         case .held, .ignored:
             break
         }
     }
 
-    /// The touch this gesture belongs to, told apart by its start point: a new one when none is
-    /// down or when the last one never ended (SwiftUI does not call onEnded for a cancelled
-    /// gesture, e.g. when a hold opened an alert or a sheet).
-    private func currentTouch(_ value: DragGesture.Value) -> VFDTouch? {
-        if let t = touch, t.start == value.startLocation {
-            return t
-        }
-        beginTouch(at: value.startLocation)
-        return touch
+    /// The system took the touch (an alert or a sheet came up, the app left, the view went away):
+    /// forget it with no tap, swipe, slide end or fling.
+    func touchCancelled() {
+        touch = nil
     }
 
     private func beginTouch(at point: CGPoint) {
@@ -1355,10 +1796,11 @@ final class VFDRenderer: ObservableObject {
         }
     }
 
-    /// Keep going after release by the distance the gesture predicts, in whole cells, easing out.
-    private func startFling(_ t: VFDTouch, _ value: DragGesture.Value) {
+    /// Keep going after release by the distance the release velocity predicts (velocity x
+    /// flingProjection, about DragGesture's predictedEndLocation), in whole cells, easing out.
+    private func startFling(_ t: VFDTouch, velocity: CGVector) {
         let size: CGFloat = cellPt > 0 ? cellPt : 1
-        let extraPt: CGFloat = value.predictedEndLocation.y - value.location.y
+        let extraPt: CGFloat = velocity.dy * CGFloat(VFDRenderer.flingProjection)
         let extra: Double = Double(-extraPt / size)
         if !extra.isFinite { return }
         let rowsExtra: Int = Int(min(max(extra, -100_000), 100_000).rounded())
@@ -1370,10 +1812,7 @@ final class VFDRenderer: ObservableObject {
         let duration: Double = min(0.6, max(0.25, distance / 900.0))
         fling = VFDFling(tab: currentTab, target: t.target, from: from, to: to,
                          start: Date().timeIntervalSinceReferenceDate, duration: duration)
-        wantFast = true
-        if !fastClock {
-            fastClock = true
-        }
+        // The next frame sees the fling and runs the display's clock at 30 fps until it ends.
         requestRedraw()
     }
 
