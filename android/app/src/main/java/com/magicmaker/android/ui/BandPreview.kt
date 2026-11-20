@@ -17,16 +17,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.magicmaker.android.core.BandEffectModel
 import com.magicmaker.android.core.HexUtils
 import com.magicmaker.android.core.LabPacketBuilder
 import com.magicmaker.android.core.MagicClassifier
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * What we expect the packet to look like on the band. A MagicBand+ has five LEDs: one at each
@@ -41,7 +37,7 @@ fun BandPreview(hex: String, modifier: Modifier = Modifier, compact: Boolean = f
     val transition = rememberInfiniteTransition(label = "band")
     val t by transition.animateFloat(
         initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(2400, easing = LinearEasing), RepeatMode.Restart),
+        animationSpec = infiniteRepeatable(tween(BandLedAnimation.PERIOD_MS, easing = LinearEasing), RepeatMode.Restart),
         label = "t",
     )
 
@@ -79,7 +75,7 @@ fun BandPreview(hex: String, modifier: Modifier = Modifier, compact: Boolean = f
                 Offset(face.right - inset, face.bottom - inset),
             )
             points.forEachIndexed { z, p ->
-                val c = ledColor(model, z, t) ?: dim
+                val c = BandLedAnimation.color(model, z, t) ?: dim
                 if (c != dim) drawCircle(c.copy(alpha = 0.30f), radius = ledR * 2.2f, center = p)
                 drawCircle(c, radius = ledR, center = p)
             }
@@ -120,128 +116,10 @@ fun BandPreview(hex: String, modifier: Modifier = Modifier, compact: Boolean = f
                 }
                 if (model.buzz > 0) {
                     val name = LabPacketBuilder.vibrationPatterns.firstOrNull { it.id == model.buzz }?.label ?: "#${model.buzz}"
-                    val on = ((t * 6f) % 1f) < 0.5f
+                    val on = BandLedAnimation.buzzOn(t)
                     Text("BUZZ · ${name.uppercase()}", style = techLabel(), color = if (on) AppColors.Cyan else AppColors.CyanDim)
                 }
             }
-        }
-    }
-}
-
-private const val Z3 = 2   // centre zone index in perLed
-
-/** Colour of zone [z] (0..4 = Z1..Z5) at phase [t] in 0..1, or null for off. Pure function of the model. */
-private fun ledColor(m: BandEffectModel, z: Int, t: Float): Color? {
-    fun pal(idx: Int?) = idx?.let { labSwatchColor(it) }
-    val rest = pal(m.perLed.getOrNull(z))
-    fun breathe() = 0.75f + 0.25f * sin(2 * PI * t).toFloat()
-    return when (m.kind) {
-        BandEffectModel.Kind.NONE, BandEffectModel.Kind.PING -> null
-        BandEffectModel.Kind.SINGLE, BandEffectModel.Kind.WAND -> rest?.copy(alpha = breathe())
-        BandEffectModel.Kind.DUAL, BandEffectModel.Kind.TOGGLE -> {
-            if (m.kind == BandEffectModel.Kind.TOGGLE) {
-                // Two distinct colours, swapped every half cycle.
-                val a = m.perLed.firstOrNull { it != null }
-                val b = m.perLed.firstOrNull { it != null && it != a } ?: a
-                return pal(if (((t * 4f) % 1f) < 0.5f) a else b)
-            }
-            rest
-        }
-        BandEffectModel.Kind.RAINBOW -> {
-            if (m.approximate && m.colors.size == 5 && m.perLed.all { it != null } && m.note.contains("cycle")) {
-                // Hue cycle: rotate the five colours round the zones.
-                val shift = (t * 5).toInt()
-                pal(m.perLed[(z + shift) % 5])
-            } else rest
-        }
-        BandEffectModel.Kind.ROTATE -> {
-            // Listener: 750 ms per step through Z2→Z3→Z4→Z5→Z1.
-            val order = listOf(1, 2, 3, 4, 0)
-            val pos = order.indexOf(z)
-            val step = (t * 5 * 2).toInt()
-            pal(m.perLed[order[(pos + step) % 5]])
-        }
-        BandEffectModel.Kind.CROSSFADE -> {
-            val a = pal(m.colors.getOrNull(0)) ?: return null
-            val b = pal(m.colors.getOrNull(1)) ?: a
-            val f = 0.5f - 0.5f * cos(2 * PI * t).toFloat()
-            // Centre runs out of phase with the corners.
-            if (z == Z3) lerp(b, a, f) else lerp(a, b, f)
-        }
-        BandEffectModel.Kind.PULSE_BURST -> {
-            // Two 500 ms triangle pulses then 500 ms dark, per 1.5 s.
-            val pos = (t * 2.4f) % 1.5f
-            if (pos >= 1f) return rest?.copy(alpha = 0.05f)
-            val sub = pos % 0.5f
-            val bright = if (sub < 0.25f) sub / 0.25f else 1f - (sub - 0.25f) / 0.25f
-            rest?.copy(alpha = 0.1f + 0.9f * bright)
-        }
-        BandEffectModel.Kind.CIRCLE -> {
-            // Two comets chasing round the four corners; centre dim.
-            if (z == Z3) return rest?.copy(alpha = 0.15f)
-            val corners = listOf(0, 1, 3, 4)          // Z1 Z2 Z4 Z5 = BL TL TR BR, clockwise from BL
-            val pos = corners.indexOf(z)
-            val head = (t * 8).toInt() % 4
-            val d = (pos - head + 4) % 4
-            val base = rest ?: labSwatchColor(0x19)
-            when (d) { 0, 2 -> base; 1, 3 -> base.copy(alpha = 0.3f); else -> base }
-        }
-        BandEffectModel.Kind.TWINKLE -> {
-            val r = sin(z * 12.9898f + t * 40f) * 43758.5453f
-            val v = r - r.toInt()
-            if (v > 0.6f) rest else rest?.copy(alpha = 0.12f)
-        }
-        BandEffectModel.Kind.ALTERNATE -> {
-            // 1 s cycle: 500 ms pair A (Z1, Z4), 500 ms pair B (Z2, Z5); centre steady.
-            if (z == Z3) return rest
-            val half = ((t * 2.4f) % 1f) < 0.5f
-            val isA = z == 0 || z == 3
-            if (isA == half) rest else rest?.copy(alpha = 0.08f)
-        }
-        BandEffectModel.Kind.REPEAT_FADE -> {
-            val pos = (t * 2.4f) % 1.25f
-            val bright = if (pos < 1f) 1f - pos else 0f
-            rest?.copy(alpha = 0.05f + 0.95f * bright)
-        }
-        BandEffectModel.Kind.LIGHTNING -> {
-            val phase = (t * 3f) % 1f
-            if (phase < 0.08f || (phase > 0.16f && phase < 0.22f)) Color.White else Color.White.copy(alpha = 0.15f)
-        }
-        BandEffectModel.Kind.STROBE -> {
-            // Listener: yellow 0.5 s, orange 0.5 s, dark 4 s.
-            val pos = (t * 5f) % 5f
-            when {
-                pos < 0.5f -> labSwatchColor(0x11)
-                pos < 1f -> labSwatchColor(0x13)
-                else -> labSwatchColor(0x13).copy(alpha = 0.05f)
-            }
-        }
-        BandEffectModel.Kind.STEPPER -> {
-            val step = ((t * 4.8f).toInt() + z) % m.colors.size.coerceAtLeast(1)
-            pal(m.colors.getOrNull(step))
-        }
-        BandEffectModel.Kind.RGB -> Color(0xFF000000L or (m.rgb ?: 0x9E9E9E).toLong()).copy(alpha = breathe())
-        BandEffectModel.Kind.FLICKER -> {
-            // Listener: corners and centre flicker independently every ~60 ms.
-            val r = sin((z + 1) * 78.233f + (t * 40f).toInt() * 12.9898f) * 43758.5453f
-            val v = 0.25f + 0.75f * (r - kotlin.math.floor(r))
-            rest?.copy(alpha = v)
-        }
-        BandEffectModel.Kind.CENTRE_PULSE -> {
-            if (z != Z3) return rest?.copy(alpha = 0.35f)
-            rest?.copy(alpha = 0.2f + 0.8f * (0.5f + 0.5f * sin(2 * PI * t).toFloat()))
-        }
-        BandEffectModel.Kind.COMET -> {
-            if (z == Z3) return rest?.copy(alpha = 0.12f)
-            val corners = listOf(0, 1, 3, 4)
-            val d = (corners.indexOf(z) - (t * 8).toInt() % 4 + 4) % 4
-            when (d) { 0 -> rest; 3 -> rest?.copy(alpha = 0.45f); else -> rest?.copy(alpha = 0.08f) }
-        }
-        BandEffectModel.Kind.COMPLEX -> {
-            val v = 0.5f + 0.5f * sin(2 * PI * t + z * 1.3f).toFloat()
-            val a = m.colors.getOrNull(0)?.let { labSwatchColor(it) } ?: rest ?: labSwatchColor(0x15)
-            val b = m.colors.getOrNull(1)?.let { labSwatchColor(it) } ?: labSwatchColor(0x0F)
-            lerp(a, b, v)
         }
     }
 }

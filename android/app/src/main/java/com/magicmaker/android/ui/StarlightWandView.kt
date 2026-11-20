@@ -52,7 +52,6 @@ import kotlinx.coroutines.launch
 private const val DEFAULT_GLOW_INDEX = 0x1B
 private const val WAND_ASPECT = 600f / 750f
 private const val UPPER_GLOW_FRACTION = 0.94f
-private val STARLIGHT_ORANGE = Color(0xFFFF9800)
 
 private data class WandGlowEnvelope(
     val centerY: Float,
@@ -67,27 +66,6 @@ private val wandAuraEnvelopes = listOf(
 )
 
 private val wandTintEnvelope = WandGlowEnvelope(0.28f, 0.085f, 0.275f, 0.72f)
-
-private fun starlightGlowColor(index: Int): Color {
-    val i = index and 0x1F
-    return when (i) {
-        0x00, 0x16, 0x17, 0x18 -> Color(0xFF00E5FF)
-        0x01, 0x05, 0x07 -> Color(0xFFBB86FC)
-        0x02, 0x03, 0x04 -> Color(0xFF448AFF)
-        0x06 -> Color(0xFFE1BEE7)
-        in 0x08..0x0E -> Color(0xFFFF4081)
-        0x0F, 0x11 -> Color(0xFFFFAB40)
-        0x10 -> Color(0xFFFFF59D)
-        0x12, 0x1A -> Color(0xFFCCFF90)
-        0x13, 0x14 -> STARLIGHT_ORANGE
-        0x15 -> Color(0xFFFF5252)
-        0x19 -> Color(0xFF69F0AE)
-        0x1B, 0x1C -> Color(0xFFD1F0FF)
-        0x1D -> Color(0xFF505050)
-        0x1E -> Color(0xFFCE93D8)
-        else -> Color(0xFFB388FF)
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,9 +86,9 @@ fun StarlightWandView(
         scope.launch {
             pulse1.snapTo(0f)
             pulse2.snapTo(0f)
-            launch { pulse1.animateTo(1f, tween(420)) }
-            kotlinx.coroutines.delay(180)
-            launch { pulse2.animateTo(1f, tween(420)) }
+            launch { pulse1.animateTo(1f, tween(WandPulse.DURATION_MS, easing = WandPulse.easing)) }
+            kotlinx.coroutines.delay(WandPulse.DELAY_MS)
+            launch { pulse2.animateTo(1f, tween(WandPulse.DURATION_MS, easing = WandPulse.easing)) }
         }
     }
 
@@ -296,9 +274,9 @@ private fun DrawScope.drawWandAuraLayer(
             )
         }
 
-        listOf(pulse1 to 0.38f, pulse2 to 0.24f).forEach { (p, alpha) ->
+        listOf(pulse1 to WandPulse.FIRST_RING_PEAK, pulse2 to WandPulse.SECOND_RING_PEAK).forEach { (p, alpha) ->
             if (p > 0f) {
-                val scale = 1f + p * 0.06f
+                val scale = 1f + p * WandPulse.SCALE_GAIN
                 val env = wandAuraEnvelopes[0]
                 drawSoftAura(
                     glow = glow,
@@ -306,7 +284,7 @@ private fun DrawScope.drawWandAuraLayer(
                     centerY = size.height * env.centerY,
                     rx = size.width * env.rx * scale,
                     ry = size.height * env.ry * scale,
-                    peak = alpha * (1f - p * 0.4f),
+                    peak = alpha * (1f - p * WandPulse.FADE),
                 )
             }
         }

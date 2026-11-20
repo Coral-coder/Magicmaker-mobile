@@ -47,6 +47,24 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
+      # The VFD theme core (app/src/main/java/.../ui/vfd: glyphs, frame buffer, widgets) must draw
+      # exactly what the Python preview renderer draws: VFDGoldenTest replays
+      # tools/vfd/golden/ops.txt and compares every line with tools/vfd/golden/expected.txt (the
+      # first mismatches are in the failure message). This workflow has no paths filter, so it
+      # also runs for changes under tools/vfd/golden. After changing tools/vfd/vfd_font.py run
+      # `python3 tools/vfd/gen_kotlin.py`; after vfd.py / widgets.py run `python3 tools/vfd/golden.py`.
+      # The golden ops only draw some glyphs: check the generated tables against vfd_font.py too.
+      - name: VFD glyph tables are current
+        run: |
+          if ! python3 tools/vfd/gen_kotlin.py --check; then
+            echo "::error file=android/app/src/main/java/com/magicmaker/android/ui/vfd/VFDGlyphs.kt,title=VFD glyph tables are stale::VFDGlyphs.kt does not match tools/vfd/vfd_font.py. Regenerate it with 'python3 tools/vfd/gen_kotlin.py' and commit the result."
+            exit 1
+          fi
+
+      - name: VFD core matches the Python reference
+        working-directory: android
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace --tests 'com.magicmaker.android.ui.vfd.*'
+
       # The point of this workflow is the compile check above. The debug APK is only a
       # convenience download, and uploading it on every push/PR fills GitHub's artifact
       # storage quota. So only upload it on a manual run (workflow_dispatch), and even then

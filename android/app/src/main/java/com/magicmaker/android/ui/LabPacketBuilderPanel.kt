@@ -36,6 +36,11 @@ import com.magicmaker.android.data.MagicStore
 import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.service.ServiceState
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import com.magicmaker.android.ui.vfd.VFDColorPickerDialog
+import com.magicmaker.android.ui.vfd.VFDSettings
+import com.magicmaker.android.ui.vfd.VFDTheme
 
 @Composable
 fun LabTabScreen(app: MagicMakerApp, ctx: Context, storeRev: Int = 0, labLoadTick: Int = 0) {
@@ -280,7 +285,118 @@ fun SettingsTabScreen(app: MagicMakerApp, storeRev: Int = 0) {
             style = techLabel(),
             color = AppColors.TextDim,
         )
+        SettingsAppearanceSection()
         TransmissionSettingsSection(app.store, storeRev = storeRev)
+    }
+}
+
+/** THEME (STANDARD / VFD) and, under the VFD theme, its BASE COLOUR: the six presets and CUSTOM
+ *  with the colour picker. Both themes read these from VFDSettings. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsAppearanceSection() {
+    val ctx = LocalContext.current
+    val settings = remember { VFDSettings.shared(ctx) }
+    var picking by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("APPEARANCE", style = techHeader())
+        Text("THEME", style = techLabel(), color = AppColors.TextDim)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            VFDTheme.entries.forEachIndexed { index, theme ->
+                SegmentedButton(
+                    selected = settings.theme == theme,
+                    onClick = { settings.theme = theme },
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = VFDTheme.entries.size),
+                ) {
+                    Text(theme.label, style = techLabel())
+                }
+            }
+        }
+        if (settings.theme == VFDTheme.vfd) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("BASE COLOUR", style = techLabel(), color = AppColors.TextDim, modifier = Modifier.weight(1f))
+                Text(settings.base.rgb.hex, style = techLabel(), color = AppColors.Cyan)
+            }
+            val items = VFDSettings.baseItems
+            items.indices.chunked(4).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    row.forEach { index ->
+                        AppearanceBaseChip(
+                            name = items[index],
+                            swatch = VFDSettings.color(settings.itemRGB(index)),
+                            selected = settings.baseIndex == index,
+                            onClick = { settings.selectBase(index) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+            if (settings.baseIsCustom) {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text("CUSTOM COLOUR", style = techLabel(), color = AppColors.TextDim, modifier = Modifier.weight(1f))
+                    Box(
+                        Modifier
+                            .size(18.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(VFDSettings.color(settings.customRGB)),
+                    )
+                    OutlinedButton(
+                        onClick = { picking = true },
+                        modifier = Modifier.height(28.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    ) { Text("PICK", style = techLabel()) }
+                }
+            }
+        }
+    }
+    if (picking) {
+        VFDColorPickerDialog(
+            title = "CUSTOM COLOUR",
+            initial = settings.customRGB,
+            onDismiss = { picking = false },
+            onPick = { rgb ->
+                settings.selectCustom(rgb)
+                picking = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun AppearanceBaseChip(
+    name: String,
+    swatch: Color,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        modifier
+            .height(28.dp)
+            .clip(shape)
+            .border(0.5.dp, if (selected) AppColors.Cyan else AppColors.PanelLine, shape)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Box(Modifier.size(10.dp).clip(CircleShape).background(swatch))
+        Spacer(Modifier.width(4.dp))
+        Text(
+            name,
+            style = techLabel(),
+            color = if (selected) AppColors.Cyan else AppColors.TextDim,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

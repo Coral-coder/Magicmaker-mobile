@@ -11,6 +11,8 @@ laid out and approved as PNGs before anything in `ios/` changes. Generated files
 |---|---|
 | `vfd_font.py` | 5×7 bitmap font plus the Scale2x/Scale3x mid and big sizes (`--sheet OUT.png`, `--check`) |
 | `gen_swift.py` | writes the glyph tables as Swift (`VFDGlyphs.swift`) |
+| `gen_kotlin.py` | writes the glyph tables as Kotlin (`android/.../ui/vfd/VFDGlyphs.kt`; `--check` = up to date) |
+| `golden.py` | golden ops + expected results; replayed by `ios/VFDCheck` and Android's `VFDGoldenTest` |
 | `vfd.py` | core renderer: devices, palette, `FrameBuffer` drawing primitives (`fb.base` = the base colour it is drawn in), `render_png` (`python vfd.py` runs a self-test) |
 | `widgets.py` | app chrome (header, telemetry line, tab bar) and content widgets, built on `vfd.py` |
 | `screens/<tab>.py` | one module per tab: `TAB`, `TITLE`, `draw(fb, L)` |

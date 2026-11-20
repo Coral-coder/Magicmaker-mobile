@@ -51,6 +51,10 @@ import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.service.ServiceState
 import com.magicmaker.android.relay.RelayPairingPayload
 import com.magicmaker.android.relay.RelayProtocol
+import com.magicmaker.android.ui.vfd.VFDHost
+import com.magicmaker.android.ui.vfd.VFDRoot
+import com.magicmaker.android.ui.vfd.VFDSettings
+import com.magicmaker.android.ui.vfd.VFDTheme
 import kotlinx.coroutines.launch
 
 private enum class AppTab(val label: String) {
@@ -65,6 +69,22 @@ private enum class AppTab(val label: String) {
     Lab("LAB"),
     Settings("SETTINGS"),
 }
+
+/** The VFD theme's key for a tab (VFDRoot, VFDContext.selectTab / openStandard). */
+private fun vfdKey(t: AppTab): String = when (t) {
+    AppTab.Scan -> "scan"
+    AppTab.Transmit -> "tx"
+    AppTab.Wand -> "wand"
+    AppTab.Auto -> "auto"
+    AppTab.Relay -> "relay"
+    AppTab.Logs -> "logs"
+    AppTab.Map -> "map"
+    AppTab.Diagnostics -> "diag"
+    AppTab.Lab -> "lab"
+    AppTab.Settings -> "settings"
+}
+
+private fun appTabForVfdKey(key: String): AppTab? = AppTab.entries.firstOrNull { vfdKey(it) == key }
 
 private fun tabIcon(t: AppTab): ImageVector = when (t) {
     AppTab.Scan -> Icons.Default.BluetoothSearching
@@ -148,6 +168,33 @@ fun MagicMakerAppRoot() {
         }
     }
 
+    val loadInLab: (String, String) -> Unit = { hex, label ->
+        app.store.saveLabHex(HexUtils.canonicalHex(hex))
+        app.store.saveLabLabel(label)
+        ServiceState.requestLabLoad()
+        tab = AppTab.Lab
+    }
+
+    // Theme (Settings -> APPEARANCE): only the visible content swaps; the permission launchers,
+    // the service start and the listener above stay the same for both.
+    val vfdSettings = remember { VFDSettings.shared(context) }
+    if (vfdSettings.theme == VFDTheme.vfd) {
+        VFDRoot(
+            app = app,
+            state = state,
+            tab = vfdKey(tab),
+            onSelectTab = { key -> appTabForVfdKey(key)?.let { tab = it } },
+            host = VFDHost(
+                coreGranted = coreGranted,
+                wifiGranted = wifiGranted,
+                requestPermissions = { permLauncher.launch(allPerms.toTypedArray()) },
+                requestWifiPermission = { wifiPermLauncher.launch(wifiPerms.toTypedArray()) },
+                loadInLab = loadInLab,
+            ),
+        )
+        return
+    }
+
     Scaffold(
         containerColor = AppColors.Navy,
         topBar = {
@@ -191,12 +238,6 @@ fun MagicMakerAppRoot() {
                     OutlinedButton({ permLauncher.launch(allPerms.toTypedArray()) }) { Text("GRANT", style = techLabel()) }
                 }
             } else {
-                val loadInLab: (String, String) -> Unit = { hex, label ->
-                    app.store.saveLabHex(HexUtils.canonicalHex(hex))
-                    app.store.saveLabLabel(label)
-                    ServiceState.requestLabLoad()
-                    tab = AppTab.Lab
-                }
                 when (tab) {
                     AppTab.Scan -> ScanTab(state, loadInLab)
                     AppTab.Transmit -> TransmitTab(app, state, loadInLab)
@@ -222,29 +263,34 @@ fun MagicMakerAppRoot() {
     }
 }
 
-@Composable
-private fun TelemetryLine(state: ServiceState.UiState) {
+/** The telemetry line both themes show (the standard TelemetryLine, the VFD header). */
+internal fun telemetryLineText(state: ServiceState.UiState): String {
     val ble = when {
         !state.running -> "BLE:OFF"
         state.scanActive -> "BLE:SCAN"
         else -> "BLE:LINK"
     }
+    return buildString {
+        append("MM/RF ")
+        append(ble)
+        append(" | RX:")
+        append(state.packetsHeard)
+        append(" | TX-AUTO:")
+        append(state.autoResponsesSent)
+        if (state.scanActive) append(" | SCAN:ON")
+        if (state.autoEnabled) append(" | AUTO:ARM")
+        if (state.recordSessionActive) append(" | LOG:REC")
+        if (state.starlightLoopEnabled) append(" | WAND:LOOP")
+        if (state.txLoopEnabled) append(" | TX:LOOP")
+        if (state.relayLinked) append(" | IPHONE:LINK")
+    }
+}
+
+@Composable
+private fun TelemetryLine(state: ServiceState.UiState) {
     Column(Modifier.fillMaxWidth()) {
         Text(
-            buildString {
-                append("MM/RF ")
-                append(ble)
-                append(" | RX:")
-                append(state.packetsHeard)
-                append(" | TX-AUTO:")
-                append(state.autoResponsesSent)
-                if (state.scanActive) append(" | SCAN:ON")
-                if (state.autoEnabled) append(" | AUTO:ARM")
-                if (state.recordSessionActive) append(" | LOG:REC")
-                if (state.starlightLoopEnabled) append(" | WAND:LOOP")
-                if (state.txLoopEnabled) append(" | TX:LOOP")
-                if (state.relayLinked) append(" | IPHONE:LINK")
-            },
+            telemetryLineText(state),
             style = techLabel(),
             color = AppColors.TextDim,
             maxLines = 1,
@@ -615,7 +661,7 @@ private fun LibraryFileSection(app: MagicMakerApp, state: ServiceState.UiState) 
 }
 
 @Composable
-private fun DiagnosticsTab(state: ServiceState.UiState) {
+internal fun DiagnosticsTab(state: ServiceState.UiState) {
     val ctx = LocalContext.current
     var priorityCollapsed by remember { mutableStateOf(false) }
     var otherCollapsed by remember { mutableStateOf(true) }
@@ -706,7 +752,7 @@ private fun SourceRow(s: ServiceState.SourceStat) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
+internal fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
     val ctx = LocalContext.current
     var refreshTick by remember { mutableIntStateOf(0) }
     val logs = remember(refreshTick, state.recordSessionActive) { app.store.listLogs() }
@@ -976,7 +1022,7 @@ private fun LogsTab(app: MagicMakerApp, state: ServiceState.UiState) {
 private data class AnalyzedPacket(val hex: String, val label: String, val category: String, val count: Int)
 
 @Composable
-private fun ScanTab(state: ServiceState.UiState, onLoadInLab: (String, String) -> Unit) {
+internal fun ScanTab(state: ServiceState.UiState, onLoadInLab: (String, String) -> Unit) {
     val ctx = LocalContext.current
     val app = ctx.applicationContext as MagicMakerApp
     var recording by remember(state.recordSessionActive) { mutableStateOf(state.recordSessionActive) }
@@ -1364,7 +1410,7 @@ private fun RenameDialog(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun WandTab(
+internal fun WandTab(
     app: MagicMakerApp,
     storeRevision: Int,
     starlightLoopEnabled: Boolean,
@@ -1710,7 +1756,7 @@ private fun NewWandList(
 }
 
 @Composable
-private fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState, onLoadInLab: (String, String) -> Unit) {
+internal fun TransmitTab(app: MagicMakerApp, state: ServiceState.UiState, onLoadInLab: (String, String) -> Unit) {
     val ctx = LocalContext.current
     val storeRev = state.storeRevision
     var visibleSections by remember { mutableStateOf(LivePacketSection.entries.toSet()) }
@@ -1949,7 +1995,7 @@ private fun TxSwipeRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AutoTab(app: MagicMakerApp, state: ServiceState.UiState) {
+internal fun AutoTab(app: MagicMakerApp, state: ServiceState.UiState) {
     val ctx = LocalContext.current
     var auto by remember(state.autoEnabled) { mutableStateOf(state.autoEnabled) }
     var ruleName by remember { mutableStateOf("My rule") }
@@ -2138,7 +2184,7 @@ private fun GattRelayPanel(state: ServiceState.UiState, bleGranted: Boolean) {
 }
 
 @Composable
-private fun RelayTab(state: ServiceState.UiState, bleGranted: Boolean, wifiGranted: Boolean, onRequestWifiPerm: () -> Unit) {
+internal fun RelayTab(state: ServiceState.UiState, bleGranted: Boolean, wifiGranted: Boolean, onRequestWifiPerm: () -> Unit) {
     val ctx = LocalContext.current
     Column(Modifier.padding(AppDimens.pad), verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
         Text("RELAY / REMOTE", style = techHeader())

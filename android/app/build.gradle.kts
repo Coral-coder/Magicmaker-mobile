@@ -102,4 +102,18 @@ dependencies {
     implementation("org.osmdroid:osmdroid-android:6.1.20")
     debugImplementation("androidx.compose.ui:ui-tooling")
     // OTA uses the GitHub Releases API via HttpURLConnection + org.json — no extra deps.
+
+    // JVM unit tests: the VFD core golden check (src/test/.../ui/vfd/VFDGoldenTest.kt) replays
+    // tools/vfd/golden/ops.txt and must match the Python reference's expected.txt.
+    testImplementation("junit:junit:4.13.2")
+}
+
+// Unit tests print their summary line and, on failure, the whole assertion message (the VFD
+// golden check lists its first mismatches there), so a red CI log says what differs.
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStandardStreams = true
+    }
 }
