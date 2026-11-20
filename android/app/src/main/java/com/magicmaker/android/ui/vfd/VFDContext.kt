@@ -39,7 +39,7 @@ class VFDHeaderRight(val text: String, val action: () -> Unit)
  * returns the content end row (exclusive), or null when the screen scrolls nothing as a page. It
  * runs twice per frame (a scratch pass for edge snapping, then the real one), so it must not
  * change any state: read `ctx.state`, `ctx.app`, `ctx.ui`, `ctx.scroll(id)`, and change things
- * only inside the closures it hands to the widgets.
+ * only inside the closures it hands to the widgets, or in [onShow].
  */
 interface VFDScreen {
     /** Header title (mid size, uppercased by the header). */
@@ -56,16 +56,31 @@ interface VFDScreen {
 
     /** A "< BACK" action in the header (default none); the system back button runs it too. */
     fun back(ctx: VFDContext): (() -> Unit)? = null
+
+    /**
+     * The tab became visible: the VFD root's first appearance (after its first frame), every tab
+     * change, the app's return to the foreground (ON_START after ON_STOP), the core permissions
+     * being granted (the tab replaces the GRANT panel), a sheet opened by the VFD closing. Runs on
+     * the main thread outside [draw], so it may change state (reload what the standard tab loads
+     * when it enters composition); `ctx.tab` is the shown tab, `ctx.time` now, and a redraw
+     * follows. It can run more than once per visit, so keep it idempotent (default none).
+     */
+    fun onShow(ctx: VFDContext) {}
 }
 
 // MARK: - Overlay requests
 
 /** One row of [VFDContext.menu]: the label (uppercased when drawn), destructive rows in alarm
- *  ink, disabled rows dim with no tap. */
+ *  ink, disabled rows dim with no tap. [rgb]: a colour row (a wand colour, a palette entry): a
+ *  5 x 5 swatch of that true colour starts the row, then a blank glyph and the label,
+ *  left-aligned (a trailing " ✓" survives when the label is cut).
+ *
+ *      VFDMenuItem(name, rgb = VFDColors.starlightGlow(index)) { pick(index) } */
 class VFDMenuItem(
     val label: String,
     val destructive: Boolean = false,
     val enabled: Boolean = true,
+    val rgb: VFDRGB? = null,
     val action: () -> Unit,
 )
 
@@ -161,6 +176,13 @@ class VFDContext internal constructor(
      *  "settings". */
     var tab: String = "scan"
         private set
+    /** Physical pixels per dp (LocalDensity's density, e.g. 2.625 or 3), as the renderer lays the
+     *  grid out (iOS: displayScale). */
+    var displayScale: Double = 3.0
+        private set
+    /** Physical pixels per cell including its 1 px gap: max(4, round(density * 5 / 3)). */
+    var cellPitch: Int = 5
+        private set
 
     // MARK: renderer only
 
@@ -176,6 +198,31 @@ class VFDContext internal constructor(
     internal fun use(fb: VFDFrameBuffer) {
         this.fb = fb
     }
+
+    /** The grid's geometry on this screen (renderer only). */
+    internal fun setDisplay(scale: Double, pitch: Int) {
+        if (scale.isFinite() && scale > 0.0) {
+            displayScale = scale
+        }
+        if (pitch > 0) {
+            cellPitch = pitch
+        }
+    }
+
+    /** Point the context at a tab about to show, between frames, for its onShow (renderer only). */
+    internal fun beginShow(tab: String) {
+        this.tab = tab
+        this.time = System.currentTimeMillis() / 1000.0
+    }
+
+    // MARK: geometry
+
+    /** Dp as whole cells at the renderer's pitch, rounded half to even (Python round(), as the
+     *  layouts' point sizes are converted; iOS cells(points:)): e.g. a standard view's 48 dp. */
+    fun cells(dp: Double): Int = cellsAt(dp, displayScale, cellPitch)
+
+    /** [cells] for a whole number of dp. */
+    fun cells(dp: Int): Int = cells(dp.toDouble())
 
     // MARK: state
 
@@ -220,13 +267,17 @@ class VFDContext internal constructor(
     // MARK: overlays
 
     /** Material alert with one text field (numbers, names, IP addresses). [onDone] gets the text as
-     *  typed when OK is tapped; nothing happens on CANCEL. */
+     *  typed when OK is tapped; nothing happens on CANCEL. Asked for while another dialog is up
+     *  (a prompt, a confirm, the colour picker) or from one's completion (another prompt's
+     *  [onDone], a confirm's action), it waits and shows once that one has closed, in order, so
+     *  chained prompts need no delay; it never replaces the dialog on screen. */
     fun prompt(title: String, message: String = "", text: String = "", keyboard: VFDKeyboard = VFDKeyboard.text,
                onDone: (String) -> Unit) {
         renderer.presentPrompt(VFDPromptRequest(title, message, keyboard, onDone), text)
     }
 
-    /** Material alert with CANCEL and [confirmLabel] (red when destructive), which runs [action]. */
+    /** Material alert with CANCEL and [confirmLabel] (red when destructive), which runs [action].
+     *  Queues like [prompt]: safe to call from another dialog's completion. */
     fun confirm(title: String, message: String = "", confirmLabel: String = "OK", destructive: Boolean = false,
                 action: () -> Unit) {
         renderer.presentConfirm(VFDConfirmRequest(title, message, confirmLabel, destructive, action))
@@ -234,9 +285,12 @@ class VFDContext internal constructor(
 
     /** A VFD-drawn modal menu over the content: the title boxed, one row per item, then CANCEL.
      *  While it is open it takes every tap; a tap outside it (or the back button) closes it.
-     *  Picking an item closes the menu first, then runs the item's action. */
-    fun menu(title: String, items: List<VFDMenuItem>) {
-        renderer.presentMenu(VFDMenuRequest(title, items))
+     *  Picking an item closes the menu first, then runs the item's action. [selected]: index of
+     *  the current item; it is drawn as the selected row (a solid block, label cut out, like a
+     *  selected [OPTION]) and a long list opens scrolled so that row is centred (as far as the
+     *  list allows). */
+    fun menu(title: String, items: List<VFDMenuItem>, selected: Int? = null) {
+        renderer.presentMenu(VFDMenuRequest(title, items, selected))
     }
 
     val menuOpen: Boolean get() = renderer.menuOpen
@@ -303,6 +357,14 @@ class VFDContext internal constructor(
     /** Load a packet into the Lab and switch to LAB (the standard "load in Lab" actions). */
     fun loadInLab(hex: String, label: String) {
         renderer.host?.loadInLab?.invoke(hex, label)
+    }
+
+    internal companion object {
+        /** [dp] at [scale] px per dp as whole cells of [pitch] px, rounded half to even. */
+        fun cellsAt(dp: Double, scale: Double, pitch: Int): Int {
+            val p: Int = maxOf(1, pitch)
+            return VFDMath.roundHalfEven(dp * scale / p.toDouble())
+        }
     }
 }
 

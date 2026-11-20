@@ -19,7 +19,7 @@ import java.util.Locale
  * ONLY, REPLAY / DELETE, ANALYZE (HIDE PACKETS) and ADD ALL → LIB, then the distinct packets (tap =
  * TX, NAME = add to the library) or the packet rows in log order (tap = TX). The logs are listed
  * and read the way LogsTab does it (MagicStore.listLogs / readLog, again on REFRESH, when a
- * recording starts or stops and when the tab is opened again); DELETE asks first, NAME prompts,
+ * recording starts or stops and each time the tab is shown); DELETE asks first, NAME prompts,
  * results are system toasts as on the standard screen.
  */
 object VFDLogsScreen : VFDScreen {
@@ -55,10 +55,20 @@ object VFDLogsScreen : VFDScreen {
     private const val kBandOnly: String = "bandOnly"
     private const val kAnalyzing: String = "analyzing"
     private const val kHideNoise: String = "hideNoise"
+    /** Shows of the tab (onShow): each one lists the logs again. */
+    private const val kVisit: String = "visit"
 
     /** REFRESH, as LogsTab's header: lists the logs again and re-reads the open one. */
     override fun headerRight(ctx: VFDContext): VFDHeaderRight? = VFDHeaderRight("REFRESH") {
         refresh(ctx)
+    }
+
+    /** LogsTab lists the logs each time it enters composition: every show of the tab lists them
+     *  again (the open log and its filters stay, as the VFD keeps a tab's state while the app
+     *  runs). The listing itself is made by the next draw (a memo of this visit count). */
+    override fun onShow(ctx: VFDContext) {
+        val ui: VFDUIState = ctx.ui
+        ui.setInt(kVisit, ui.int(kVisit) + 1)
     }
 
     override fun draw(ctx: VFDContext): Int? {
@@ -87,9 +97,9 @@ object VFDLogsScreen : VFDScreen {
         val ui: VFDUIState = ctx.ui
         val s: ServiceState.UiState = ctx.state
         val tick: Int = ui.int(kRefresh)
-        val visit: Int = VFDLogsVisits.at(ctx.time)
+        val visit: Int = ui.int(kVisit)
         // LogsTab: remember(refreshTick, state.recordSessionActive) { listLogs() }, and again each
-        // time the tab is opened.
+        // time the tab is shown (onShow).
         val logs: List<MagicStore.LogFile> = ctx.cached("logs.list", Triple(tick, s.recordSessionActive, visit)) {
             runCatching { ctx.store.listLogs() }.getOrDefault(emptyList())
         }
@@ -276,9 +286,13 @@ object VFDLogsScreen : VFDScreen {
 
         fb.pushClip(0, listTop, fb.cols, viewH, dy = -s)
         val vis = VFDWindow(listTop + s, bottom + s)
-        val win: VFDWindow = VFDW.snappedWindow(fb, top = listTop, bottom = bottom) { target ->
-            logList(ctx, v, target, c, listTop, w, vis)
-        }
+        // VFDW.snappedWindow(fb, ...) on a reused probe: it would allocate a full-size buffer on
+        // every pass (twice a frame, 30 fps while a fling runs).
+        val probe: VFDFrameBuffer = probeBuffer(fb)
+        probe.pushClip(0, 0, fb.cols, fb.rows, dy = fb.originY)
+        logList(ctx, v, probe, c, listTop, w, vis)
+        probe.popClip()
+        val win: VFDWindow = VFDW.snappedWindow(lit = probe, top = listTop, bottom = bottom)
         val firstTap: Int = fb.taps.size
         fb.pushClip(0, win.top - fb.originY, fb.cols, win.bottom - win.top)
         logList(ctx, v, fb, c, listTop, w, vis)
@@ -286,6 +300,24 @@ object VFDLogsScreen : VFDScreen {
         VFDLogsText.dropShortTaps(fb, firstTap)
         fb.popClip()
         VFDW.listScrollbar(fb, listTop, viewH, total, s)
+    }
+
+    /** Probe buffer of the snapped window (reused; main thread only). */
+    private var scratch: VFDFrameBuffer? = null
+
+    /** The probe for [fb], cleared: what VFDW.snappedWindow(fb, ...) allocates each call (the
+     *  buffer's size, no alarm inversion, the default base, full clip, origin 0). */
+    private fun probeBuffer(fb: VFDFrameBuffer): VFDFrameBuffer {
+        val b: VFDFrameBuffer? = scratch
+        val buf: VFDFrameBuffer = if (b != null && b.cols == fb.cols && b.rows == fb.rows) {
+            b.reset()
+            b
+        } else {
+            VFDFrameBuffer(fb.cols, fb.rows).also { scratch = it }
+        }
+        buf.alarmInverted = false
+        buf.base = VFDBase.amber
+        return buf
     }
 
     /** Every log row, the open one followed by its detail rows. Rows outside `vis` (drawing rows)
@@ -609,25 +641,6 @@ private class VFDLogsButton(
     val expand: Boolean,
     val action: () -> Unit,
 )
-
-/** Counts the times the tab is opened (a frame gap means it was left; it redraws at least once a
- *  second while shown), so the logs are listed again as LogsTab does when it is composed. Both
- *  passes of a frame share its time, so they see the same count. */
-private object VFDLogsVisits {
-    private const val revisitGap: Double = 2.5
-    private var lastFrame: Double = 0.0
-    private var visit: Int = 0
-
-    fun at(time: Double): Int {
-        if (lastFrame > 0 && time - lastFrame > revisitGap) {
-            visit += 1
-        }
-        if (time > lastFrame) {
-            lastFrame = time
-        }
-        return visit
-    }
-}
 
 // MARK: - Drawing helpers (logs.py)
 

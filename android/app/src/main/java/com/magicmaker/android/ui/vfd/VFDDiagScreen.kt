@@ -48,6 +48,13 @@ object VFDDiagScreen : VFDScreen {
 
     override fun headerRight(ctx: VFDContext): VFDHeaderRight? = null
 
+    /** DiagnosticsTab reads the crash log each time it enters composition: every show of the tab
+     *  reads it again (the next draw does, a memo of the crash tick). */
+    override fun onShow(ctx: VFDContext) {
+        val ui: VFDUIState = ctx.ui
+        ui.setInt(kCrashTick, ui.int(kCrashTick) + 1)
+    }
+
     override fun draw(ctx: VFDContext): Int? {
         val fb: VFDFrameBuffer = ctx.fb
         val L: VFDLayout = ctx.L
@@ -57,10 +64,9 @@ object VFDDiagScreen : VFDScreen {
         val w: Int = L.width
         var y: Int = L.contentTop
         y = statusBlock(ctx, c, y, w)
-        // DiagnosticsTab: remember(crashTick) { CrashLog.recent(ctx) }, read again each time the tab
-        // is opened.
-        val crashKey = Pair(ui.int(kCrashTick), VFDDiagVisits.at(ctx.time))
-        val crashLog: String = ctx.cached("diag.crashLog", crashKey) { CrashLog.recent(ctx.context) }
+        // DiagnosticsTab: remember(crashTick) { CrashLog.recent(ctx) }; the tick goes up on each show
+        // of the tab (onShow), on opening the box and after CLEAR.
+        val crashLog: String = ctx.cached("diag.crashLog", ui.int(kCrashTick)) { CrashLog.recent(ctx.context) }
         val crashBlank: Boolean = crashLog.isBlank()
         y = crashHeader(ctx, crashBlank, c, y + 2, w)
         if (!ui.bool(kCrashCollapsed, true) && !crashBlank) {
@@ -428,22 +434,3 @@ object VFDDiagScreen : VFDScreen {
 private class VFDDiagStatus(val key: String, val value: String, val color: Int, val middle: Boolean)
 
 private class VFDDiagLocation(val text: String, val ok: Boolean)
-
-/** Counts the times the tab is opened (a frame gap means it was left; it redraws at least once a
- *  second while shown), so the crash log is read again as DiagnosticsTab does when it is composed.
- *  Both passes of a frame share its time, so they see the same count. */
-private object VFDDiagVisits {
-    private const val revisitGap: Double = 2.5
-    private var lastFrame: Double = 0.0
-    private var visit: Int = 0
-
-    fun at(time: Double): Int {
-        if (lastFrame > 0 && time - lastFrame > revisitGap) {
-            visit += 1
-        }
-        if (time > lastFrame) {
-            lastFrame = time
-        }
-        return visit
-    }
-}

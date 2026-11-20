@@ -1,5 +1,8 @@
 package com.magicmaker.android.ui.vfd
 
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import com.magicmaker.android.core.LivePacketSection
 import com.magicmaker.android.core.LivePacketSort
 import com.magicmaker.android.core.MagicCategory
@@ -8,6 +11,7 @@ import com.magicmaker.android.core.PacketBuilder
 import com.magicmaker.android.core.StarlightColors
 import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.ui.UiPrefs
+import java.lang.ref.WeakReference
 
 /**
  * TX tab in the VFD theme: tools/vfd/screens/tx.py on the real library and the Android TX loop
@@ -32,7 +36,28 @@ object VFDTxScreen : VFDScreen {
      *  its rule (tx.py HEAD_H). */
     val headH: Int = VFDW.sectionGap - VFDW.gap + VFDW.sectionH
 
+    /** UI keys of the values TransmitTab takes from the service again when it is composed (see
+     *  [onShow]). */
+    private val visitKeys: List<String> = listOf(
+        "loopOn", "loopEpoch", "sel", "selEpoch", "intervalSec", "intervalEpoch", "dragging", "dragStop",
+    )
+
     override fun headerRight(ctx: VFDContext): VFDHeaderRight? = null
+
+    /** TransmitTab enters composition afresh each time the tab is shown, so the values it shadows
+     *  the service with start over: the LOOP switch, the selected packet and the interval are the
+     *  service's again (a tap since, or an interval set with the loop off, is dropped; no slider
+     *  drag either). The CLASS filter stays, as the VFD keeps a tab's view state while the app runs
+     *  (the collapsed sections and the loop block's fold are UiPrefs anyway). The app's return to
+     *  the foreground keeps everything, as the standard tab's composition lives on through
+     *  ON_STOP / ON_START. */
+    override fun onShow(ctx: VFDContext) {
+        if (VFDForegroundReturn.isReturn(ctx)) return
+        val ui: VFDUIState = ctx.ui
+        for (key in visitKeys) {
+            ui.remove(key)
+        }
+    }
 
     override fun draw(ctx: VFDContext): Int? {
         val fb: VFDFrameBuffer = ctx.fb
@@ -694,5 +719,53 @@ private object TxColorNames {
             i = at + sep.length
         }
         return out
+    }
+}
+
+// MARK: - Visits
+
+/**
+ * Tells a tab's [VFDScreen.onShow] whether it is only the app's return to the foreground with that
+ * tab still on screen. onShow runs then too, but a standard tab (TransmitTab, WandTab) keeps its
+ * remember state through ON_STOP / ON_START and starts it over only when it enters composition
+ * again: a tab change, the VFD theme turned on, the activity recreated (a new renderer and
+ * context), the permissions granted. Notes the tab on screen at the activity's ON_STOP (the tab
+ * cannot change in the background); the next show of TX or WAND reads the note and clears it.
+ * Main thread only.
+ */
+internal object VFDForegroundReturn {
+    /** The context of the last show: its tab is the one on screen at ON_STOP. */
+    private var context: WeakReference<VFDContext>? = null
+    private var owner: WeakReference<LifecycleOwner>? = null
+    /** The tab on screen at the last ON_STOP and the context it was drawn by, until a show reads
+     *  them. */
+    private var stoppedTab: String? = null
+    private var stoppedContext: WeakReference<VFDContext>? = null
+    private val observer: LifecycleEventObserver = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_STOP) {
+            val ctx: VFDContext? = context?.get()
+            stoppedTab = ctx?.tab
+            stoppedContext = if (ctx != null) WeakReference(ctx) else null
+        }
+    }
+
+    /** True when this show of [ctx]'s tab is the return to the foreground of the tab that was on
+     *  screen when the app last stopped, drawn by the same context. Call once per show. */
+    fun isReturn(ctx: VFDContext): Boolean {
+        watch(ctx)
+        val back: Boolean = stoppedTab != null && stoppedTab == ctx.tab && stoppedContext?.get() === ctx
+        stoppedTab = null
+        stoppedContext = null
+        return back
+    }
+
+    /** Watches the activity [ctx] draws for (once per activity). */
+    private fun watch(ctx: VFDContext) {
+        context = WeakReference(ctx)
+        val next: LifecycleOwner = ctx.context as? LifecycleOwner ?: return
+        if (owner?.get() === next) return
+        owner?.get()?.lifecycle?.removeObserver(observer)
+        next.lifecycle.addObserver(observer)
+        owner = WeakReference(next)
     }
 }

@@ -368,6 +368,9 @@ object VFDRelayScreen : VFDScreen {
             context.startActivity(intent)
         } catch (e: ActivityNotFoundException) {
             ctx.toast("This settings screen is not available on this device")
+        } catch (e: SecurityException) {
+            // Some builds guard their settings screens (not exported to other apps).
+            ctx.toast("This settings screen is not available on this device")
         }
     }
 

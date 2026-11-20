@@ -1,7 +1,12 @@
 package com.magicmaker.android.ui.vfd
 
 import com.magicmaker.android.core.AutoResponseRule
+import com.magicmaker.android.core.BandEffectModel
+import com.magicmaker.android.core.DisneyTlv
+import com.magicmaker.android.core.HexUtils
+import com.magicmaker.android.core.MagicClassifier
 import com.magicmaker.android.core.MagicPacket
+import com.magicmaker.android.core.NewWandCatalog
 import com.magicmaker.android.core.PacketPattern
 import com.magicmaker.android.core.PacketPatterns
 import com.magicmaker.android.data.MagicStore
@@ -20,7 +25,9 @@ import com.magicmaker.android.service.ServiceState
  * setAutoRuleEnabled / deleteAutoRule. The option pickers are VFD menus listing the same options
  * (PacketPatterns.buildTriggerOptions / buildResponseOptions on the library); the rule name is a
  * text prompt. The builder lives in this tab's UI state while the app runs (AutoTab keeps it in
- * remember). The standard AUTO tab shows no colour content, so nothing here uses true colours.
+ * remember). The only true colours are the swatches of wand colour codes (Starlight colours, New
+ * Wand codes) in their glow colour: on their picker rows (the pickers open at the field's current
+ * value), and before them where the WHEN I HEAR / ADD RESPONSE fields and the STACK rows name them.
  */
 object VFDAutoScreen : VFDScreen {
     override val title: String = "AUTO"
@@ -41,12 +48,14 @@ object VFDAutoScreen : VFDScreen {
         y = VFDW.field(fb, L, c, y, w, "Rule name", b.ruleName, placeholder = "Rule name", action = {
             editRuleName(ctx)
         })
-        y = pickerField(fb, L, c, y, w, "When I hear", opts.triggerLabel(b.triggerId), action = {
-            openPicker(ctx, trigger = true)
-        })
-        y = pickerField(fb, L, c, y, w, "Add response to stack", opts.responseLabel(b.pickResponseId), action = {
-            openPicker(ctx, trigger = false)
-        })
+        y = pickerField(fb, L, c, y, w, "When I hear", opts.triggerLabel(b.triggerId),
+                        rgb = opts.triggerSwatch(b.triggerId), action = {
+                            openPicker(ctx, trigger = true)
+                        })
+        y = pickerField(fb, L, c, y, w, "Add response to stack", opts.responseLabel(b.pickResponseId),
+                        rgb = opts.responseSwatch(b.pickResponseId), action = {
+                            openPicker(ctx, trigger = false)
+                        })
         if (b.stack.isNotEmpty()) {
             y = stackBlock(ctx, fb, L, opts, b.stack, c, y, w)
         }
@@ -110,6 +119,23 @@ object VFDAutoScreen : VFDScreen {
 
         /** `responses.firstOrNull { it.id == id }?.label ?: id`. */
         fun responseLabel(id: String): String = responseById[id]?.label ?: id
+
+        /** The true colour of trigger [id] when it is one wand colour code ([wandSwatch]). */
+        fun triggerSwatch(id: String): VFDRGB? = triggerById[id]?.let { swatch(it.defaultHex) }
+
+        /** The true colour of response [id] when it is one wand colour code ([wandSwatch]). */
+        fun responseSwatch(id: String): VFDRGB? = responseById[id]?.let { swatch(it.defaultHex) }
+
+        /** [wandSwatch] of [hex], worked out once per options snapshot (draw runs on the main
+         *  thread only). */
+        fun swatch(hex: String): VFDRGB? {
+            if (swatches.containsKey(hex)) return swatches[hex]
+            val made: VFDRGB? = wandSwatch(hex)
+            swatches[hex] = made
+            return made
+        }
+
+        private val swatches: HashMap<String, VFDRGB?> = HashMap()
 
         private companion object {
             fun firstById(list: List<PacketPattern>): Map<String, PacketPattern> {
@@ -181,6 +207,29 @@ object VFDAutoScreen : VFDScreen {
         return service
     }
 
+    /** The glow colour of an option that is one wand colour code (a Starlight colour or a New Wand
+     *  code), as the WAND tab lights it (starlightGlowColor), for the option's menu swatch and the
+     *  field / stack row showing it; null for any other packet. A wand code is BandEffectModel's
+     *  WAND (a wand record and no band effect), or the same after a wake ping: a heard Starlight
+     *  colour is kept with its CC03 prefix, which BandEffectModel reads as a PING. */
+    private fun wandSwatch(hex: String): VFDRGB? {
+        if (hex.isEmpty()) return null
+        val model: BandEffectModel = runCatching { BandEffectModel.from(hex) }.getOrNull() ?: return null
+        if (model.kind != BandEffectModel.Kind.WAND) {
+            if (model.kind != BandEffectModel.Kind.PING) return null
+            val parsed: DisneyTlv.Parsed = runCatching { DisneyTlv.parse(hex) }.getOrNull() ?: return null
+            if (parsed.effect != null || !parsed.has(DisneyTlv.TYPE_WAND)) return null
+        }
+        val upper: String = HexUtils.canonicalHex(hex).uppercase()
+        if (upper.contains(NewWandCatalog.PREFIX)) {
+            // NewWandCatalog's colour: the last byte's low 5 bits.
+            val value: Int = upper.takeLast(2).toIntOrNull(16) ?: 0
+            return VFDColors.starlightGlow(value and 0x1F)
+        }
+        val index: Int = runCatching { MagicClassifier.starlightColorIndex(hex) }.getOrNull() ?: return null
+        return VFDColors.starlightGlow(index)
+    }
+
     /** AutoRuleRow's description: "<trigger id> → n pkt(s)", a stackless rule counting as one. */
     private fun describe(rule: AutoResponseRule): String {
         val stackSize: Int = maxOf(rule.responseHexes.size, 1)
@@ -232,16 +281,31 @@ object VFDAutoScreen : VFDScreen {
     }
 
     /** AutoPickerField: the caption and a boxed read-only field with the value (truncated with …)
-     *  and a dim down-chevron 2 cells inside the right border. Taps "picker:<CAPTION>". */
+     *  and a dim down-chevron 2 cells inside the right border; a wand colour code's value starts
+     *  with its true glow swatch [rgb] (5 x 5, 4 cells of air), as its menu row does. Taps
+     *  "picker:<CAPTION>". */
     private fun pickerField(fb: VFDFrameBuffer, L: VFDLayout, c: Int, y: Int, w: Int, caption: String, value: String,
-                            action: () -> Unit): Int {
-        val shown: String = VFDText.fit(value, w - 18)
+                            rgb: VFDRGB? = null, action: () -> Unit): Int {
         val y0: Int = VFDW.groupTop(L, y) + VFDW.labelH
-        val next: Int = VFDW.field(fb, L, c, y, w, caption, shown, name = "picker:" + VFDW.upper(caption),
-                                   action = action)
-        VFDW.chevron(fb, c + w - 10, y0 + VFDW.ctrlText + 1, false, VFDInk.dim)
+        val name: String = "picker:" + VFDW.upper(caption)
+        if (rgb == null) {
+            val shown: String = VFDText.fit(value, w - 18)
+            val next: Int = VFDW.field(fb, L, c, y, w, caption, shown, name = name, action = action)
+            VFDW.chevron(fb, c + w - 10, y0 + VFDW.ctrlText + 1, false, VFDInk.dim)
+            return next
+        }
+        // The empty field (no placeholder) draws the caption, the box and the tap; the swatch and
+        // the value go where field() puts its text (c + 3), the value after the swatch.
+        val next: Int = VFDW.field(fb, L, c, y, w, caption, "", name = name, action = action)
+        val ty: Int = y0 + VFDW.ctrlText
+        fb.fill(c + 3, ty + 1, 5, 5, fb.rgb(rgb))
+        fb.textFit(c + 3 + swatchW, ty, value, w - 18 - swatchW, VFDSize.small, VFDInk.text)
+        VFDW.chevron(fb, c + w - 10, ty + 1, false, VFDInk.dim)
         return next
     }
+
+    /** Cells a value's swatch takes before its text: 5 lit cells and 4 cells of air. */
+    private const val swatchW: Int = 9
 
     /** The stack row's xmark: a 7 x 7 dim ×, centred in an iconBtn square at (x, y). */
     private fun removeX(fb: VFDFrameBuffer, x: Int, y: Int, name: String, action: () -> Unit) {
@@ -293,15 +357,27 @@ object VFDAutoScreen : VFDScreen {
         return blockEnd + VFDW.gap
     }
 
-    /** STACK (n): the caption, then one ctrlH row per stacked response, "n. <label>" (truncated)
-     *  with the remove × at the right. */
+    /** STACK (n): the caption, then one ctrlH row per stacked response, "n. <label>" (truncated;
+     *  a wand colour code's label after its true glow swatch) with the remove × at the right. */
     private fun stackBlock(ctx: VFDContext, fb: VFDFrameBuffer, L: VFDLayout, opts: AutoOptions, ids: List<String>,
                            c: Int, top: Int, w: Int): Int {
         var y: Int = VFDW.label(fb, L, c, top, w, "Stack (" + ids.size + ")")
         val bx: Int = c + w - iconBtn
         for ((i, id) in ids.withIndex()) {
-            val text: String = (i + 1).toString() + ". " + opts.responseLabel(id)
-            fb.textFit(c, y + VFDW.ctrlText, text, bx - 4 - c, VFDSize.small, VFDInk.text)
+            val ty: Int = y + VFDW.ctrlText
+            val limit: Int = bx - 4
+            val number: String = (i + 1).toString() + ". "
+            val rgb: VFDRGB? = opts.responseSwatch(id)
+            // The swatch only with room for it and two characters of the label after it.
+            val sx: Int = c + VFDText.length(number) * VFDW.adv
+            if (rgb != null && sx + swatchW + VFDText.width(count = 2) <= limit) {
+                fb.text(c, ty, number, VFDSize.small, VFDInk.text)
+                fb.fill(sx, ty + 1, 5, 5, fb.rgb(rgb))
+                fb.textFit(sx + swatchW, ty, opts.responseLabel(id), limit - sx - swatchW, VFDSize.small,
+                           VFDInk.text)
+            } else {
+                fb.textFit(c, ty, number + opts.responseLabel(id), limit - c, VFDSize.small, VFDInk.text)
+            }
             val index: Int = i
             removeX(fb, bx, y, "stack:remove:$i") {
                 removeFromStack(ctx, index)
@@ -383,20 +459,28 @@ object VFDAutoScreen : VFDScreen {
         }
     }
 
-    /** The exposed dropdown as a VFD menu (a scrolling list, as the standard LazyColumn): a pick
-     *  sets the trigger, or picks a response and adds it to the stack when not in it yet. */
+    /** The exposed dropdown as a VFD menu (a scrolling list, as the standard LazyColumn): a wand
+     *  colour code's row starts with its true glow swatch; the field's current value is the
+     *  current row and the list opens at it. A pick sets the trigger, or picks a response and
+     *  adds it to the stack when not in it yet. */
     private fun openPicker(ctx: VFDContext, trigger: Boolean) {
         val opts: AutoOptions = options(ctx)
         val list: List<PacketPattern> = if (trigger) opts.triggers else opts.responses
+        val b: AutoBuilder = builder(autoUI(ctx))
+        val currentId: String = if (trigger) b.triggerId else b.pickResponseId
+        var selected: Int? = null
         val items = ArrayList<VFDMenuItem>(list.size)
-        for (option in list) {
+        for ((row, option) in list.withIndex()) {
             val picked: PacketPattern = option
             val text: String = option.label.ifEmpty { option.id }
-            items.add(VFDMenuItem(text) {
+            if (selected == null && option.id == currentId) {
+                selected = row
+            }
+            items.add(VFDMenuItem(text, rgb = opts.swatch(option.defaultHex)) {
                 if (trigger) pickTrigger(ctx, picked) else pickResponse(ctx, picked)
             })
         }
-        ctx.menu(if (trigger) "When I hear" else "Add response to stack", items)
+        ctx.menu(if (trigger) "When I hear" else "Add response to stack", items, selected = selected)
     }
 
     private fun pickTrigger(ctx: VFDContext, option: PacketPattern) {

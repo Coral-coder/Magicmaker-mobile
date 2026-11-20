@@ -2,17 +2,29 @@ package com.magicmaker.android.ui.vfd
 
 import android.os.Handler
 import android.os.Looper
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import com.magicmaker.android.data.MagicStore
+import com.magicmaker.android.service.ServiceState
 import com.magicmaker.android.ui.CapturePoint
 import com.magicmaker.android.ui.MapData
 import com.magicmaker.android.ui.TxEstimate
 import com.magicmaker.android.ui.loadMapData
+import java.lang.ref.WeakReference
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.floor
-import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -21,8 +33,8 @@ import kotlin.math.sin
  *
  * CAPTURES / TRANSMITTERS / BOTH (MapTab starts on CAPTURES), then a pixel plot of every logged
  * position (MapTab's own loadMapData: clustered capture points and RSSI-weighted transmitter
- * estimates, loaded off the main thread like MapTab does, again when the store changes, on
- * REFRESH and when the tab is opened again), north up, centred on the mean of everything plotted
+ * estimates, loaded off the main thread like MapTab does: each time the tab is shown, on REFRESH
+ * and when the store changes while it is on screen), north up, centred on the mean of everything plotted
  * as MapTab centres the map, about 1000 m across, with a reseau cross every 100 m, the counts and
  * a 100 M scale bar in the top border and a legend in the bottom border. Every pin is selectable:
  * the info panel shows what the osmdroid marker's balloon shows (× or the bare map closes it).
@@ -58,28 +70,27 @@ object VFDMapScreen : VFDScreen {
 
     // In-memory UI keys (MapTab's remember state).
     private const val kMode: String = "mode"
-    private const val kRefresh: String = "refreshTick"
     private const val kSelection: String = "selection"
     private const val kSelectionLoad: String = "selectionLoad"
 
     /** REFRESH loads the map again (shown disabled while it loads). */
     override fun headerRight(ctx: VFDContext): VFDHeaderRight? = VFDHeaderRight("REFRESH") {
-        if (!VFDMapLoader.busy) {
-            val ui: VFDUIState = ctx.ui
-            ui.setInt(kRefresh, ui.int(kRefresh) + 1)
-        }
+        VFDMapLoader.refresh(ctx)
     }
 
     override fun headerRightColor(ctx: VFDContext): Int = if (VFDMapLoader.busy) VFDInk.dim else VFDInk.highlight
+
+    /** MapTab loads each time it enters composition and again on every store change while it is
+     *  composed (LaunchedEffect(storeRev)): each show of the tab loads, and the loader watches the
+     *  store while MAP is on screen. Drawing only reads what has landed. */
+    override fun onShow(ctx: VFDContext) {
+        VFDMapLoader.show(ctx)
+    }
 
     override fun draw(ctx: VFDContext): Int? {
         val fb: VFDFrameBuffer = ctx.fb
         val L: VFDLayout = ctx.L
         val ui: VFDUIState = ctx.ui
-        // MapTab: LaunchedEffect(storeRev) each time it is composed; REFRESH. The loader starts a
-        // load once per key (both passes of a frame pass the same one) and redraws when it lands.
-        val key = Triple(ctx.state.storeRevision, ui.int(kRefresh), VFDMapVisits.at(ctx.time))
-        VFDMapLoader.ensure(ctx, key)
         val c: Int = L.left
         val w: Int = L.width
         // The map does not scroll with the content: undo the scroll offset.
@@ -133,7 +144,8 @@ object VFDMapScreen : VFDScreen {
     private fun txTitle(t: TxEstimate): String = "${t.address} · est. TX"
 
     private fun txDetail(t: TxEstimate): String =
-        "${t.count} obs · best ${t.bestRssi} dBm · ±${t.radiusM.roundToInt()}m · ${t.label}"
+        // roundHalfAway == roundToInt for the finite radii loadMapData makes, without its throw on NaN.
+        "${t.count} obs · best ${t.bestRssi} dBm · ±${VFDMath.roundHalfAway(t.radiusM)}m · ${t.label}"
 
     /** What the info panel shows for the tapped pin, with its position (metres from the centre);
      *  a selection made on an earlier load is none. */
@@ -259,6 +271,14 @@ object VFDMapScreen : VFDScreen {
     private fun halo(fb: VFDFrameBuffer, x: Int, y: Int, radius: Double) {
         if (!(radius >= 2.0)) return
         val r: Double = minOf(radius, 10_000.0)
+        // Every ring cell is within trunc(r) + 1 cells of the centre: a ring wholly outside the
+        // clip (a transmitter off the plot) draws nothing, so skip its trig and arrays.
+        val reach: Int = VFDMath.truncate(r) + 1
+        val clip: VFDRect = fb.clipRect
+        val sy: Int = y + fb.originY
+        if (x + reach < clip.c || x - reach >= clip.c + clip.w || sy + reach < clip.r || sy - reach >= clip.r + clip.h) {
+            return
+        }
         val n: Int = maxOf(16, VFDMath.truncate(2.0 * PI * r * 1.5))
         val ringC = IntArray(n)
         val ringR = IntArray(n)
@@ -648,31 +668,14 @@ private object VFDMapText {
     fun shortAddress(address: String): String = if (address.isEmpty()) "" else address.takeLast(8).uppercase()
 }
 
-/** Counts the times the tab is opened (a frame gap means it was left; it redraws at least once a
- *  second while shown), so the map loads again as MapTab does each time it is composed. Both
- *  passes of a frame share its time, so they see the same count. */
-private object VFDMapVisits {
-    private const val revisitGap: Double = 2.5
-    private var lastFrame: Double = 0.0
-    private var visit: Int = 0
-
-    fun at(time: Double): Int {
-        if (lastFrame > 0 && time - lastFrame > revisitGap) {
-            visit += 1
-        }
-        if (time > lastFrame) {
-            lastFrame = time
-        }
-        return visit
-    }
-}
-
 /**
- * MapTab's load (LaunchedEffect + Dispatchers.IO + runCatching) for the grid: [ensure] starts
- * loadMapData on a worker thread once per key (a later key waits for the running load, then
- * starts on the redraw that load's result triggers); the result lands on the main thread and
- * redraws. Until the first result the screen shows LOADING…; later loads keep the last map
- * shown, with REFRESH dim, until they land. Main thread only, apart from the worker body.
+ * MapTab's load (LaunchedEffect + Dispatchers.IO + runCatching) for the grid. A load is asked for
+ * by each show of the tab ([show]), by REFRESH ([refresh]) and by a store change while MAP is on
+ * screen (MapTab's LaunchedEffect(storeRev) while it is composed); loadMapData runs on a worker
+ * thread, one load at a time (one asked for while another runs starts when that one lands), and
+ * the result lands on the main thread with a redraw. Until the first result the screen shows
+ * LOADING…; later loads keep the last map shown, with REFRESH dim, until they land. Drawing only
+ * reads [load], [error], [generation] and [busy]. Main thread only, apart from the worker body.
  */
 private object VFDMapLoader {
     var load: VFDMapLoad? = null
@@ -682,29 +685,62 @@ private object VFDMapLoader {
     /** Bumped with every result (a selection belongs to the load it was made on). */
     var generation: Int = 0
         private set
-    private var doneKey: Any? = null
-    private var runningKey: Any? = null
+    /** Loads asked for so far; [done] is the count the last landed load answered. */
+    private var wanted: Int = 0
+    private var done: Int = 0
+    /** The count the running load answers (null: none running), and the store revision it started
+     *  at. */
+    private var running: Int? = null
+    private var runningRevision: Int = 0
+    /** The context of the last show: store changes and landed loads go through it. */
+    private var shown: WeakReference<VFDContext>? = null
+    /** Store revisions while MAP may be on screen (from a show until the first change after the
+     *  tab has gone). */
+    private var watch: Job? = null
+    private val scope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
     private val main: Handler = Handler(Looper.getMainLooper())
     private val worker: ExecutorService by lazy {
         Executors.newSingleThreadExecutor { r -> Thread(r, "vfd-map-load").apply { isDaemon = true } }
     }
 
     /** A load is running, or none has landed yet. */
-    val busy: Boolean get() = runningKey != null || (load == null && error == null)
+    val busy: Boolean get() = running != null || (load == null && error == null)
 
-    fun ensure(ctx: VFDContext, key: Any) {
-        if (key == doneKey || runningKey != null) return
-        runningKey = key
+    /** The tab was shown: load again, unless a load that started on the current store is still on
+     *  its way (one visit can be reported twice, e.g. a tab change that also closes a sheet). */
+    fun show(ctx: VFDContext) {
+        shown = WeakReference(ctx)
+        watchStore()
+        if (running == null || runningRevision != ServiceState.state.value.storeRevision) {
+            wanted += 1
+        }
+        update(ctx)
+    }
+
+    /** REFRESH (does nothing while a load is on its way). */
+    fun refresh(ctx: VFDContext) {
+        if (busy) return
+        wanted += 1
+        update(ctx)
+    }
+
+    /** Starts the load last asked for when none is running and it has not landed yet. */
+    private fun update(ctx: VFDContext) {
+        if (running != null || wanted == done) return
+        val serial: Int = wanted
+        running = serial
+        runningRevision = ServiceState.state.value.storeRevision
         val store: MagicStore = ctx.store
         worker.execute {
             val result: Result<VFDMapLoad> = runCatching { project(loadMapData(store)) }
-            main.post { finish(ctx, key, result) }
+            main.post { finish(ctx, serial, result) }
         }
+        ctx.redraw()
     }
 
-    private fun finish(ctx: VFDContext, key: Any, result: Result<VFDMapLoad>) {
-        runningKey = null
-        doneKey = key
+    private fun finish(started: VFDContext, serial: Int, result: Result<VFDMapLoad>) {
+        running = null
+        done = serial
         result.onSuccess {
             load = it
             error = null
@@ -714,7 +750,45 @@ private object VFDMapLoader {
             error = it.message ?: it.javaClass.simpleName
         }
         generation += 1
+        // The context of the latest show (a recreated activity draws through a new one).
+        val ctx: VFDContext = shown?.get() ?: started
         ctx.redraw()
+        // Asked for again while this one ran (a store change): load again.
+        update(ctx)
+    }
+
+    /** MapTab's LaunchedEffect(storeRev): watches the store revision from a show of the tab; a
+     *  change while MAP is on screen loads again, the first change after it has gone ends the
+     *  watch (the next show starts it again and loads anyway). */
+    private fun watchStore() {
+        if (watch?.isActive == true) return
+        watch = scope.launch {
+            ServiceState.state
+                .map { it.storeRevision }
+                .distinctUntilChanged()
+                .drop(1)
+                .flowOn(Dispatchers.Default)
+                .collect { storeChanged() }
+        }
+    }
+
+    private fun storeChanged() {
+        val ctx: VFDContext? = shown?.get()
+        if (ctx == null || !onScreen(ctx)) {
+            watch?.cancel()
+            watch = null
+            return
+        }
+        wanted += 1
+        update(ctx)
+    }
+
+    /** MAP is the tab the VFD shows (ctx.tab follows every frame and show), with the VFD theme on,
+     *  past the GRANT panel, and the app in the foreground (as MapTab is composed then). */
+    private fun onScreen(ctx: VFDContext): Boolean {
+        if (ctx.tab != "map" || !ctx.settings.isVFD || !ctx.coreGranted) return false
+        val owner: LifecycleOwner = ctx.context as? LifecycleOwner ?: return false
+        return owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
     }
 
     /** Positions in metres from the mean of every capture and transmitter (MapTab's centre). */

@@ -19,7 +19,6 @@ import com.magicmaker.android.service.BatteryOptimization
 import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.service.ServiceState
 import com.magicmaker.android.ui.liveSubtitle
-import kotlin.math.ceil
 import kotlin.math.floor
 
 /**
@@ -352,6 +351,9 @@ object VFDScanScreen : VFDScreen {
             context.startActivity(intent)
         } catch (e: ActivityNotFoundException) {
             ctx.toast("This settings screen is not available on this device")
+        } catch (e: SecurityException) {
+            // Some builds guard their settings screens (not exported to other apps).
+            ctx.toast("This settings screen is not available on this device")
         }
     }
 
@@ -550,12 +552,9 @@ object VFDScanScreen : VFDScreen {
     }
 
     /** The panel never caps under 120 dp (ScanScreen's minimum), in whole grid rows at the
-     *  renderer's pitch. */
-    private fun minPanelRows(ctx: VFDContext): Int {
-        val density: Float = ctx.context.resources.displayMetrics.density
-        val pitch: Int = maxOf(4, Math.round(density * 5f / 3f))
-        return ceil(120.0 * density.toDouble() / pitch.toDouble()).toInt()
-    }
+     *  renderer's own density and pitch, rounded as ctx.cells rounds (as the iPhone's 120 pt =
+     *  72 cells). */
+    private fun minPanelRows(ctx: VFDContext): Int = ctx.cells(120)
 
     /** ScanTab's control column in the VFD layout: the battery warning and RUN IN BACKGROUND, the
      *  status lines, the chip rows, MY MAGICBAND, LIBRARY FILE, the buffer counter with CLR, the

@@ -26,12 +26,13 @@ import kotlin.math.sin
  *   colour (starlightGlowColor) of the colour last heard or picked, the send pulse (two dotted
  *   rings growing for 0.42 s FastOutSlowIn, the second 0.18 s later, as runTransmitPulse); a tap
  *   on the wand steps to the next colour; the picker row (glow swatch, colour name, middle-cut
- *   code, the colour menu) and SEND; the empty text without a library.
+ *   code, the colour menu: one glow swatch row per colour, opened at the colour shown) and SEND;
+ *   the empty text without a library.
  * - NEW WAND (NewWandList): the generated codes in their own scroll region, a true-colour dot
  *   before each name; tap sends, hold renames.
  * Controls: STARLIGHT / NEW WAND, the programmable quick button (tap sends, hold reprograms), the
- * wand loop, its interval slider, LIB n with CLR LIB (Starlight only, as the standard tab) and the
- * status line.
+ * wand loop, its interval slider (the loop colour's glow swatch before its name), LIB n with
+ * CLR LIB (Starlight only, as the standard tab) and the status line.
  */
 object VFDWandScreen : VFDScreen {
     override val title: String = "WAND"
@@ -43,8 +44,31 @@ object VFDWandScreen : VFDScreen {
     const val pickH: Int = 26
     /** UI state key of the last SEND's time (epoch seconds): the pulse runs from it. */
     const val sentAtKey: String = "wand.sentAt"
+    /** UI keys of the values WandTab and StarlightWandView start over when they are composed (see
+     *  [onShow]). */
+    private val visitKeys: List<String> = listOf(
+        "loopOn", "loopEpoch", "sel", "selEpoch", "intervalSec", "intervalEpoch", "dragging", "dragStop",
+        sentAtKey, "pickIdx", "pickGlow", "pickEpoch",
+    )
 
     override fun headerRight(ctx: VFDContext): VFDHeaderRight? = null
+
+    /** WandTab enters composition afresh each time the tab is shown, so the values it shadows the
+     *  service with start over: the LOOP switch, the selected colour and the interval are the
+     *  service's again (a tap since, or an interval set with the loop off, is dropped; no slider
+     *  drag either). A new StarlightWandView has no pulse rings and no colour picked by hand, and
+     *  syncs to the heard colour afresh (a new view generation). STARLIGHT / NEW WAND stays, as
+     *  the VFD keeps a tab's view state while the app runs; the quick button and the New Wand
+     *  names are read live. The app's return to the foreground keeps everything, as the standard
+     *  tab's composition lives on through ON_STOP / ON_START. */
+    override fun onShow(ctx: VFDContext) {
+        if (VFDForegroundReturn.isReturn(ctx)) return
+        val ui: VFDUIState = ctx.ui
+        for (key in visitKeys) {
+            ui.remove(key)
+        }
+        ui.setInt("viewGen", ui.int("viewGen") + 1)
+    }
 
     override fun draw(ctx: VFDContext): Int? {
         val fb: VFDFrameBuffer = ctx.fb
@@ -77,9 +101,14 @@ object VFDWandScreen : VFDScreen {
         ctx.cached("wand.starlight", ctx.state.storeRevision) {
             val list: List<MagicPacket> = ctx.store.learnedStarlightPackets()
                 .filterNot { isNewWandHex(it.hex) }
-                .distinctBy { MagicClassifier.starlightColorIndex(it.hex) and 0x1F }
+                .distinctBy { paletteIndex(it.hex)?.and(0x1F) ?: -1 }
             WandList(list, list.hashCode())
         }
+
+    /** MagicClassifier.starlightColorIndex of a library code, or null when it cannot be read: an
+     *  empty or non-hex code (a hand-edited library file) throws NumberFormatException there. */
+    private fun paletteIndex(hex: String): Int? =
+        runCatching { MagicClassifier.starlightColorIndex(hex) }.getOrNull()
 
     /** The list for the current mode: Starlight colours or the New Wand codes. */
     private fun library(ctx: VFDContext, newWand: Boolean): List<MagicPacket> =
@@ -160,7 +189,7 @@ object VFDWandScreen : VFDScreen {
                 idx = if (ui.has("pickIdx") && ui.int("pickEpoch") == prev.epoch) ui.int("pickIdx") else prev.index
             }
             val heard: Int = heardRaw and 0x1F
-            val heardIdx: Int = entries.indexOfFirst { MagicClassifier.starlightColorIndex(it.hex) == heard }
+            val heardIdx: Int = entries.indexOfFirst { paletteIndex(it.hex) == heard }
             if (heardIdx >= 0) idx = heardIdx
             idx = if (count > 0) VFDMath.clamp(idx, 0, count - 1) else 0
             epochSeq += 1
@@ -211,13 +240,6 @@ object VFDWandScreen : VFDScreen {
         return ctx.cached("wand.newWandNames", raw) { loadNewWandNames(prefs(ctx)) }
     }
 
-    /** Points (dp) to whole cells on this screen (wand.py _pt): px / pitch, the renderer's pitch. */
-    private fun cells(ctx: VFDContext, dp: Int): Int {
-        val density: Float = ctx.context.resources.displayMetrics.density
-        val pitch: Int = maxOf(4, Math.round(density * 5f / 3f))
-        return VFDMath.roundHalfEven(dp.toDouble() * density.toDouble() / pitch.toDouble())
-    }
-
     /** "%.1f" as the standard tab formats seconds. */
     private fun seconds(v: Float): String = "%.1f".format(v)
 
@@ -241,8 +263,9 @@ object VFDWandScreen : VFDScreen {
         val c: Int = L.left
         val w: Int = L.width
         val entries: List<MagicPacket> = st.library
-        val pickTop: Int = bottom - cells(ctx, 8) - pickH
-        val wandBottom: Int = pickTop - cells(ctx, 10)
+        // Points (dp) to whole cells (wand.py _pt) at the renderer's own density and pitch.
+        val pickTop: Int = bottom - ctx.cells(8) - pickH
+        val wandBottom: Int = pickTop - ctx.cells(10)
         val avail: Int = wandBottom - top
         if (avail >= 24) {
             val h: Int = ctx.cached("wand.fit", avail) { WandArt.fit(avail) }
@@ -340,7 +363,7 @@ object VFDWandScreen : VFDScreen {
     private fun pickerRow(ctx: VFDContext, ui: VFDUIState, st: WandState, fb: VFDFrameBuffer, c: Int, r: Int,
                           w: Int) {
         val h: Int = pickH
-        val sendW: Int = cells(ctx, 96)
+        val sendW: Int = ctx.cells(96)
         val gap = 6
         val bw: Int = w - sendW - gap
         fb.box(c, r, bw, h, VFDInk.dim)
@@ -455,6 +478,18 @@ object VFDWandScreen : VFDScreen {
     /** A New Wand code's palette index, as NewWandCatalog names it: the last byte's low 5 bits. */
     private fun codeColorIndex(hex: String): Int = (hex.takeLast(2).toIntOrNull(16) ?: 0) and 0x1F
 
+    /** A wand code's true glow colour as this tab lights it (starlightGlowColor): a New Wand
+     *  code's palette colour, else the Starlight colour; null without a code. */
+    private fun wandGlow(hex: String): VFDRGB? {
+        if (hex.isBlank()) return null
+        val index: Int = if (isNewWandHex(hex)) {
+            codeColorIndex(hex)
+        } else {
+            paletteIndex(hex) ?: return null
+        }
+        return VFDColors.starlightGlow(index)
+    }
+
     /** NewWandList rows reaching the window: the last 2 bytes in mid size (dim; the selected one
      *  inverted), the custom name or palette colour right-aligned (dim; the selected one
      *  highlight) after a 5 x 5 dot in the code's true colour. Tap sends, hold renames. */
@@ -557,13 +592,24 @@ object VFDWandScreen : VFDScreen {
         val L: VFDLayout = ctx.L
         val shown: Float = if (st.dragging) stopSeconds(st.dragStop) else st.intervalSec
         val packet: MagicPacket? = st.selectedPacket
+        // The loop's colour by name ("STARLIGHT: RED (#15)", "NEW WAND 3A5") gets its true glow
+        // colour beside it: a 5 x 5 swatch in a blank glyph slot after "n.nS | ", then one more.
+        val prefix: String = seconds(shown) + "S | "
+        val glow: VFDRGB? = if (packet != null) wandGlow(packet.hex) else null
         val labelText: String = if (packet != null) {
-            seconds(shown) + "S | " + packet.label.uppercase()
+            prefix + (if (glow != null) "  " else "") + packet.label.uppercase()
         } else {
             "NO WAND LIBRARY"
         }
         val end: Int = VFDW.intervalSlider(fb, L, c, r, w, labelText, shown.toDouble())
         val top: Int = if (r > L.contentTop) r + VFDW.groupGap else r
+        // Only when the label shown keeps the prefix, both blank slots and a character of the name
+        // (a cut keeps maxChars - 1 characters, trailing spaces dropped, then "…").
+        val fits: Int = VFDText.maxChars(w)
+        val keepsSlot: Boolean = VFDText.length(labelText) <= fits || fits - 1 >= VFDText.length(prefix) + 3
+        if (glow != null && keepsSlot) {
+            fb.fill(c + VFDText.length(prefix) * VFDW.adv, top + 1, 5, 5, fb.rgb(glow))
+        }
         val barY: Int = top + VFDW.labelH
         fb.tap(c, barY - 6, w, VFDW.tapRows, name = "slider:INTERVAL:bar", drag = { fraction, ended ->
             val clamped: Double = VFDMath.clamp(fraction, 0.0, 1.0)
@@ -679,7 +725,7 @@ object VFDWandScreen : VFDScreen {
     private fun pick(ctx: VFDContext, ui: VFDUIState, list: WandList, index: Int) {
         val entries: List<MagicPacket> = list.packets
         if (index < 0 || index >= entries.size) return
-        ui.setInt("pickGlow", MagicClassifier.starlightColorIndex(entries[index].hex))
+        ui.setInt("pickGlow", paletteIndex(entries[index].hex) ?: 0)
         ui.setInt("pickEpoch", sync(ctx, ui, list).epoch)
         ui.setInt("pickIdx", index)
     }
@@ -702,22 +748,29 @@ object VFDWandScreen : VFDScreen {
         transmitColor(ctx, ui, packet)
     }
 
-    /** The picker's dropdown: every colour as "NAME  ·  CODE" (the code cut in the middle to fit
-     *  the menu row); a pick shows that colour. */
+    /** The picker's dropdown: every colour as its true glow swatch (starlightGlowColor, as the wand
+     *  lights it) and "NAME  ·  CODE" (the code cut in the middle to fit the row after the swatch),
+     *  opened at the colour the picker shows, drawn as the current row; a pick shows that colour. */
     private fun colorMenu(ctx: VFDContext, ui: VFDUIState) {
         val list: WandList = starlight(ctx)
-        // A menu row's label fits in the panel's button (the panel inner width - 4 cells).
-        val maxChars: Int = VFDText.maxChars(VFDW.panelInner(ctx.L.left, 0, ctx.L.width).w - 4)
+        val current: WandPick = picker(ctx, ui, list)
+        // A colour row's label starts after its swatch: the panel inner width - 17 cells of room
+        // (the content width - 25, as the iPhone menu).
+        val maxChars: Int = VFDText.maxChars(VFDW.panelInner(ctx.L.left, 0, ctx.L.width).w - 17)
         val items = ArrayList<VFDMenuItem>()
         for ((index, packet) in list.packets.withIndex()) {
-            val name: String = StarlightColors.nameFor(MagicClassifier.starlightColorIndex(packet.hex)).uppercase()
+            val colorIndex: Int = paletteIndex(packet.hex) ?: 0
+            val name: String = StarlightColors.nameFor(colorIndex).uppercase()
             val prefix = "$name  ·  "
             val room: Int = maxChars - VFDText.length(prefix)
             val hexUpper: String = packet.hex.uppercase()
             val shownHex: String = if (room >= 8) middle(hexUpper, room) else hexUpper
-            items.add(VFDMenuItem(prefix + shownHex) { pick(ctx, ui, list, index) })
+            items.add(VFDMenuItem(prefix + shownHex, rgb = VFDColors.starlightGlow(colorIndex)) {
+                pick(ctx, ui, list, index)
+            })
         }
-        ctx.menu("WAND COLOR", items)
+        val selected: Int? = if (current.index in list.packets.indices) current.index else null
+        ctx.menu("WAND COLOR", items, selected = selected)
     }
 
     /** CLR LIB: "Clear wand library?" — clearLearnedStarlight(), the selection dropped and a

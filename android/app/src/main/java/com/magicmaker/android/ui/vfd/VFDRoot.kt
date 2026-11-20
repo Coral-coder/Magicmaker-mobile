@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import android.view.Window
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.DecayAnimationSpec
 import androidx.compose.animation.core.calculateTargetValue
@@ -90,6 +91,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.magicmaker.android.MagicMakerApp
@@ -153,11 +155,59 @@ internal class VFDConfirmRequest(
     val action: () -> Unit,
 )
 
-internal class VFDMenuRequest(val title: String, val items: List<VFDMenuItem>)
+internal class VFDMenuRequest(
+    val title: String,
+    val items: List<VFDMenuItem>,
+    /** The current item: drawn as the selected row and scrolled into view on open. */
+    val selected: Int? = null,
+)
 
 internal class VFDSheetItem(val id: String, val content: @Composable (VFDSheetScope) -> Unit)
 
 internal class VFDColorRequest(val title: String, val initial: VFDRGB, val onPick: (VFDRGB) -> Unit)
+
+/** A prompt or confirm waiting for the dialog on screen to close. */
+internal sealed class VFDQueuedAlert {
+    class Prompt(val request: VFDPromptRequest, val text: String) : VFDQueuedAlert()
+    class Confirm(val request: VFDConfirmRequest) : VFDQueuedAlert()
+}
+
+/**
+ * The order prompts and confirms show in: one asked for while a dialog is up, while one is
+ * closing (from its completion: a prompt's onDone, a confirm's action) or while others already
+ * wait, goes to the back of the line; each close lets the next one show once the closed dialog has
+ * settled. Pure bookkeeping (the renderer shows, closes and times).
+ */
+internal class VFDAlertQueue<T> {
+    private val waiting: ArrayDeque<T> = ArrayDeque()
+
+    /** A dialog was closed and the next one waits for it to settle. */
+    var closing: Boolean = false
+        private set
+
+    val size: Int get() = waiting.size
+
+    /** [item] to show now, or null when it was queued ([dialogUp]: a dialog is on screen). */
+    fun offer(item: T, dialogUp: Boolean): T? {
+        if (dialogUp || closing || waiting.isNotEmpty()) {
+            waiting.addLast(item)
+            return null
+        }
+        return item
+    }
+
+    /** The dialog on screen closed (before its completion runs). */
+    fun closed() {
+        closing = true
+    }
+
+    /** The closed dialog has settled: the next one to show, if any and none is up. */
+    fun settle(dialogUp: Boolean): T? {
+        closing = false
+        if (dialogUp) return null
+        return waiting.removeFirstOrNull()
+    }
+}
 
 // MARK: - Root
 
@@ -246,6 +296,20 @@ fun VFDRoot(
         }
     }
 
+    // The return to the foreground (ON_START after ON_STOP) shows the tab again (VFDScreen.onShow);
+    // a pause alone (a permission dialog, the recents screen) does not.
+    DisposableEffect(renderer, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> renderer.appStopped()
+                Lifecycle.Event.ON_START -> renderer.appStarted()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // The system back button closes the menu first, then runs the screen's "< BACK". Dialogs and
     // the sheet close themselves on back.
     BackHandler(enabled = renderer.menuShown) {
@@ -267,22 +331,30 @@ fun VFDRoot(
         }
     }
 
+    // Keyed by the request: a queued dialog is a new window (the closed one goes away first),
+    // never the old one with new content.
     val prompt: VFDPromptRequest? = renderer.promptRequest
     if (prompt != null) {
-        VFDPromptDialog(renderer, prompt)
+        key(prompt) {
+            VFDPromptDialog(renderer, prompt)
+        }
     }
     val confirm: VFDConfirmRequest? = renderer.confirmRequest
     if (confirm != null) {
-        VFDConfirmDialog(renderer, confirm)
+        key(confirm) {
+            VFDConfirmDialog(renderer, confirm)
+        }
     }
     val colour: VFDColorRequest? = renderer.colorRequest
     if (colour != null) {
-        VFDColorPickerDialog(
-            title = colour.title,
-            initial = colour.initial,
-            onDismiss = { renderer.colorRequest = null },
-            onPick = { rgb -> renderer.finishColorPicker(colour, rgb) },
-        )
+        key(colour) {
+            VFDColorPickerDialog(
+                title = colour.title,
+                initial = colour.initial,
+                onDismiss = { renderer.cancelColorPicker(colour) },
+                onPick = { rgb -> renderer.finishColorPicker(colour, rgb) },
+            )
+        }
     }
     val sheet: VFDSheetItem? = renderer.sheetItem
     if (sheet != null) {
@@ -307,7 +379,7 @@ private fun findActivity(context: Context): Activity? {
 private fun VFDPromptDialog(renderer: VFDRenderer, req: VFDPromptRequest) {
     val focus: FocusRequester = remember(req) { FocusRequester() }
     AlertDialog(
-        onDismissRequest = { renderer.cancelPrompt() },
+        onDismissRequest = { renderer.cancelPrompt(req) },
         title = { Text(req.title, style = techHeader()) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -336,7 +408,7 @@ private fun VFDPromptDialog(renderer: VFDRenderer, req: VFDPromptRequest) {
             }
         },
         dismissButton = {
-            TextButton(onClick = { renderer.cancelPrompt() }) { Text("CANCEL", style = techLabel()) }
+            TextButton(onClick = { renderer.cancelPrompt(req) }) { Text("CANCEL", style = techLabel()) }
         },
     )
     LaunchedEffect(req) {
@@ -349,7 +421,7 @@ private fun VFDPromptDialog(renderer: VFDRenderer, req: VFDPromptRequest) {
 private fun VFDConfirmDialog(renderer: VFDRenderer, req: VFDConfirmRequest) {
     val message: String = req.message
     AlertDialog(
-        onDismissRequest = { renderer.confirmRequest = null },
+        onDismissRequest = { renderer.cancelConfirm(req) },
         title = { Text(req.title, style = techHeader()) },
         text = if (message.isEmpty()) null else ({ Text(message, style = techLabel()) }),
         confirmButton = {
@@ -362,7 +434,7 @@ private fun VFDConfirmDialog(renderer: VFDRenderer, req: VFDConfirmRequest) {
             }
         },
         dismissButton = {
-            TextButton(onClick = { renderer.confirmRequest = null }) { Text("CANCEL", style = techLabel()) }
+            TextButton(onClick = { renderer.cancelConfirm(req) }) { Text("CANCEL", style = techLabel()) }
         },
     )
 }
@@ -561,6 +633,9 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         const val holdMillis: Long = 500L
         /** Scroll region id of the open menu's list. */
         const val menuRegion: String = "vfd.menu"
+        /** A queued prompt or confirm shows this long after the last dialog closed, so the closed
+         *  window has gone (and its keyboard with it) before the next one opens. */
+        const val alertSettleMillis: Long = 200L
 
         /** Unlit cell colour (#090909) of the safe columns beside the frame buffer. */
         private val unlitColor: Color = Color(VFDPalette.unlitRGB.argb)
@@ -600,6 +675,73 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
             b.reset()
             b.base = base
             b.alarmInverted = alarmInverted
+        }
+
+        /** The list offset (whole rows) that centres row [index] in a window of [shownRows] rows,
+         *  as far as the list allows (0 for no or an out-of-range index). */
+        fun revealScroll(index: Int, count: Int, shownRows: Int, rowH: Int): Int {
+            if (index < 0 || index >= count || shownRows <= 0) return 0
+            val first: Int = index - (shownRows - 1) / 2
+            val lastFirst: Int = maxOf(0, count - shownRows)
+            return maxOf(0, minOf(first, lastFirst)) * rowH
+        }
+
+        /** VFDText.fit, except that a trailing " ✓" (the current item's tick) survives the cut. */
+        fun fitKeepingTick(s: String, maxCols: Int): String {
+            val tick = " ✓"
+            if (!s.endsWith(tick) || VFDText.width(s) <= maxCols) {
+                return VFDText.fit(s, maxCols)
+            }
+            val head: String = VFDText.fit(s.dropLast(tick.length), maxCols - 2 * VFDW.adv)
+            if (head.isEmpty()) {
+                return VFDText.fit("✓", maxCols)
+            }
+            return head + tick
+        }
+
+        /** One menu row, ctrlH tall, at (c, y), w wide. Without `rgb`: VFDW.button (the current row
+         *  as the primary block). With it: the same box or block, a 5 x 5 swatch of the true colour
+         *  at c + 3 (the first glyph slot), a blank glyph slot, then the label left-aligned at
+         *  c + 15; on a block the swatch keeps an unlit 7 x 7 ring and the label is cut out, as on
+         *  a selected BASE COLOUR chip. Tap "menu:<LABEL>" when enabled runs [pick]. */
+        fun drawMenuRow(fb: VFDFrameBuffer, L: VFDLayout, item: VFDMenuItem, current: Boolean, c: Int, y: Int,
+                        w: Int, pick: () -> Unit) {
+            val name: String = "menu:" + VFDW.upper(item.label)
+            val color: VFDRGB = item.rgb ?: run {
+                VFDW.button(fb, L, c, y, w, item.label, primary = current, enabled = item.enabled, name = name,
+                            alarm = item.destructive, action = pick)
+                return
+            }
+            val ty: Int = y + VFDW.ctrlText
+            val sx: Int = c + 3
+            val tx: Int = sx + 2 * VFDW.adv
+            val label: String = fitKeepingTick(VFDW.upper(item.label), c + w - 2 - tx)
+            var solid = false
+            var border: Int = if (item.enabled) VFDInk.highlight else VFDInk.dim
+            var ink: Int = if (item.enabled) VFDInk.text else VFDInk.dim
+            if (item.enabled && item.destructive) {
+                if (fb.alarmInverted) {
+                    solid = true
+                } else {
+                    border = VFDInk.alarm
+                    ink = VFDInk.alarm
+                }
+            } else if (item.enabled && current) {
+                solid = true
+            }
+            if (solid) {
+                fb.fill(c, y, w, VFDW.ctrlH, VFDInk.highlight)
+                fb.fill(sx - 1, ty, 7, 7, VFDInk.unlit)
+                ink = VFDInk.unlit
+            } else {
+                fb.box(c, y, w, VFDW.ctrlH, border)
+            }
+            val swatch: Int = fb.rgb(color)
+            fb.fill(sx, ty + 1, 5, 5, swatch)
+            fb.text(tx, ty, label, VFDSize.small, ink)
+            if (item.enabled) {
+                VFDW.tap(fb, c, y, w, VFDW.ctrlH, name, action = pick)
+            }
         }
 
         /** A pitch x pitch tile, transparent but for its right column and bottom row in black,
@@ -687,6 +829,26 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
     private var menu: VFDMenuRequest? = null
     private var menuScroll: Int = 0
     private var menuMax: Int = 0
+    /** Row to scroll into view when the open menu is first drawn. */
+    private var menuReveal: Int? = null
+
+    // dialogs
+    /** Prompts and confirms asked for while a dialog was up or closing, in order. */
+    private val alerts: VFDAlertQueue<VFDQueuedAlert> = VFDAlertQueue()
+    private var alertSettlePosted: Boolean = false
+    private val alertSettle: Runnable = Runnable {
+        alertSettlePosted = false
+        settleAlerts()
+    }
+
+    // tab visibility (VFDScreen.onShow)
+    private var showPending: Boolean = false
+    private var showPosted: Boolean = false
+    private var wentBackground: Boolean = false
+    private val showRunnable: Runnable = Runnable {
+        showPosted = false
+        runPendingShow()
+    }
 
     // touches
     private var touch: VFDTouch? = null
@@ -698,6 +860,12 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
     fun attach() {
         session.appContext = app
         session.onChange = sessionChange
+        if (alerts.closing || alerts.size > 0) {
+            postAlertSettle()
+        }
+        if (showPending) {
+            postShow()
+        }
     }
 
     fun detach() {
@@ -705,6 +873,9 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
             session.onChange = null
         }
         main.removeCallbacksAndMessages(null)
+        syncPosted = false
+        alertSettlePosted = false
+        showPosted = false
     }
 
     /** New composition inputs: redraw when what a frame shows changed, close what belonged to the
@@ -720,10 +891,16 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         }
         if (prev == null) {
             requestRedraw()
+            // First appearance: onShow runs after the first frame.
+            tabShown()
             return
         }
         if (prev.tab != next.tab) {
             tabChanged()
+            tabShown()
+        } else if (!prev.host.coreGranted && next.host.coreGranted) {
+            // The tab takes the GRANT panel's place, as the standard tab enters composition then.
+            tabShown()
         }
         val changed: Boolean = prev.state !== next.state || prev.tab != next.tab ||
             prev.host.coreGranted != next.host.coreGranted || prev.host.wifiGranted != next.host.wifiGranted ||
@@ -787,38 +964,89 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
 
     val menuOpen: Boolean get() = menu != null
 
+    /** A prompt, a confirm or the colour picker is on screen. */
+    private val dialogUp: Boolean get() = promptRequest != null || confirmRequest != null || colorRequest != null
+
     fun presentPrompt(request: VFDPromptRequest, text: String) {
-        setMenu(null)
-        promptText = TextFieldValue(text, TextRange(text.length))
-        promptRequest = request
+        val now: VFDQueuedAlert = alerts.offer(VFDQueuedAlert.Prompt(request, text), dialogUp) ?: return
+        showAlert(now)
     }
 
+    /** OK on the prompt (or the keyboard's Done): the dialog counts as closing before onDone runs,
+     *  so a prompt or confirm asked for there waits until this one has gone. */
     fun finishPrompt(request: VFDPromptRequest) {
+        if (promptRequest !== request) return
         val text: String = promptText.text
         promptRequest = null
-        request.onDone(text)
+        alertClosed()
+        runAction("prompt") { request.onDone(text) }
         requestRedraw()
     }
 
-    fun cancelPrompt() {
+    /** CANCEL, back or a tap outside the prompt. */
+    fun cancelPrompt(request: VFDPromptRequest) {
+        if (promptRequest !== request) return
         promptRequest = null
+        alertClosed()
+        requestRedraw()
     }
 
     fun presentConfirm(request: VFDConfirmRequest) {
-        setMenu(null)
-        confirmRequest = request
+        val now: VFDQueuedAlert = alerts.offer(VFDQueuedAlert.Confirm(request), dialogUp) ?: return
+        showAlert(now)
     }
 
     fun finishConfirm(request: VFDConfirmRequest) {
+        if (confirmRequest !== request) return
         confirmRequest = null
-        request.action()
+        alertClosed()
+        runAction("confirm") { request.action() }
         requestRedraw()
+    }
+
+    /** CANCEL, back or a tap outside the confirm. */
+    fun cancelConfirm(request: VFDConfirmRequest) {
+        if (confirmRequest !== request) return
+        confirmRequest = null
+        alertClosed()
+        requestRedraw()
+    }
+
+    private fun showAlert(alert: VFDQueuedAlert) {
+        setMenu(null)
+        when (alert) {
+            is VFDQueuedAlert.Prompt -> {
+                val text: String = alert.text
+                promptText = TextFieldValue(text, TextRange(text.length))
+                promptRequest = alert.request
+            }
+            is VFDQueuedAlert.Confirm -> confirmRequest = alert.request
+        }
+        requestRedraw()
+    }
+
+    /** A dialog is going away; the next queued one shows once it has settled. */
+    private fun alertClosed() {
+        alerts.closed()
+        postAlertSettle()
+    }
+
+    private fun postAlertSettle() {
+        if (alertSettlePosted) return
+        alertSettlePosted = true
+        main.postDelayed(alertSettle, alertSettleMillis)
+    }
+
+    private fun settleAlerts() {
+        val next: VFDQueuedAlert = alerts.settle(dialogUp) ?: return
+        showAlert(next)
     }
 
     fun presentMenu(request: VFDMenuRequest) {
         setMenu(request)
         menuScroll = 0
         menuMax = 0
+        menuReveal = request.selected
         fling = null
         requestRedraw()
     }
@@ -830,6 +1058,9 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
 
     private fun setMenu(m: VFDMenuRequest?) {
         menu = m
+        if (m == null) {
+            menuReveal = null
+        }
         shownMenu = m != null
         menuShown = shownMenu
     }
@@ -839,8 +1070,13 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         sheetItem = item
     }
 
+    /** DONE, back, or VFDContext.dismissSheet: the tab shows again (onShow). */
     fun dismissSheet() {
+        val wasOpen: Boolean = sheetItem != null
         sheetItem = null
+        if (wasOpen) {
+            tabShown()
+        }
         requestRedraw()
     }
 
@@ -850,8 +1086,18 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
     }
 
     fun finishColorPicker(request: VFDColorRequest, rgb: VFDRGB) {
+        if (colorRequest !== request) return
         colorRequest = null
-        request.onPick(rgb)
+        alertClosed()
+        runAction("colour") { request.onPick(rgb) }
+        requestRedraw()
+    }
+
+    /** CANCEL, back or a tap outside the colour picker. */
+    fun cancelColorPicker(request: VFDColorRequest) {
+        if (colorRequest !== request) return
+        colorRequest = null
+        alertClosed()
         requestRedraw()
     }
 
@@ -879,12 +1125,85 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         requestRedraw()
     }
 
+    // MARK: tab visibility
+
+    /** The tab on screen became visible: run its screen's onShow on the main thread, outside
+     *  drawing, then redraw. Before the first frame there is no context yet; it then runs right
+     *  after that frame. Coalesced: several triggers in one turn run it once. */
+    private fun tabShown() {
+        showPending = true
+        postShow()
+    }
+
+    private fun postShow() {
+        if (showPosted) return
+        showPosted = true
+        main.post(showRunnable)
+    }
+
+    /** ON_STOP: the app went to the background. */
+    fun appStopped() {
+        wentBackground = true
+    }
+
+    /** ON_START: back in the foreground after ON_STOP shows the tab again. */
+    fun appStarted() {
+        if (!wentBackground) return
+        wentBackground = false
+        tabShown()
+    }
+
+    private fun runPendingShow() {
+        if (!showPending) return
+        if (rendering) {
+            postShow()
+            return
+        }
+        val ctx: VFDContext = context ?: return
+        val inp: Inputs = inputs ?: return
+        showPending = false
+        // The GRANT panel stands in for the tab until the core permissions are granted (setInputs
+        // shows the tab then).
+        if (!inp.host.coreGranted) return
+        val key: String = inp.tab
+        ctx.state = inp.state
+        ctx.beginShow(key)
+        try {
+            screen(key).onShow(ctx)
+        } catch (e: Exception) {
+            noteError(e, "VFD onShow · $key")
+        }
+        requestRedraw()
+    }
+
     /** The system back button: the screen's "< BACK". */
     fun goBack() {
         val back: (() -> Unit)? = lastBack
         if (back != null) {
-            back()
+            runAction("back") { back() }
             requestRedraw()
+        }
+    }
+
+    /**
+     * Runs a screen's closure: a tap, hold, swipe or slider drag (a menu pick and a header button
+     * are taps), a dialog's completion, the back action. These run outside the draw pass, where a
+     * throw would crash the app (and, the theme being saved, cost the next launch the VFD): a bug
+     * in one is recorded in the crash log and reported in a short toast instead, as a draw error
+     * shows the error panel. Every closure that does not throw runs exactly as before. (The
+     * closures never suspend, so even a CancellationException from one is a bug of its own;
+     * rethrown from the gesture coroutine it would quietly end touch handling.)
+     */
+    private inline fun runAction(kind: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            noteError(e, "VFD $kind · " + (inputs?.tab ?: ""))
+            val context: Context = inputs?.context ?: app
+            runCatching {
+                Toast.makeText(context, "That did not work (" + e.javaClass.simpleName + ")", Toast.LENGTH_SHORT)
+                    .show()
+            }
         }
     }
 
@@ -916,6 +1235,7 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         val ctx: VFDContext = this.context ?: return
         val base: VFDBase = settings.base
         ctx.state = inp.state
+        ctx.setDisplay(inp.density.density.toDouble(), pitch)
         rendering = true
         try {
             composeSafely(ctx, fb, probe, L, inp, base)
@@ -928,6 +1248,10 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
             fast.value = wantFast
         }
         syncShown()
+        if (showPending) {
+            // A show asked for before the first frame runs right after it.
+            postShow()
+        }
         if (redrawAfterRender) {
             // A redraw asked for while drawing (a screen should not): one more frame, later.
             redrawAfterRender = false
@@ -1097,17 +1421,18 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         session.setPageScroll(key, 0)
     }
 
-    private fun noteError(e: Exception) {
+    private fun noteError(e: Exception, origin: String = "VFD draw · " + (inputs?.tab ?: "")) {
         val text: String = e.javaClass.name + ": " + e.message
         if (text == lastError) return
         lastError = text
-        CrashLog.record(e, "VFD draw · " + (inputs?.tab ?: ""))
+        CrashLog.record(e, origin)
     }
 
     // MARK: menu
 
     /** The open menu over a blanked content region: a highlight panel with the title set into its
-     *  top border, one button row per item (a list that scrolls when it does not fit), then
+     *  top border, one button row per item (a list that scrolls when it does not fit; colour rows
+     *  with their swatch, the current item as a solid block, scrolled into view on open), then
      *  CANCEL. A full-screen hit under it closes it on a tap anywhere else. */
     private fun drawMenu(m: VFDMenuRequest, fb: VFDFrameBuffer, L: VFDLayout) {
         while (fb.clipDepth > 0) {
@@ -1131,6 +1456,12 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         val listTop: Int = inner.r
         val contentRows: Int = m.items.size * rowH
         menuMax = maxOf(0, contentRows - listH)
+        val reveal: Int? = menuReveal
+        if (reveal != null) {
+            // First draw of a menu with a current item: open with that row centred in view.
+            menuReveal = null
+            menuScroll = revealScroll(reveal, m.items.size, shownRows, rowH)
+        }
         menuScroll = maxOf(0, minOf(menuScroll, menuMax))
         // Taps on the panel between the rows do nothing (only taps outside it close the menu).
         fb.tap(c, top, w, panelH, name = "menu:panel")
@@ -1139,15 +1470,13 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         val offset: Int = minOf(menuMax, ((menuScroll + rowH / 2) / rowH) * rowH)
         fb.pushClip(0, listTop, fb.cols, listH)
         var y: Int = listTop - offset
-        for (item in m.items) {
+        for ((index, item) in m.items.withIndex()) {
             if (y + rowH > listTop && y < listTop + listH) {
                 val action: () -> Unit = item.action
-                VFDW.button(fb, L, inner.c, y, inner.w, item.label, enabled = item.enabled,
-                            name = "menu:" + VFDW.upper(item.label), alarm = item.destructive,
-                            action = {
-                                closeMenu()
-                                action()
-                            })
+                drawMenuRow(fb, L, item, m.selected == index, inner.c, y, inner.w, pick = {
+                    closeMenu()
+                    action()
+                })
             }
             y += rowH
         }
@@ -1225,7 +1554,7 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         val long: () -> Unit = t.hit?.long ?: return
         t.mode = VFDTouchMode.held
         inputs?.haptic?.performHapticFeedback(HapticFeedbackType.LongPress)
-        long()
+        runAction("hold") { long() }
         requestRedraw()
     }
 
@@ -1269,10 +1598,10 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
                 val left: (() -> Unit)? = t.hit?.swipeLeft
                 val right: (() -> Unit)? = t.hit?.swipeRight
                 if (dx <= -swipePx() && left != null) {
-                    left()
+                    runAction("swipe") { left() }
                     requestRedraw()
                 } else if (dx >= swipePx() && right != null) {
-                    right()
+                    runAction("swipe") { right() }
                     requestRedraw()
                 }
             }
@@ -1341,10 +1670,10 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         val action: (() -> Unit)? = h.action
         val drag: ((Double, Boolean) -> Unit)? = h.drag
         if (action != null) {
-            action()
+            runAction("tap") { action() }
         } else if (drag != null) {
             // A tap on a slider bar sets the value there.
-            drag(fraction(h, p), true)
+            runAction("drag") { drag(fraction(h, p), true) }
         } else {
             return
         }
@@ -1354,7 +1683,7 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
     private fun slide(t: VFDTouch, p: Offset, ended: Boolean) {
         val h: VFDHit = t.hit ?: return
         val drag: (Double, Boolean) -> Unit = h.drag ?: return
-        drag(fraction(h, p), ended)
+        runAction("drag") { drag(fraction(h, p), ended) }
         requestRedraw()
     }
 

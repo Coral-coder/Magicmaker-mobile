@@ -737,14 +737,17 @@ object VFDLabScreen : VFDScreen {
 
     // MARK: pickers
 
-    /** PaletteDropdown's dialog as a VFD menu: one row per option, the current one ticked. */
+    /** PaletteDropdown's dialog as a VFD menu: one row per option, the current one ticked and drawn
+     *  as the current row, the list opened at it; a palette option ("#15 Red") starts with a
+     *  swatch of its true colour (optionSwatch), as the picker button and the dialog's rows do. */
     private fun openPicker(ctx: VFDContext, title: String, options: List<Pair<Int, String>>, selected: Int,
                            pick: (Int) -> Unit) {
         if (options.isEmpty()) return
         val items: List<VFDMenuItem> = options.map { (id, name) ->
-            VFDMenuItem(if (id == selected) "$name ✓" else name) { pick(id) }
+            VFDMenuItem(if (id == selected) "$name ✓" else name, rgb = optionSwatch(name)) { pick(id) }
         }
-        ctx.menu(title.uppercase(), items)
+        val current: Int = options.indexOfFirst { it.first == selected }
+        ctx.menu(title.uppercase(), items, selected = if (current >= 0) current else null)
     }
 
     // MARK: colour names with their swatches
