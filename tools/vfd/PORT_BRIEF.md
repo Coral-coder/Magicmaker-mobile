@@ -36,7 +36,7 @@ The coordinator registers new files in the Xcode project (a `VFD` group); agents
 | `VFDWidgets.swift` | `VFDLayout` + every function of `widgets.py` (same geometry), edge-snap helpers | Foundation only |
 | `VFDSettings.swift` | `final class VFDSettings: ObservableObject` (shared): theme + base colour, UserDefaults | SwiftUI |
 | `VFDContext.swift` | `final class VFDContext`: what a screen gets (see below) | SwiftUI |
-| `VFDRootView.swift` | the full-screen Canvas renderer, gestures, chrome, overlays, animation clock, tab dispatch | SwiftUI |
+| `VFDRootView.swift` | the full-screen renderer (a UIKit display view hosted in SwiftUI), touches, chrome, overlays, animation clock, tab dispatch | SwiftUI + UIKit |
 | `VFD<Tab>Screen.swift` | one per tab: Scan, Tx, Wand, Auto, Link, Logs, Map, Diag, Lab, Settings | SwiftUI |
 | `ios/VFDCheck/main.swift` | golden check of the Foundation-only core (runs on Linux in CI) | Foundation |
 
@@ -108,13 +108,18 @@ labels to show (iOS: `SCAN TX WAND AUTO LINK / LOGS MAP DIAG LAB SETUP`; Android
 
 ## Renderer and interaction (`VFDRootView`)
 
-- One full-screen `Canvas`, `.ignoresSafeArea()`, origin = screen (0,0). `pitchPx = scale >= 3 ? 5 : 4`
+- One full-screen UIKit view (`VFDDisplayView` in a `UIViewRepresentable`, `.ignoresSafeArea()`),
+  origin = screen (0,0). **Paint and touch must use the same view's coordinate space**: the first
+  TestFlight build drew from the screen top but read touches from a SwiftUI gesture whose local space
+  started below the safe-area inset, so every tap landed ~35 cells above the finger.
+  `pitchPx = scale >= 3 ? 5 : 4`
   (generally `max(4, Int((5 * scale / 3).rounded()))`), `cellPt = pitchPx / scale`,
   `cols = floor(widthPx / pitchPx)`, `rows = floor(heightPx / pitchPx)`, safe rows =
   `ceil(insetPt * scale / pitchPx)` from the real safe-area insets.
-- Paint: build a `cols × rows` RGBA bitmap from the cells (5 palette inks + `trueColors`), draw it
-  with `.interpolation(.none)` into `cols*cellPt × rows*cellPt`, then fill the 1-px black gap lines
-  (right column and bottom row of every pitch) and the leftover edge area in black. The result must be
+- Paint: build a `cols × rows` RGBA bitmap from the cells (5 palette inks + `trueColors`), set it
+  as the contents of an image layer (nearest-neighbour filters, implicit actions off) sized
+  `cols*cellPt × rows*cellPt`, with a static overlay layer holding the 1-px black gap lines (right
+  column and bottom row of every pitch); the leftover edge area is black. The result must be
   pixel-identical to `vfd.render_image`. Unlit = #090909, background #000.
 - Chrome = `widgets.frame` (header with the tab's title and optional right action, telemetry line —
   the **same text as the standard `TelemetryBar`**, reuse its builder — rules, tab bar). Tab bar taps
@@ -122,7 +127,8 @@ labels to show (iOS: `SCAN TX WAND AUTO LINK / LOGS MAP DIAG LAB SETUP`; Android
 - Content: two-pass like `render_previews.draw_screen` — draw once on a scratch buffer, snap the window
   with `snappedWindow`, draw for real, drop hidden partial taps, then the scrollbar. **Screen draw
   functions must be pure** (no state mutation; they run twice a frame).
-- Gestures (one `DragGesture(minimumDistance: 0)` + timing): press-and-release without moving
+- Touches (`touchesBegan/Moved/Ended/Cancelled` on the display view, one finger; Android: one
+  `pointerInput` on the drawing Canvas) + timing: press-and-release without moving
   (< ~8 pt) = tap → topmost hit's `action`; held ≥ 0.5 s without moving = `long`; a drag decides its
   axis after ~8 pt: vertical scrolls the scroll region under the start point (else the page) in whole
   cells with a short fling; horizontal on a hit with `drag` → continuous `drag(fraction 0...1,
@@ -130,8 +136,10 @@ labels to show (iOS: `SCAN TX WAND AUTO LINK / LOGS MAP DIAG LAB SETUP`; Android
   action on release. Page scroll is clamped to `[0, contentEnd − viewport]`; scroll offsets and
   per-region offsets persist per tab while the app runs.
 - Redraw: on any `vm` / `scan` / `tx` / `VFDSettings` change (observe them like the standard screens
-  do), after every action, and on a clock: `TimelineView` at 30 fps while the last frame had
-  `wantsAnimation`, else every 1 s (alarm blink on red-ish bases, clocks, ages).
+  do), after every action, and on a clock: a `CADisplayLink` at 30 fps while the last frame had
+  `wantsAnimation` or a fling runs, else a timer every 1 s (alarm blink on red-ish bases, clocks,
+  ages); paused in the background. Redraws are pushed to the display view directly, never left to
+  SwiftUI deciding whether a Canvas changed.
 - Overlays provided by the context (all drawn VFD-style except where the system UI is needed):
   - `ctx.prompt(title:message:text:keyboard:onDone:)` — system alert with a `TextField` (number and
     text entry, renames, IP addresses);
