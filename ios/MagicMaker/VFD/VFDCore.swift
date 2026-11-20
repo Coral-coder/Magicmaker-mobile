@@ -777,11 +777,21 @@ final class VFDFrameBuffer {
     /// Every cell to color (ignores the clip); forgets taps, scroll regions, true colours and
     /// wantsAnimation. The clip stack is kept.
     func clear(_ color: UInt8 = VFDInk.unlit) {
-        cells = [UInt8](repeating: color, count: cols * rows)
-        taps.removeAll()
-        scrollRegions.removeAll()
-        trueColors.removeAll()
-        trueColorSlots.removeAll()
+        // Refilled in place (the renderer clears two buffers per frame at 30 fps).
+        let n: Int = cols * rows
+        if cells.count == n {
+            cells.withUnsafeMutableBufferPointer { (buf: inout UnsafeMutableBufferPointer<UInt8>) in
+                for i in 0..<buf.count {
+                    buf[i] = color
+                }
+            }
+        } else {
+            cells = [UInt8](repeating: color, count: n)
+        }
+        taps.removeAll(keepingCapacity: true)
+        scrollRegions.removeAll(keepingCapacity: true)
+        trueColors.removeAll(keepingCapacity: true)
+        trueColorSlots.removeAll(keepingCapacity: true)
         wantsAnimation = false
     }
 
