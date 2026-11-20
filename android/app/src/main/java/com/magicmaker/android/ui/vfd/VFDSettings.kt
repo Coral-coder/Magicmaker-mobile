@@ -78,6 +78,9 @@ class VFDSettings private constructor(context: Context) {
         const val themeKey: String = "ui_theme"
         const val baseKey: String = "vfd_base"
         const val customKey: String = "vfd_custom_base"
+        /** Set while a VFD launch (or a switch to VFD) has not yet run for [launchGuardMillis]. */
+        const val launchGuardKey: String = "vfd_launch_pending"
+        const val launchGuardMillis: Long = 6000L
         /** CUSTOM before a colour was ever picked. */
         val defaultCustomRGB: VFDRGB = VFDRGB(0xFF, 0x88, 0x00)
         const val customLabel: String = "CUSTOM"
@@ -171,8 +174,50 @@ class VFDSettings private constructor(context: Context) {
             if (value != themeState) {
                 themeState = value
                 prefs.edit().putString(themeKey, value.raw).apply()
+                // Switching to VFD mid-run: a crash in the next few seconds also falls back.
+                if (value == VFDTheme.vfd) markLaunchPending()
             }
         }
+
+    // MARK: launch guard
+
+    private val guardHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val clearPending = Runnable {
+        prefs.edit().putBoolean(launchGuardKey, false).apply()
+    }
+
+    /**
+     * Called once when the activity is created, before the first frame. If the last launch in
+     * the VFD theme ended before it had run for [launchGuardMillis] (a crash while drawing would
+     * repeat on every launch, because the theme is saved), start in the standard theme instead;
+     * VFD can be chosen again in Settings. Returns true when it fell back.
+     */
+    fun armLaunchGuard(): Boolean {
+        val pending: Boolean = try {
+            prefs.getBoolean(launchGuardKey, false)
+        } catch (e: ClassCastException) {
+            false
+        }
+        if (theme == VFDTheme.vfd && pending) {
+            prefs.edit().putBoolean(launchGuardKey, false).commit()
+            theme = VFDTheme.standard
+            return true
+        }
+        if (theme != VFDTheme.vfd) {
+            if (pending) prefs.edit().putBoolean(launchGuardKey, false).apply()
+            return false
+        }
+        markLaunchPending()
+        return false
+    }
+
+    /** Marks the VFD theme as not yet settled (written synchronously, so a crash right after
+     *  still sees it) and clears the mark after [launchGuardMillis]. */
+    private fun markLaunchPending() {
+        prefs.edit().putBoolean(launchGuardKey, true).commit()
+        guardHandler.removeCallbacks(clearPending)
+        guardHandler.postDelayed(clearPending, launchGuardMillis)
+    }
 
     /** The base colour the VFD theme is drawn in. Choosing a custom one also remembers it as
      *  [customRGB]. */

@@ -244,6 +244,8 @@ class MagicStore(context: Context) {
         val p = appContext.getSharedPreferences(name, Context.MODE_PRIVATE)
         val out = LinkedHashMap<String, PrefEntry>()
         for ((k, v) in p.all) {
+            // Per-launch crash-guard mark of the VFD theme: device state, never exported.
+            if (k == "vfd_launch_pending") continue
             out[k] = when (v) {
                 is Boolean -> PrefEntry("b", v.toString())
                 is Int -> PrefEntry("i", v.toString())

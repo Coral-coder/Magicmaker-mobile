@@ -12,6 +12,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // A VFD launch that crashed before settling starts in the standard theme instead.
+        com.magicmaker.android.ui.vfd.VFDSettings.shared(this).armLaunchGuard()
         setContent {
             AppTheme { MagicMakerAppRoot() }
         }
