@@ -150,6 +150,9 @@ object VFDScanScreen : VFDScreen {
         val visible: Set<LivePacketSection> = LivePacketSection.entries.filter { it.name !in hidden }.toSet()
         val bands: Set<String> = ctx.cached("scan.bandAddresses", rev) { ctx.store.bandAddresses() }
         val saved: Int = ctx.cached("scan.savedBands", rev) { ctx.store.savedBandCount() }
+        // saveShowControlOnly bumps storeRevision; the library path never changes while the app runs.
+        val showControlOnly: Boolean = ctx.cached("scan.showControlOnly", rev) { ctx.store.getShowControlOnly() }
+        val libraryPath: String = ctx.cached("scan.libraryPath", 0) { ctx.store.libraryFilePath }
         val seen: List<ServiceState.SeenAddress> = st.seenAddresses.take(8)
         val tagged: List<Boolean> = seen.map { it.address.uppercase() in bands }
         // ScanTab re-checks these on its own triggers (returning from Settings recomposes it);
@@ -171,7 +174,7 @@ object VFDScanScreen : VFDScreen {
             logName = st.activeSessionName,
             status = st.status,
             raw = ui.string(Keys.viewMode, "GROUPED") == "RAW",
-            showControlOnly = ctx.store.getShowControlOnly(),
+            showControlOnly = showControlOnly,
             controlsCollapsed = ui.storedBool(Keys.controlsCollapsed, false),
             bandMenuCollapsed = ui.storedBool(Keys.bandMenuCollapsed, true),
             collapsed = collapsed,
@@ -181,7 +184,7 @@ object VFDScanScreen : VFDScreen {
             seen = seen,
             seenTagged = tagged,
             manualMac = ui.string(Keys.manualMac),
-            libraryPath = ctx.store.libraryFilePath,
+            libraryPath = libraryPath,
             storageGranted = granted,
             batteryOk = batteryOk,
             runInBackground = ui.storedBool(MagicMakerForegroundService.PREF_START_ON_BOOT, true,
@@ -740,7 +743,7 @@ object VFDScanScreen : VFDScreen {
             addManualBand(ctx)
         })
         return VFDW.field(fb, L, ic, row, bx - 4 - ic, null, s.manualMac, placeholder = "AA:BB:CC:DD:EE:FF",
-                          name = "field:BAND MAC", action = { editManualBand(ctx, thenAdd = false) })
+                          name = "field:BAND MAC", action = { editManualBand(ctx) })
     }
 
     /** LibraryFileSection: LIBRARY FILE (SD · EDITABLE), the file's path (up to two lines), ACCESS
@@ -1189,33 +1192,24 @@ object VFDScanScreen : VFDScreen {
         }
     }
 
-    /** The MAC text field: a prompt with the draft; OK keeps it in the field (thenAdd = false) or
-     *  adds it straight away (ADD on an empty field). */
-    private fun editManualBand(ctx: VFDContext, thenAdd: Boolean) {
+    /** The MAC text field (BandConfigSection's OutlinedTextField): a prompt with the draft; OK keeps
+     *  the text in the field, ADD saves it. */
+    private fun editManualBand(ctx: VFDContext) {
         val ui: VFDUIState = scanUI(ctx)
         ctx.prompt("MY MAGICBAND", "Band MAC address (AA:BB:CC:DD:EE:FF)", ui.string(Keys.manualMac),
                    keyboard = VFDKeyboard.hex) { text ->
-            if (thenAdd) {
-                if (text.isNotBlank()) {
-                    ctx.store.addBandAddress(text)
-                    scanUI(ctx).setString(Keys.manualMac, "")
-                }
-            } else {
-                scanUI(ctx).setString(Keys.manualMac, text)
-            }
+            scanUI(ctx).setString(Keys.manualMac, text)
         }
     }
 
-    /** ADD: adds the typed MAC (as BandConfigSection's ADD) and clears the field; with nothing typed
-     *  it asks for one first. */
+    /** ADD, exactly as BandConfigSection's: adds the typed MAC and clears the field; nothing
+     *  happens while the field is blank. */
     private fun addManualBand(ctx: VFDContext) {
         val ui: VFDUIState = scanUI(ctx)
         val draft: String = ui.string(Keys.manualMac)
         if (draft.isNotBlank()) {
             ctx.store.addBandAddress(draft)
             ui.setString(Keys.manualMac, "")
-        } else {
-            editManualBand(ctx, thenAdd = true)
         }
     }
 
