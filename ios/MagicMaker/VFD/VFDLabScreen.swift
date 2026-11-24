@@ -873,6 +873,535 @@ private struct VFDLabNamedSwatch {
     let rgb: VFDRGB
 }
 
+// MARK: - Segment editor (tap an anatomy block)
+
+/// Rows of a field's menu and which of them is the current value (an index into `items`).
+private struct VFDLabMenuRows {
+    let items: [VFDMenuItem]
+    let current: Int?
+}
+
+extension VFDLabScreen {
+    /// A tapped anatomy block: select it, then open its editor menu on the packet as it is now;
+    /// a block nothing can change (located nowhere, or the company ID with no framing to add)
+    /// opens its explanation instead. LabSegmentEditor.segment scans the catalogues, so it runs
+    /// here, never while drawing.
+    fileprivate static func openSegment(_ ctx: VFDContext, _ index: Int, _ built: String) {
+        let ui: VFDUIState = labUI(ctx)
+        ui.setString(VFDLabKeys.segmentHex, built)
+        ui.setInt(VFDLabKeys.segment, index)
+        ui.setBool(VFDLabKeys.segmentAbout, false)
+        clearFieldAbout(ui)
+        let base: String = HexUtils.canonicalHex(built)
+        guard let seg = editable(ctx, base, index) else { return }
+        if seg.fields.isEmpty && seg.actions.isEmpty && !seg.manual.allowed {
+            ui.setBool(VFDLabKeys.segmentAbout, true)
+            return
+        }
+        segmentMenu(ctx, seg, base)
+    }
+
+    fileprivate static func editable(_ ctx: VFDContext, _ base: String,
+                                     _ index: Int) -> LabSegmentEditor.EditableSegment? {
+        let extended: Bool = extendedOn(labUI(ctx))
+        let serial: String = ctx.store.getStarlightSerial()
+        return LabSegmentEditor.segment(base, index: index, extended: extended, savedSerial: serial)
+    }
+
+    /// × on the block's box: nothing selected, the explanation folded.
+    fileprivate static func closeSegment(_ ui: VFDUIState) {
+        ui.setInt(VFDLabKeys.segment, -1)
+        ui.setBool(VFDLabKeys.segmentAbout, false)
+        clearFieldAbout(ui)
+    }
+
+    fileprivate static func clearFieldAbout(_ ui: VFDUIState) {
+        if ui.has(VFDLabKeys.segmentFieldTitle) {
+            ui.remove(VFDLabKeys.segmentFieldTitle)
+        }
+        if ui.has(VFDLabKeys.segmentFieldAbout) {
+            ui.remove(VFDLabKeys.segmentFieldAbout)
+        }
+    }
+
+    /// ABOUT THIS BLOCK / ABOUT THIS FIELD: unfold the box under the chips (with the field's own
+    /// explanation when one is given).
+    fileprivate static func showAbout(_ ctx: VFDContext, _ field: LabSegmentEditor.Field?) {
+        let ui: VFDUIState = labUI(ctx)
+        if let f = field {
+            ui.setString(VFDLabKeys.segmentFieldTitle, f.title)
+            ui.setString(VFDLabKeys.segmentFieldAbout, f.about)
+        } else {
+            clearFieldAbout(ui)
+        }
+        ui.setBool(VFDLabKeys.segmentAbout, true)
+    }
+
+    /// The block's menu: what it holds now; its values (one field) or one row per field (several);
+    /// the packet-level actions; MANUAL HEX; ABOUT THIS BLOCK. Opened at the current value.
+    fileprivate static func segmentMenu(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                        _ base: String) {
+        let title: String = seg.segment.title
+        let index: Int = seg.index
+        var items: [VFDMenuItem] = []
+        var selected: Int? = nil
+        let only: LabSegmentEditor.Field? = seg.fields.count == 1 ? seg.fields.first : nil
+        let nowCaption: String = only?.caption ?? ""
+        items.append(nowItem(ctx, seg.segment.hex, nowCaption))
+        if let field = only {
+            let rows: VFDLabMenuRows = fieldRows(ctx, seg, field, base)
+            if let cur = rows.current {
+                selected = items.count + cur
+            }
+            items.append(contentsOf: rows.items)
+        } else {
+            for field in seg.fields {
+                items.append(fieldItem(ctx, seg, field, base))
+            }
+        }
+        for step in seg.actions {
+            let after: String = step.hex
+            let label: String = menuLabel(ctx, step.label, "")
+            items.append(VFDMenuItem(label, destructive: step.destructive, action: {
+                VFDLabScreen.applySegmentEdit(ctx, after, title, index, base)
+            }))
+        }
+        if seg.manual.allowed {
+            let rule: LabSegmentEditor.ManualRule = seg.manual
+            let words: String = sizeWords(rule.minBytes, rule.maxBytes)
+            items.append(VFDMenuItem(menuLabel(ctx, "MANUAL HEX… (" + words + ")", ""), action: {
+                let now: String = VFDLabScreen.manualCurrent(base, rule)
+                VFDLabScreen.promptManual(ctx, seg, nil, base, now)
+            }))
+        }
+        items.append(VFDMenuItem("ABOUT THIS BLOCK", action: {
+            VFDLabScreen.showAbout(ctx, only)
+        }))
+        ctx.menu(title: VFDW.upper(title), items: items, selected: selected)
+    }
+
+    /// One field's menu: what it holds now, its values (the timing byte's bit controls first),
+    /// MANUAL HEX sized to the field, ABOUT THIS FIELD, ← BACK to the block's menu.
+    fileprivate static func fieldMenu(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                      _ field: LabSegmentEditor.Field, _ base: String) {
+        let index: Int = seg.index
+        var items: [VFDMenuItem] = []
+        var selected: Int? = nil
+        items.append(nowItem(ctx, HexUtils.bytesToHex(field.current), field.caption))
+        let rows: VFDLabMenuRows = fieldRows(ctx, seg, field, base)
+        if let cur = rows.current {
+            selected = items.count + cur
+        }
+        items.append(contentsOf: rows.items)
+        let words: String = field.lengthByteOffset == nil ? sizeWords(field.count, field.count) : sizeWords(0, 255)
+        items.append(VFDMenuItem(menuLabel(ctx, "MANUAL HEX… (" + words + ")", ""), action: {
+            let now: String = HexUtils.bytesToHex(field.current)
+            VFDLabScreen.promptManual(ctx, seg, field, base, now)
+        }))
+        items.append(VFDMenuItem("ABOUT THIS FIELD", action: {
+            VFDLabScreen.showAbout(ctx, field)
+        }))
+        items.append(VFDMenuItem("← BACK", action: {
+            VFDLabScreen.reopenSegment(ctx, index)
+        }))
+        let title: String = seg.segment.title + " · " + field.title
+        ctx.menu(title: VFDW.upper(title), items: items, selected: selected)
+    }
+
+    /// A field's value rows: the timing byte's bit controls, then its options (a colour with its
+    /// true-colour swatch, the current one ticked); a 6-bit RGB channel gets level rows instead.
+    fileprivate static func fieldRows(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                      _ field: LabSegmentEditor.Field, _ base: String) -> VFDLabMenuRows {
+        if field.kind == LabSegmentEditor.FieldKind.rgbChannel {
+            return rgbRows(ctx, seg, field, base)
+        }
+        let title: String = seg.segment.title
+        let index: Int = seg.index
+        var items: [VFDMenuItem] = []
+        var current: Int? = nil
+        if field.kind == LabSegmentEditor.FieldKind.timing {
+            items.append(contentsOf: timingRows(ctx, seg, field, base))
+        }
+        for option in field.options {
+            let isCurrent: Bool = LabSegmentEditor.isCurrent(base, field: field, option: option)
+            if isCurrent && current == nil {
+                current = items.count
+            }
+            var swatch: VFDRGB? = nil
+            if let p = option.palette {
+                swatch = VFDColors.starlightGlow(p)
+            }
+            let tick: String = isCurrent ? " ✓" : ""
+            let label: String = menuLabel(ctx, compactCaption(option.label), tick, swatch: swatch != nil)
+            let picked: LabSegmentEditor.Option = option
+            items.append(VFDMenuItem(label, rgb: swatch, action: {
+                let edited: String? = LabSegmentEditor.applying(base, field: field, option: picked)
+                VFDLabScreen.applySegmentEdit(ctx, edited, title, index, base)
+            }))
+        }
+        return VFDLabMenuRows(items: items, current: current)
+    }
+
+    /// A block's menu row for one of its fields: "TITLE: HEX · CAPTION →" (a colour with its
+    /// swatch), opening the field's menu.
+    fileprivate static func fieldItem(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                      _ field: LabSegmentEditor.Field, _ base: String) -> VFDMenuItem {
+        let hex: String = HexUtils.bytesToHex(field.current)
+        let caption: String = compactCaption(field.caption)
+        var head: String = field.title + ": " + hex + " · " + caption
+        if field.count > 3 || hex.isEmpty {
+            head = field.title + ": " + caption
+        } else if caption.isEmpty || caption == hex {
+            head = field.title + ": " + hex
+        }
+        var swatch: VFDRGB? = nil
+        let isPalette: Bool = field.kind == LabSegmentEditor.FieldKind.color
+        let isWand: Bool = field.kind == LabSegmentEditor.FieldKind.wandColor
+        let colour: Bool = isPalette || isWand
+        if colour, let b = field.current.first {
+            swatch = VFDColors.starlightGlow(Int(b) & 0x1F)
+        }
+        let label: String = menuLabel(ctx, head, " →", swatch: swatch != nil)
+        return VFDMenuItem(label, rgb: swatch, action: {
+            VFDLabScreen.fieldMenu(ctx, seg, field, base)
+        })
+    }
+
+    /// The disabled first row: "NOW <hex> · <caption>".
+    fileprivate static func nowItem(_ ctx: VFDContext, _ hex: String, _ caption: String) -> VFDMenuItem {
+        let shown: String = hex.isEmpty ? "—" : hex
+        let words: String = compactCaption(caption)
+        var head: String = "NOW " + shown
+        if !words.isEmpty && words != hex {
+            head += " · " + words
+        }
+        return VFDMenuItem(menuLabel(ctx, head, ""), enabled: false, action: {})
+    }
+
+    /// The timing byte's bit controls: ALWAYS ON and UNIT flip one bit; FADE (0–3 s) and COUNT
+    /// (0–15) open a list. Each change applies at once and reopens the field's menu.
+    fileprivate static func timingRows(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                       _ field: LabSegmentEditor.Field, _ base: String) -> [VFDMenuItem] {
+        let b: Int = firstByte(field)
+        let p: (alwaysOn: Bool, longUnit: Bool, fadeSeconds: Int, count: Int) = LabSegmentEditor.timingParts(b)
+        let flipAlways: Int = LabSegmentEditor.timingByte(alwaysOn: !p.alwaysOn, longUnit: p.longUnit,
+                                                         fadeSeconds: p.fadeSeconds, count: p.count)
+        let flipUnit: Int = LabSegmentEditor.timingByte(alwaysOn: p.alwaysOn, longUnit: !p.longUnit,
+                                                       fadeSeconds: p.fadeSeconds, count: p.count)
+        let alwaysText: String = p.alwaysOn ? "ALWAYS ON: ON → OFF" : "ALWAYS ON: OFF → ON"
+        let unitText: String = p.longUnit ? "UNIT: ×3.1 S → ×1.5 S" : "UNIT: ×1.5 S → ×3.1 S"
+        var items: [VFDMenuItem] = []
+        items.append(VFDMenuItem(alwaysText, action: {
+            VFDLabScreen.composeTiming(ctx, seg, field, base, flipAlways)
+        }))
+        items.append(VFDMenuItem(unitText, action: {
+            VFDLabScreen.composeTiming(ctx, seg, field, base, flipUnit)
+        }))
+        items.append(VFDMenuItem("FADE: \(p.fadeSeconds) S →", action: {
+            VFDLabScreen.timingPartMenu(ctx, seg, field, base, fade: true)
+        }))
+        items.append(VFDMenuItem("COUNT: \(p.count) →", action: {
+            VFDLabScreen.timingPartMenu(ctx, seg, field, base, fade: false)
+        }))
+        return items
+    }
+
+    /// FADE (0–3 s) or COUNT (0–15) of the timing byte, the other bits kept.
+    fileprivate static func timingPartMenu(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                           _ field: LabSegmentEditor.Field, _ base: String, fade: Bool) {
+        let p: (alwaysOn: Bool, longUnit: Bool, fadeSeconds: Int, count: Int) = LabSegmentEditor.timingParts(firstByte(field))
+        let top: Int = fade ? 3 : 15
+        var items: [VFDMenuItem] = []
+        var selected: Int? = nil
+        for v in 0...top {
+            let byte: Int
+            let isCurrent: Bool
+            let name: String
+            if fade {
+                byte = LabSegmentEditor.timingByte(alwaysOn: p.alwaysOn, longUnit: p.longUnit,
+                                                   fadeSeconds: v, count: p.count)
+                isCurrent = v == p.fadeSeconds
+                name = "FADE \(v) S"
+            } else {
+                byte = LabSegmentEditor.timingByte(alwaysOn: p.alwaysOn, longUnit: p.longUnit,
+                                                   fadeSeconds: p.fadeSeconds, count: v)
+                isCurrent = v == p.count
+                name = "COUNT \(v)"
+            }
+            if isCurrent {
+                selected = items.count
+            }
+            let caption: String = compactCaption(DisneyTlv.timingCaption(byte))
+            let head: String = name + " · " + DisneyTlv.hex2(byte) + " · " + caption
+            let label: String = menuLabel(ctx, head, isCurrent ? " ✓" : "")
+            items.append(VFDMenuItem(label, action: {
+                VFDLabScreen.composeTiming(ctx, seg, field, base, byte)
+            }))
+        }
+        items.append(VFDMenuItem("← BACK", action: {
+            VFDLabScreen.fieldMenu(ctx, seg, field, base)
+        }))
+        let title: String = seg.segment.title + " · " + (fade ? "Fade-out" : "Count")
+        ctx.menu(title: VFDW.upper(title), items: items, selected: selected)
+    }
+
+    /// One composed timing byte: applied, then the timing menu again on the new packet so the
+    /// next bit can be set.
+    fileprivate static func composeTiming(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                          _ field: LabSegmentEditor.Field, _ base: String, _ byte: Int) {
+        let bytes: [UInt8] = [UInt8(byte & 0xFF)]
+        let edited: String? = LabSegmentEditor.replacing(base, offset: field.offset, count: 1, with: bytes,
+                                                         lengthByteOffset: nil)
+        applySegmentEdit(ctx, edited, seg.segment.title, seg.index, base)
+        reopenField(ctx, seg.index, field)
+    }
+
+    /// A 6-bit RGB channel (byte = level × 2): levels 0, 8 … 56, 63, each with a swatch of the
+    /// colour it makes with the other two channels; then MANUAL VALUE.
+    fileprivate static func rgbRows(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                    _ field: LabSegmentEditor.Field, _ base: String) -> VFDLabMenuRows {
+        let title: String = seg.segment.title
+        let index: Int = seg.index
+        let level: Int = channelLevel(field)
+        var levels: [Int] = []
+        var position: Int = -1
+        for f in seg.fields where f.kind == LabSegmentEditor.FieldKind.rgbChannel {
+            if f.offset == field.offset {
+                position = levels.count
+            }
+            levels.append(channelLevel(f))
+        }
+        let steps: [Int] = [0, 8, 16, 24, 32, 40, 48, 56, 63]
+        var items: [VFDMenuItem] = []
+        var current: Int? = nil
+        for v in steps {
+            let byte: UInt8 = UInt8((v << 1) & 0xFE)
+            let isCurrent: Bool = v == level
+            if isCurrent && current == nil {
+                current = items.count
+            }
+            var swatch: VFDRGB? = nil
+            if levels.count == 3 && position >= 0 && position < 3 {
+                var mix: [Int] = levels
+                mix[position] = v
+                swatch = VFDRGB(mix[0] * 255 / 63, mix[1] * 255 / 63, mix[2] * 255 / 63)
+            }
+            let head: String = "\(v) of 63 · " + DisneyTlv.hex2(Int(byte))
+            let label: String = menuLabel(ctx, head, isCurrent ? " ✓" : "", swatch: swatch != nil)
+            items.append(VFDMenuItem(label, rgb: swatch, action: {
+                let edited: String? = LabSegmentEditor.replacing(base, offset: field.offset, count: 1, with: [byte],
+                                                                 lengthByteOffset: nil)
+                VFDLabScreen.applySegmentEdit(ctx, edited, title, index, base)
+            }))
+        }
+        items.append(VFDMenuItem("MANUAL VALUE (0–63)…", action: {
+            VFDLabScreen.promptLevel(ctx, seg, field, base, String(level))
+        }))
+        return VFDLabMenuRows(items: items, current: current)
+    }
+
+    /// MANUAL VALUE: a channel level typed as a number 0–63.
+    fileprivate static func promptLevel(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                        _ field: LabSegmentEditor.Field, _ base: String, _ text: String) {
+        let title: String = seg.segment.title
+        let index: Int = seg.index
+        let message: String = "0–63. The byte sent is the value × 2. Now \(channelLevel(field))."
+        ctx.prompt(title: "MANUAL VALUE · " + VFDW.upper(field.title), message: message, text: text,
+                   keyboard: .number) { (typed: String) -> Void in
+            let trimmed: String = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let v = Int(trimmed), v >= 0, v <= 63 else {
+                ctx.confirm(title: "NOT APPLIED", message: "Type a whole number from 0 to 63.",
+                            confirmLabel: "TRY AGAIN") {
+                    VFDLabScreen.promptLevel(ctx, seg, field, base, typed)
+                }
+                return
+            }
+            let bytes: [UInt8] = [UInt8((v << 1) & 0xFE)]
+            let edited: String? = LabSegmentEditor.replacing(base, offset: field.offset, count: 1, with: bytes,
+                                                             lengthByteOffset: nil)
+            VFDLabScreen.applySegmentEdit(ctx, edited, title, index, base)
+        }
+    }
+
+    /// MANUAL HEX for the whole block (field nil) or one field, checked by LabSegmentEditor: the
+    /// right size, the chain still whole. A refusal says why and offers the prompt again with
+    /// what was typed.
+    fileprivate static func promptManual(_ ctx: VFDContext, _ seg: LabSegmentEditor.EditableSegment,
+                                         _ field: LabSegmentEditor.Field?, _ base: String, _ text: String) {
+        let title: String = seg.segment.title
+        let index: Int = seg.index
+        var name: String = title
+        var hint: String = seg.manual.hint
+        var now: String = manualCurrent(base, seg.manual)
+        if let f = field {
+            name = title + " · " + f.title
+            hint = fieldHint(f)
+            now = HexUtils.bytesToHex(f.current)
+        }
+        let message: String = hint + ". Now " + (now.isEmpty ? "empty" : now) + "."
+        ctx.prompt(title: "MANUAL HEX · " + VFDW.upper(name), message: message, text: text,
+                   keyboard: .hex) { (typed: String) -> Void in
+            let result: LabSegmentEditor.ManualResult
+            if let f = field {
+                result = LabSegmentEditor.applyingManual(base, field: f, typed: typed)
+            } else {
+                result = LabSegmentEditor.applyingManual(base, segment: seg, typed: typed)
+            }
+            switch result {
+            case .applied(let edited):
+                VFDLabScreen.applySegmentEdit(ctx, edited, title, index, base)
+            case .invalid(let why):
+                ctx.confirm(title: "NOT APPLIED", message: why, confirmLabel: "TRY AGAIN") {
+                    VFDLabScreen.promptManual(ctx, seg, field, base, typed)
+                }
+            }
+        }
+    }
+
+    /// The bytes a block's MANUAL HEX replaces, as they are in `base` (a record value as long as
+    /// its length byte says).
+    fileprivate static func manualCurrent(_ base: String, _ rule: LabSegmentEditor.ManualRule) -> String {
+        let b: [UInt8] = HexUtils.hexToBytes(base)
+        var n: Int = rule.maxBytes
+        if let lo = rule.lengthByteOffset {
+            if lo < 0 || lo >= b.count { return "" }
+            n = Int(b[lo])
+        }
+        let start: Int = rule.offset
+        if start < 0 || start > b.count || n <= 0 { return "" }
+        let end: Int = min(b.count, start + n)
+        return HexUtils.bytesToHex(Array(b[start..<end]))
+    }
+
+    fileprivate static func fieldHint(_ field: LabSegmentEditor.Field) -> String {
+        if field.lengthByteOffset != nil { return "0–255 bytes; the length byte follows" }
+        if field.count == 1 { return "1 byte (2 hex digits)" }
+        return "\(field.count) bytes (\(field.count * 2) hex digits)"
+    }
+
+    /// "1 BYTE", "3 BYTES", "0–255 BYTES".
+    fileprivate static func sizeWords(_ minBytes: Int, _ maxBytes: Int) -> String {
+        if minBytes != maxBytes { return "\(minBytes)–\(maxBytes) BYTES" }
+        return minBytes == 1 ? "1 BYTE" : "\(minBytes) BYTES"
+    }
+
+    fileprivate static func firstByte(_ field: LabSegmentEditor.Field) -> Int {
+        guard let b = field.current.first else { return 0 }
+        return Int(b)
+    }
+
+    /// A 6-bit RGB channel's level (the byte is the level shifted left one bit).
+    fileprivate static func channelLevel(_ field: LabSegmentEditor.Field) -> Int {
+        return (firstByte(field) >> 1) & 0x3F
+    }
+
+    /// Timing captions in menu rows: "on for ~21 s, 2 s fade-out" -> "~21 s, 2 s fade".
+    fileprivate static func compactCaption(_ s: String) -> String {
+        let shorter: String = s.replacingOccurrences(of: "on for ~", with: "~")
+        return shorter.replacingOccurrences(of: " fade-out", with: " fade")
+    }
+
+    /// A menu label in capitals that keeps `tail` (" →", " ✓") when the row is too narrow for all
+    /// of it: the head is cut with "…" instead. `swatch`: the row starts with a colour swatch.
+    /// Widths follow the menu's rows (VFDW.panelInner, VFDW.button, the swatch row's label).
+    fileprivate static func menuLabel(_ ctx: VFDContext, _ head: String, _ tail: String,
+                                      swatch: Bool = false) -> String {
+        let inner: Int = ctx.L.width - 8
+        let room: Int = swatch ? inner - 5 - 2 * VFDW.adv : inner - 4
+        let upperHead: String = VFDW.upper(head)
+        let whole: String = upperHead + tail
+        if VFDText.width(whole) <= room { return whole }
+        let headRoom: Int = room - VFDText.width(tail) - 1
+        return VFDText.fit(upperHead, max(0, headRoom)) + tail
+    }
+
+    /// ← BACK: the block's menu again, on the builder's packet as it is now.
+    fileprivate static func reopenSegment(_ ctx: VFDContext, _ index: Int) {
+        let base: String = HexUtils.canonicalHex(resolve(ctx).built)
+        if base.isEmpty { return }
+        guard let seg = editable(ctx, base, index) else { return }
+        segmentMenu(ctx, seg, base)
+    }
+
+    /// The field's menu again after an edit, found by kind and position in the new packet.
+    fileprivate static func reopenField(_ ctx: VFDContext, _ index: Int, _ field: LabSegmentEditor.Field) {
+        let base: String = HexUtils.canonicalHex(resolve(ctx).built)
+        if base.isEmpty { return }
+        guard let seg = editable(ctx, base, index) else { return }
+        for f in seg.fields where f.kind == field.kind && f.offset == field.offset {
+            fieldMenu(ctx, seg, f, base)
+            return
+        }
+    }
+
+    /// A block edit (LabBuilderPanel.applySegmentEdit): the builder takes the edited packet as its
+    /// own state (Raw Hex, byte-for-byte, when no builder type makes it), and the usual change
+    /// path puts it in the preview, the hex field and the store. Ignored when the builder's packet
+    /// is no longer the one the menu was opened on. The block stays selected while the anatomy
+    /// keeps its shape; UNDO EDIT remembers the packet before.
+    fileprivate static func applySegmentEdit(_ ctx: VFDContext, _ edited: String?, _ title: String, _ index: Int,
+                                             _ base: String) {
+        guard let next = edited else { return }
+        let target: String = HexUtils.canonicalHex(next)
+        if target == base || target.isEmpty { return }
+        let ui: VFDUIState = labUI(ctx)
+        let current: String = HexUtils.canonicalHex(resolve(ctx).built)
+        if current != base { return }
+        guard let decoded = LabSegmentEditor.builderState(target, extended: extendedOn(ui)) else { return }
+        let oldCount: Int = DisneyTlv.anatomy(base).count
+        userEdit(ctx) { (s: inout VFDLabState) -> Void in
+            let before: LabPacketBuilder.LabPacketType = s.type
+            VFDLabScreen.applyDecoded(&s, decoded)
+            s.ledMask = 7
+            if decoded.type == before {
+                s.loadMsg = "Edited " + title
+            } else {
+                s.loadMsg = "Edited " + title + " — builder now " + decoded.type.label + " (keeps every byte)"
+            }
+        }
+        let after: String = resolve(ctx).built
+        ui.setString(VFDLabKeys.segmentUndo, base)
+        ui.setString(VFDLabKeys.segmentUndoTo, after)
+        reselect(ui, index, after, oldCount)
+    }
+
+    /// UNDO EDIT: the packet before the last block edit, back in the builder the same way.
+    fileprivate static func undoSegmentEdit(_ ctx: VFDContext) {
+        let ui: VFDUIState = labUI(ctx)
+        let previous: String = ui.string(VFDLabKeys.segmentUndo)
+        let edited: String = ui.string(VFDLabKeys.segmentUndoTo)
+        ui.remove(VFDLabKeys.segmentUndo)
+        ui.remove(VFDLabKeys.segmentUndoTo)
+        let current: String = resolve(ctx).built
+        if previous.isEmpty || current.isEmpty || current != edited { return }
+        guard let decoded = LabSegmentEditor.builderState(previous, extended: extendedOn(ui)) else { return }
+        let selected: Int? = selectedSegment(ui, current)
+        let oldCount: Int = DisneyTlv.anatomy(current).count
+        userEdit(ctx) { (s: inout VFDLabState) -> Void in
+            VFDLabScreen.applyDecoded(&s, decoded)
+            s.ledMask = 7
+            s.loadMsg = "Undid the last block edit"
+        }
+        let after: String = resolve(ctx).built
+        if let index = selected {
+            reselect(ui, index, after, oldCount)
+        }
+    }
+
+    /// Keep block `index` selected on the new packet when its anatomy has as many blocks as
+    /// before; otherwise nothing is selected.
+    fileprivate static func reselect(_ ui: VFDUIState, _ index: Int, _ after: String, _ oldCount: Int) {
+        clearFieldAbout(ui)
+        ui.setString(VFDLabKeys.segmentHex, after)
+        if !after.isEmpty && DisneyTlv.anatomy(after).count == oldCount {
+            ui.setInt(VFDLabKeys.segment, index)
+        } else {
+            ui.setInt(VFDLabKeys.segment, -1)
+            ui.setBool(VFDLabKeys.segmentAbout, false)
+        }
+    }
+}
+
 // MARK: - Model
 
 extension VFDLabScreen {
@@ -1818,15 +2347,18 @@ extension VFDLabScreen {
         return y
     }
 
-    /// PACKET ANATOMY — TAP A BLOCK: the blocks flowing left to right (a colour block with its
-    /// true-colour swatch and colour name), then the selected block's explanation.
+    /// PACKET ANATOMY — TAP A BLOCK TO EDIT: the blocks flowing left to right (a colour block with
+    /// its true-colour swatch and colour name), then the selected block's box. A tap on a block
+    /// selects it and opens its editor (`openSegment`).
     fileprivate static func anatomy(_ ctx: VFDContext, _ fb: VFDFrameBuffer, _ L: VFDLayout, _ m: VFDLabModel,
                                     _ c: Int, _ top: Int, _ w: Int) -> Int {
         let segments: [DisneyTlv.Segment] = m.segments
         let built: String = m.built
         let adv: Int = VFDLabGeo.adv
         let chipH: Int = VFDLabGeo.chipH
-        var y: Int = VFDW.label(fb, L, c, top, w, "PACKET ANATOMY — TAP A BLOCK")
+        let longCaption: String = "PACKET ANATOMY — TAP A BLOCK TO EDIT"
+        let caption: String = VFDText.width(longCaption) <= w ? longCaption : "PACKET ANATOMY — TAP TO EDIT"
+        var y: Int = VFDW.label(fb, L, c, top, w, caption)
         var x: Int = c
         var row: Int = y
         for i in 0..<segments.count {
@@ -1880,35 +2412,114 @@ extension VFDLabScreen {
             }
             let index: Int = i
             VFDW.tap(fb, x, row, bw, chipH, "anatomy:\(i)", action: {
-                VFDLabScreen.toggleSegment(ctx, index, built)
+                VFDLabScreen.openSegment(ctx, index, built)
             })
             x += bw + 4
         }
         y = row + chipH + VFDW.gap
         if let sel = m.selectedSegment, sel >= 0, sel < segments.count {
-            let seg: DisneyTlv.Segment = segments[sel]
-            let tone: UInt8 = segmentInk(seg.kind)
-            let lines: [String] = VFDLabText.wrap(seg.detail, w - 8)
-            if !lines.isEmpty {
-                let h: Int = 4 + (lines.count - 1) * VFDW.line + 7 + 4
-                y += 2
-                fb.box(c, y, w, h, VFDInk.dim)
-                var r: Int = y + 4
-                for ln in lines {
-                    if tone == VFDInk.alarm {
-                        VFDW.alarmText(fb, c + 4, r, ln)
-                    } else {
-                        fb.text(c + 4, r, ln, .small, tone)
-                    }
-                    r += VFDW.line
-                }
-                y += h + VFDW.gap
-            }
+            y = segmentBox(fb, m, segments[sel], c, y, w)
         }
         return y
     }
 
-    /// USE IN HEX FIELD (bordered, cyan) and LOAD HEX (bordered, cyanDim), sized to their labels.
+    /// The selected block's box under the chips: where its bytes sit, its anatomy detail and,
+    /// while ABOUT is open, what it is and does, a field's explanation (ABOUT THIS FIELD), its
+    /// valid values, its bits and how sure that is; then the footer. A tap on the box toggles
+    /// ABOUT; × in its top-right corner deselects the block. Returns the next free row.
+    fileprivate static func segmentBox(_ fb: VFDFrameBuffer, _ m: VFDLabModel, _ seg: DisneyTlv.Segment,
+                                       _ c: Int, _ top: Int, _ w: Int) -> Int {
+        let tone: UInt8 = segmentInk(seg.kind)
+        let tw: Int = w - 8
+        let close: String = "×"
+        let closeW: Int = VFDText.width(close) + 8
+        var lines: [VFDLabLine] = []
+        for ln in VFDLabText.sepLines(segmentPlace(m, seg), tw - closeW) {
+            lines.append(boxLine(ln, VFDInk.dim))
+        }
+        for ln in VFDLabText.wrap(seg.detail, tw) {
+            lines.append(boxLine(ln, tone))
+        }
+        if m.aboutOpen, let about = m.segmentAbout {
+            lines.append(contentsOf: aboutLines(m, about, tw))
+        }
+        let more: String = m.aboutOpen ? "TAP HERE: LESS" : "TAP HERE: ABOUT"
+        for ln in VFDLabText.sepLines(["TAP BLOCK: EDIT", more], tw) {
+            lines.append(boxLine(ln, VFDInk.dim))
+        }
+        let h: Int = 4 + (lines.count - 1) * VFDW.line + 7 + 4
+        let y: Int = top + 2
+        fb.box(c, y, w, h, VFDInk.dim)
+        var r: Int = y + 4
+        for line in lines {
+            if line.color == VFDInk.alarm {
+                VFDW.alarmText(fb, c + 4, r, line.text)
+            } else {
+                fb.text(c + 4, r, line.text, .small, line.color)
+            }
+            r += VFDW.line
+        }
+        fb.text(c + w - 4 - VFDText.width(close), y + 4, close, .small, VFDInk.text)
+        let ui: VFDUIState = m.ui
+        VFDW.tap(fb, c, y, w, h, "anatomy:about", action: {
+            ui.toggleBool(VFDLabKeys.segmentAbout)
+        })
+        VFDW.tap(fb, c + w - closeW - 4, y, closeW + 4, VFDW.ctrlH, "anatomy:close", action: {
+            VFDLabScreen.closeSegment(ui)
+        })
+        return y + h + VFDW.gap
+    }
+
+    /// The box's first line, as parts: "BYTES a–b OF n" (1-based, like the inspector's BYTE i OF
+    /// n) and the block's hex; a block that could not be located in the packet is read-only.
+    fileprivate static func segmentPlace(_ m: VFDLabModel, _ seg: DisneyTlv.Segment) -> [String] {
+        let total: Int = HexUtils.canonicalHex(m.built).count / 2
+        guard let about = m.segmentAbout, let off = about.offset, about.count > 0 else {
+            if seg.hex.isEmpty || seg.kind == DisneyTlv.SegmentKind.error {
+                return ["WHERE THE RECORD CHAIN BREAKS"]
+            }
+            return ["NOT LOCATED · READ-ONLY", seg.hex]
+        }
+        let first: Int = off + 1
+        let last: Int = off + about.count
+        var place: String = "BYTES \(first)–\(last) OF \(total)"
+        if about.count == 1 {
+            place = "BYTE \(first) OF \(total)"
+        }
+        return [place, seg.hex]
+    }
+
+    /// ABOUT: what the block is and does, the field asked about, valid values, bits, confidence.
+    fileprivate static func aboutLines(_ m: VFDLabModel, _ about: LabSegmentEditor.About, _ tw: Int) -> [VFDLabLine] {
+        var out: [VFDLabLine] = []
+        appendWrapped(&out, "WHAT IT IS: " + about.what, tw, VFDInk.text)
+        appendWrapped(&out, "WHAT IT DOES: " + about.does, tw, VFDInk.text)
+        if !m.fieldAbout.isEmpty && m.fieldAbout != about.does {
+            let fieldTitle: String = VFDW.upper(m.fieldAboutTitle)
+            appendWrapped(&out, fieldTitle + ": " + m.fieldAbout, tw, VFDInk.text)
+        }
+        appendWrapped(&out, "VALID: " + about.valid, tw, VFDInk.dim)
+        if !about.bits.isEmpty {
+            appendWrapped(&out, "BITS: " + about.bits, tw, VFDInk.dim)
+        }
+        let proven: Bool = about.confidence == LabSegmentEditor.Confidence.proven
+        let confidence: String = "CONFIDENCE: " + VFDW.upper(about.confidence.rawValue)
+        appendWrapped(&out, confidence, tw, proven ? VFDInk.highlight : VFDInk.text)
+        return out
+    }
+
+    fileprivate static func appendWrapped(_ out: inout [VFDLabLine], _ text: String, _ tw: Int, _ color: UInt8) {
+        for ln in VFDLabText.wrap(text, tw) {
+            out.append(boxLine(ln, color))
+        }
+    }
+
+    fileprivate static func boxLine(_ text: String, _ color: UInt8) -> VFDLabLine {
+        return VFDLabLine(text: text, color: color, legend: [], isLegend: false)
+    }
+
+    /// USE IN HEX FIELD (bordered, cyan) and LOAD HEX (bordered, cyanDim), sized to their labels;
+    /// after a block edit, UNDO EDIT beside them (or under them when the row is full).
     fileprivate static func builderActions(_ ctx: VFDContext, _ fb: VFDFrameBuffer, _ L: VFDLayout,
                                            _ m: VFDLabModel, _ c: Int, _ y: Int, _ w: Int) -> Int {
         let lab: String = "USE IN HEX FIELD"
@@ -1916,10 +2527,22 @@ extension VFDLabScreen {
         VFDW.button(fb, L, c, y, bw, lab, enabled: !m.built.isEmpty, action: {
             VFDLabScreen.useBuilt(ctx)
         })
-        ghostButton(fb, c + bw + 4, y, "LOAD HEX", action: {
+        let loadEnd: Int = ghostButton(fb, c + bw + 4, y, "LOAD HEX", action: {
             VFDLabScreen.loadFromHexField(ctx)
         })
-        return y + VFDW.ctrlH + VFDW.gap
+        var next: Int = y + VFDW.ctrlH + VFDW.gap
+        if m.undoAvailable {
+            let undo: String = "UNDO EDIT"
+            let undoW: Int = VFDText.width(undo) + 12
+            let undoAction: () -> Void = { VFDLabScreen.undoSegmentEdit(ctx) }
+            if loadEnd + 4 + undoW <= c + w {
+                ghostButton(fb, loadEnd + 4, y, undo, action: undoAction)
+            } else {
+                ghostButton(fb, c, next, undo, action: undoAction)
+                next += VFDW.ctrlH + VFDW.gap
+            }
+        }
+        return next
     }
 }
 

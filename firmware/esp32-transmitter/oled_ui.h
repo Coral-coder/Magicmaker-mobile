@@ -11,8 +11,9 @@
 //   wake = Vext LOW, settle, reset + full SSD1306 init, first frame, display on
 //
 // Everything here runs in loop() context; nothing is touched from the BLE callbacks (they run
-// on the NimBLE task). The battery divider is switched on only for a reading, only while the
-// screen is lit, at most every BATTERY_PERIOD_MS.
+// on the NimBLE task). The PRG interrupt only wakes loop() (which sleeps between deadlines);
+// debouncing stays in screenPoll(). The battery divider is switched on only for a reading, only
+// while the screen is lit, at most every BATTERY_PERIOD_MS.
 #pragma once
 
 #include "board.h"
@@ -39,6 +40,7 @@ static const float    BATTERY_DIVIDER       = 4.9f * 1.045f;  // pin mV -> batte
 static const int32_t  BATTERY_DIVIDER_ON_MV = 1000;   // below this the divider was off (wrong ADC_CTRL level)
 static const int32_t  BATTERY_MIN_MV        = 2500;   // plausible single-cell LiPo range
 static const int32_t  BATTERY_MAX_MV        = 4600;
+static const uint32_t BATTERY_REPORT_MAX_AGE_MS = 600000;  // STATUS reports a reading at most this old
 
 // ---- State (loop-owned) ----------------------------------------------------------------
 enum ScreenPower : uint8_t { SCREEN_OFF, SCREEN_POWERING, SCREEN_ON };
@@ -85,6 +87,10 @@ static bool     gBatBusy       = false;        // divider switched on, waiting t
 static bool     gBatDue        = false;        // read as soon as possible
 static bool     gBatAdcReady   = false;
 static uint32_t gBatMs         = 0;            // divider switched on / last reading finished
+static uint32_t gBatReadMs     = 0;            // last plausible reading
+static bool     gBatHaveRead   = false;
+
+static TaskHandle_t gScrWakeTask = nullptr;    // loop()'s task: the PRG interrupt wakes it
 
 // ---- Battery ---------------------------------------------------------------------------
 static void batteryRelease() {
@@ -128,6 +134,8 @@ static void batteryPoll(uint32_t now, bool lit) {
   if (mv >= BATTERY_DIVIDER_ON_MV) {
     gBatOnLevel = (int8_t)gBatLevel;
     gBatMv = (mv >= BATTERY_MIN_MV && mv <= BATTERY_MAX_MV) ? mv : -1;
+    gBatHaveRead = gBatMv >= 0;
+    gBatReadMs = now;
   } else if (++gBatTries < 2) {
     batterySwitchOn(gBatLevel == LOW ? HIGH : LOW, now);  // divider stayed off: other board revision
   } else {
@@ -172,8 +180,25 @@ static void screenInitPanel() {
   gScrDisplayOn = false;
 }
 
+// PRG changed level: wake loop() so screenPoll() sees it (debounced there).
+static void IRAM_ATTR screenPrgIsr() {
+  BaseType_t woken = pdFALSE;
+  if (gScrWakeTask) vTaskNotifyGiveFromISR(gScrWakeTask, &woken);
+  portYIELD_FROM_ISR(woken);
+}
+
 // ---- Sketch interface ------------------------------------------------------------------
-// setup(), first thing: panel unpowered from boot, PRG as input. `name` must stay valid.
+// What the sketch hands screenDraw() each frame.
+struct ScreenInputs {
+  bool     linked;             // a phone is connected
+  uint8_t  txState;            // ScreenTxState
+  uint16_t txPermille;         // progress through the current phase
+  uint8_t  program;            // ScreenProgram (= RelayProgram)
+  uint32_t programIntervalMs;  // TX / wand loop interval
+};
+
+// setup(), first thing, from loop()'s task: panel unpowered from boot, PRG as input with an
+// interrupt that wakes that task. `name` must stay valid.
 static void screenBegin(uint32_t onMs, const char* name) {
   gScrOnMs = onMs;
   gScrName = name;
@@ -182,6 +207,8 @@ static void screenBegin(uint32_t onMs, const char* name) {
   pinMode(HV3_PRG_PIN, INPUT_PULLUP);
   gBtnRaw = gBtnDown = (digitalRead(HV3_PRG_PIN) == LOW);  // a held button is not a press
   gBtnChangeMs = millis();
+  gScrWakeTask = xTaskGetCurrentTaskHandle();
+  attachInterrupt(HV3_PRG_PIN, screenPrgIsr, CHANGE);
   // u8g2's SSD1306 driver holds reset 100 ms and then waits 100 ms more (for slow clone panels),
   // which would stall loop() -- and with it the transmit timing -- for ~300 ms on every wake.
   // The Heltec panel only needs a few ms (its supply has already settled by then).
@@ -192,7 +219,7 @@ static void screenBegin(uint32_t onMs, const char* name) {
   gOled.setBusClock(OLED_I2C_HZ);
 }
 
-// beginTransmit(): a packet went on air.
+// loop(): a job went on air (kind: ScreenPacketKind).
 static void screenNotePacket(const uint8_t* bytes, size_t len, uint32_t cmdMs, bool wake, uint8_t kind) {
   if (len > sizeof(gScrLastBytes)) len = sizeof(gScrLastBytes);
   gScrSent++;
@@ -239,6 +266,32 @@ static bool screenFrameDue() {
   return gScrPower == SCREEN_ON && (gScrFrameNow || millis() - gScrFrameMs >= SCREEN_FRAME_MS);
 }
 
+static void scrDueAt(uint32_t& due, uint32_t at, uint32_t now) {
+  const int32_t d = (int32_t)(at - now);
+  const uint32_t ms = d < 0 ? 0 : (uint32_t)d;
+  if (ms < due) due = ms;
+}
+
+// loop(): ms until screenPoll() or a frame has work: PRG debounce, Vext settle, the next frame,
+// the screen timeout, a battery reading. 0xFFFFFFFF while the screen is dark and PRG is idle.
+static uint32_t screenNextDueMs(uint32_t now) {
+  uint32_t due = 0xFFFFFFFFu;
+  if (gBtnRaw != gBtnDown) scrDueAt(due, gBtnChangeMs + BUTTON_DEBOUNCE_MS, now);
+  if (gScrPower == SCREEN_OFF) return due;
+  scrDueAt(due, gScrPressMs + gScrOnMs, now);
+  if (gScrPower == SCREEN_POWERING) scrDueAt(due, gScrPowerMs + SCREEN_VEXT_SETTLE_MS, now);
+  if (gScrPower == SCREEN_ON) scrDueAt(due, gScrFrameNow ? now : gScrFrameMs + SCREEN_FRAME_MS, now);
+  if (gBatBusy) scrDueAt(due, gBatMs + BATTERY_SETTLE_MS, now);
+  else scrDueAt(due, gBatDue ? now : gBatMs + BATTERY_PERIOD_MS, now);
+  return due;
+}
+
+// The last plausible battery reading in mV if it is recent, else -1 (STATUS "batMv").
+static int32_t screenBatteryMv() {
+  if (!gBatHaveRead || gBatMv < 0 || millis() - gBatReadMs > BATTERY_REPORT_MAX_AGE_MS) return -1;
+  return gBatMv;
+}
+
 static uint32_t screenRowHash(const uint8_t* p, size_t n) {
   uint32_t h = 2166136261u;  // FNV-1a
   while (n--) h = (h ^ *p++) * 16777619u;
@@ -271,7 +324,7 @@ static void screenFlush() {
 
 // loop(), when screenFrameDue(): draw the current page from the sketch's transmitter state
 // plus the stats and readings kept here, and send what changed.
-static void screenDraw(bool linked, uint8_t txState, uint16_t txPermille, bool keepAwake) {
+static void screenDraw(const ScreenInputs& in) {
   const uint32_t now = millis();
   if (!gScrAddr[0]) {
     const std::string a = NimBLEDevice::getAddress().toString();  // "aa:bb:cc:dd:ee:ff"
@@ -280,10 +333,11 @@ static void screenDraw(bool linked, uint8_t txState, uint16_t txPermille, bool k
 
   ScreenModel m;
   memset(&m, 0, sizeof(m));
-  m.linked = linked;
-  m.txState = txState;
-  m.txPermille = txPermille;
-  m.keepAwake = keepAwake;
+  m.linked = in.linked;
+  m.txState = in.txState;
+  m.txPermille = in.txPermille;
+  m.program = in.program;
+  m.programIntervalMs = in.programIntervalMs;
   m.sent = gScrSent;
   m.lastKind = gScrLastKind;
   const int64_t nowUs = esp_timer_get_time();

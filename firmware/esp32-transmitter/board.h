@@ -20,8 +20,15 @@
 #define MM_HELTEC_V3 0
 #endif
 
-// Shown on the OLED's DEVICE page. Bump it when the firmware's behaviour changes.
-#define MM_FW_VERSION "1.1"
+// Shown on the OLED's DEVICE page and in STATUS ("fw"). Bump it when the firmware's behaviour changes.
+#define MM_FW_VERSION "1.2"
+// Relay protocol version in STATUS ("proto"). 2: chip-side keep-awake / loops / settings, full
+// STATUS object (the app treats a STATUS without "running" as firmware before 1.2).
+#define MM_RELAY_PROTO 2
+
+#if !MM_HELTEC_V3
+#define MM_BOARD_LABEL "ESP32"
+#endif
 
 #if MM_HELTEC_V3
 #define MM_BOARD_LABEL "HELTEC V3"

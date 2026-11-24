@@ -24,7 +24,9 @@
 
 enum ScreenPage : uint8_t { PAGE_STATUS = 0, PAGE_PACKET, PAGE_DEVICE, PAGE_COUNT };
 enum ScreenTxState : uint8_t { SCREEN_TX_IDLE = 0, SCREEN_TX_WAKE, SCREEN_TX_SEND };
-enum ScreenPacketKind : uint8_t { PACKET_NONE = 0, PACKET_BAND, PACKET_WAND, PACKET_PING };
+// Same values as relay_proto.h RelayKind / RelayProgram (the sketch passes them straight through).
+enum ScreenPacketKind : uint8_t { PACKET_NONE = 0, PACKET_BAND, PACKET_WAND, PACKET_PING, PACKET_RAW };
+enum ScreenProgram : uint8_t { SCREEN_PROG_NONE = 0, SCREEN_PROG_KEEP_AWAKE, SCREEN_PROG_TX_LOOP, SCREEN_PROG_WAND_LOOP };
 
 // Everything the pages show. Filled in loop() context only.
 struct ScreenModel {
@@ -32,7 +34,8 @@ struct ScreenModel {
   bool        linked;          // a phone is connected
   uint8_t     txState;         // ScreenTxState
   uint16_t    txPermille;      // progress through the current WAKE / SEND phase, 0..1000
-  bool        keepAwake;       // keep-awake pinging is on
+  uint8_t     program;         // ScreenProgram the chip runs by itself
+  uint32_t    programIntervalMs;  // TX / wand loop interval
   uint32_t    sent;            // packets broadcast since boot
   // last packet (STATUS + LAST PACKET)
   uint8_t     lastKind;        // ScreenPacketKind; PACKET_NONE = nothing sent yet
@@ -104,6 +107,7 @@ static const char* scrKindName(uint8_t kind) {
     case PACKET_BAND: return "BAND";
     case PACKET_WAND: return "WAND";
     case PACKET_PING: return "PING";
+    case PACKET_RAW:  return "RAW";
     default:          return "--";
   }
 }
@@ -114,6 +118,25 @@ static void scrAge(char* out, size_t n, uint32_t s) {
   else if (s < 3600)  snprintf(out, n, "%luM", (unsigned long)(s / 60));
   else if (s < 86400) snprintf(out, n, "%luH", (unsigned long)(s / 3600));
   else                snprintf(out, n, "%luD", (unsigned long)(s / 86400));
+}
+
+// "3S" when whole seconds, else one decimal: "2.5S".
+static void scrSeconds(char* out, size_t n, uint32_t ms) {
+  const uint32_t tenths = (ms + 50) / 100;
+  if (tenths % 10 == 0) snprintf(out, n, "%luS", (unsigned long)(tenths / 10));
+  else                  snprintf(out, n, "%lu.%luS", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10));
+}
+
+// STATUS line 2: what the chip keeps doing by itself.
+static void scrProgramText(char* out, size_t n, uint8_t program, uint32_t intervalMs) {
+  char secs[12];
+  scrSeconds(secs, sizeof(secs), intervalMs);
+  switch (program) {
+    case SCREEN_PROG_KEEP_AWAKE: snprintf(out, n, "KEEP AWAKE ON"); break;
+    case SCREEN_PROG_TX_LOOP:    snprintf(out, n, "TX LOOP %s", secs); break;
+    case SCREEN_PROG_WAND_LOOP:  snprintf(out, n, "WAND LOOP %s", secs); break;
+    default:                     snprintf(out, n, "KEEP AWAKE OFF"); break;
+  }
 }
 
 // Rough state of charge of a single LiPo cell from its resting voltage (10 % steps, linear between).
@@ -127,8 +150,8 @@ static int scrBatteryPercent(int32_t mv) {
 }
 
 // BLE  LINKED | WAITING FOR PHONE
-// TX   IDLE | WAKE [bar] | SEND [bar]
-//      KEEP AWAKE ON | OFF
+// TX   IDLE | WAKE [bar] | SEND [bar]           (raw bursts show SEND)
+//      KEEP AWAKE ON | TX LOOP 3S | WAND LOOP 2.5S | KEEP AWAKE OFF
 // PKT  12 SENT
 //      LAST BAND 4S AGO | LAST --
 static void scrPageStatus(u8g2_t* g, const ScreenModel& m) {
@@ -143,7 +166,8 @@ static void scrPageStatus(u8g2_t* g, const ScreenModel& m) {
     scrValue(g, 1, m.txState == SCREEN_TX_WAKE ? "WAKE" : "SEND");
     scrBar(g, SCR_VALUE_X + 5 * VFD5X7_ADVANCE, scrLineY(1), SCR_BAR_W, m.txPermille);
   }
-  scrValue(g, 2, m.keepAwake ? "KEEP AWAKE ON" : "KEEP AWAKE OFF");
+  scrProgramText(buf, sizeof(buf), m.program, m.programIntervalMs);
+  scrValue(g, 2, buf);
   scrLabel(g, 3, "PKT");
   snprintf(buf, sizeof(buf), "%lu SENT", (unsigned long)m.sent);
   scrValue(g, 3, buf);
