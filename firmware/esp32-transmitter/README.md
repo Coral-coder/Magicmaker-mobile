@@ -67,8 +67,8 @@ In PowerShell, in this folder:
 - **esptool:** uses one on PATH or in Python if present and v4 or newer, otherwise downloads
   the standalone esptool v4.8.1 into `.tools/` once (no Python needed).
 - **Which image file:** `-Bin`, else the `.bin` committed here (`git pull` keeps it
-  current), else the `esp32-firmware` release. The repo is private, so for the download
-  pass `-Token ghp_…` (repo read scope) or download the asset in a browser and use `-Bin`.
+  current), else the `esp32-firmware` release. The repo is public, so that download needs
+  no token (`-Token ghp_…` only matters for a private fork).
 - **Won't connect?** Heltec V3: hold **PRG**, tap **RST**, release **PRG**, then rerun (if
   you flashed that way, tap **RST** afterwards to start it). Classic ESP32: hold **BOOT**
   while it says `Connecting...`. Close any serial monitor holding the port. Driver: Silicon
@@ -79,6 +79,69 @@ In PowerShell, in this folder:
 **macOS / Linux:** `./flash.sh` does the same (`--board auto|esp32|heltec-v3`, `--port`,
 `--bin`, `--baud`, `--token`, `--list-ports`). It needs `python3` and installs esptool 4.8.1
 into `.tools/venv` on first run if no esptool is installed.
+
+## Updating
+
+CI (`.github/workflows/esp32-firmware.yml`) builds every firmware change and puts the
+latest images in four places:
+
+| Where | What | Used for |
+|---|---|---|
+| The iPhone app | app images, bundled from `ios/MagicMaker/Firmware/` | Bluetooth update (firmware 1.2+) |
+| [Web flasher](https://coral-coder.github.io/Magicmaker-mobile/flasher/) | merged images, from `web/flasher/` | flashing from Chrome / Edge |
+| [`esp32-firmware` release](https://github.com/Coral-coder/Magicmaker-mobile/releases/tag/esp32-firmware) | merged + app images, `firmware.json`, `MagicMaker-Flasher-Windows.zip` | downloads |
+| This folder | merged images | `flash.ps1` / `flash.sh` |
+
+The **merged** image (`magicmaker-<board>.bin`) is bootloader + partition table + app, flashed
+at `0x0`. The **app** image (`magicmaker-<board>-app.bin`) is the same file from `0x10000` on,
+which is what an over-the-air update sends. Every image carries the text
+`MMFW:<version>:<board>` (board `esp32` or `heltec-v3`), so a tool can read its version;
+`firmware.json` lists the version and each board's files, sizes and MD5s.
+
+**From the iPhone app, over Bluetooth** (the board already runs firmware **1.2 or newer**; no
+cable):
+
+1. Link the app to the board as usual.
+2. Press the board's button once: **PRG** on a Heltec V3, **BOOT** on a classic DevKit. For the
+   next **2 minutes** the board accepts an update. Without that press it refuses one, so nobody
+   nearby can reflash it.
+3. Start the firmware update in the app. It sends the app image it carries for that board;
+   the board checks it (MD5, the image's own SHA-256 and chip type) and restarts into it about
+   1.5 s after the last byte, and the app relinks. If the update fails or is interrupted, the
+   board keeps running its current firmware.
+
+A board on firmware older than 1.2 has no Bluetooth update: flash it once by cable (below).
+
+**From the browser:** [coral-coder.github.io/Magicmaker-mobile/flasher](https://coral-coder.github.io/Magicmaker-mobile/flasher/).
+Chrome or Edge on a computer, or Chrome on Android with a USB OTG adapter (Safari and iPhone
+browsers can't reach a serial port). Click **Connect**, pick the port, then **Install**: the page
+asks the chip what it is and writes the matching merged image (**ESP32 → classic**,
+**ESP32-S3 → Heltec V3**), erasing the board first. Same boot-button and driver tips as
+**Won't connect?** above. Built with ESP Web Tools; deployed by `.github/workflows/pages.yml`.
+
+**Windows, one click:** download
+[`MagicMaker-Flasher-Windows.zip`](https://github.com/Coral-coder/Magicmaker-mobile/releases/download/esp32-firmware/MagicMaker-Flasher-Windows.zip),
+unzip it, plug the board in and double-click `flash.bat`. It runs `flash.ps1` (above) with
+the two merged images next to it.
+
+**Bluetooth update protocol** (`ota.h`): characteristic `A7830007-0000-1000-8000-00805F9B34FB`
+on the relay service, write / write without response / notify; integers little-endian.
+
+| App → board | Payload |
+|---|---|
+| `01` BEGIN | `[u32 size][16-byte MD5]` of the app image |
+| `02` DATA | `[u32 offset][bytes…]`, continuing at the expected offset |
+| `03` END | — (board restarts ~1.5 s after an OK) |
+| `04` ABORT | — |
+| `05` QUERY | — |
+
+The board notifies `[0x80 | op][status][u32 value][text]`. Status 0 = OK; 1 not armed (no
+button press in the last 120 s), 2 size, 3 begin, 4 offset, 5 write, 6 verify, 7 state,
+8 format. `value` is the next expected offset (BEGIN, DATA, offset errors), the image size (END)
+or the seconds left in the armed window (QUERY). QUERY's text is
+`MMFW:<version>:<board>;s=<state>;o=<offset>;n=<size>` (state 0 idle, 1 receiving, 2 done,
+3 error). During DATA the board acks every 4096 bytes (and on any error), so the app keeps a
+bounded window of bytes in flight.
 
 ## Build & flash (Arduino IDE)
 
@@ -253,6 +316,7 @@ advertising, LED, screen).
 | Command | `A7830003-…` | write | `{"action":…}` JSON (below) |
 | Status | `A7830004-…` | read | one JSON object: the last command's reply + the chip's state |
 | Catalog | `A7830005-…` | read | `{"ok":true,"items":[]}` (empty; library lives on the phone) |
+| OTA | `A7830007-…` | write, write without response, notify | firmware update over Bluetooth (1.2+); see **Updating** and `ota.h` |
 
 **TX characteristic.** Split at the last `|`; invalid hex → the write is ignored. Hex: non-hex
 characters skipped, `83 01` put in front when missing, 3–29 bytes. `ms` 0 / absent / not a

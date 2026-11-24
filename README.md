@@ -12,6 +12,7 @@ git clone https://github.com/Coral-coder/Magicmaker-mobile.git
 |----------|------|-------|
 | iOS | [`ios/`](ios/) | Open `ios/MagicMaker.xcodeproj` in Xcode — use **Release** scheme on device |
 | Android | [`android/`](android/) | `./android/tools/deploy.sh` (USB debugging) |
+| ESP32 transmitter | [`firmware/esp32-transmitter/`](firmware/esp32-transmitter/) | Built by CI. Flash from the browser: [web flasher](https://coral-coder.github.io/Magicmaker-mobile/flasher/); update over Bluetooth from the iPhone app (firmware 1.2+). See its [README](firmware/esp32-transmitter/README.md#updating) |
 
 ## Architecture
 
