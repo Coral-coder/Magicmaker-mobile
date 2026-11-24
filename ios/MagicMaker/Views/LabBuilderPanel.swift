@@ -854,18 +854,29 @@ private struct LabPacketAnatomyView: View {
     }
 
     private func editorSheet(_ target: LabSegmentEditTarget) -> some View {
-        let title: String = target.segment.segment.title
         return LabSegmentEditorSheet(
             target: target,
             extended: extended,
             onApply: { (edited: String) -> Void in
                 editing = nil
-                onEdit(edited, title)
+                onEdit(edited, LabPacketAnatomyView.titleAfterEdit(target, edited))
             },
             onCancel: {
                 editing = nil
             }
         )
+    }
+
+    /// The edited block's title in the new packet ("Tail · buzz 3" after picking B3 on
+    /// "Tail · no buzz"); the old title when the edit changed the packet's block layout.
+    private static func titleAfterEdit(_ target: LabSegmentEditTarget, _ edited: String) -> String {
+        let old: DisneyTlv.Segment = target.segment.segment
+        let index: Int = target.segment.index
+        let before: Int = DisneyTlv.anatomy(target.baseHex).count
+        let after: [DisneyTlv.Segment] = DisneyTlv.anatomy(edited)
+        if after.count != before || index < 0 || index >= after.count { return old.title }
+        if after[index].kind != old.kind { return old.title }
+        return after[index].title
     }
 
     /// Selects the block (its explanation shows under the chips) and opens its editor on the

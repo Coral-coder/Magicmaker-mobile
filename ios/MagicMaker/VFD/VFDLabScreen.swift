@@ -1348,15 +1348,25 @@ extension VFDLabScreen {
         let current: String = HexUtils.canonicalHex(resolve(ctx).built)
         if current != base { return }
         guard let decoded = LabSegmentEditor.builderState(target, extended: extendedOn(ui)) else { return }
-        let oldCount: Int = DisneyTlv.anatomy(base).count
+        let oldSegments: [DisneyTlv.Segment] = DisneyTlv.anatomy(base)
+        let oldCount: Int = oldSegments.count
+        // The block's title in the edited packet ("Tail · buzz 3" after picking B3 on "Tail · no
+        // buzz"), or the old one when the edit changed the block layout.
+        var shown: String = title
+        let newSegments: [DisneyTlv.Segment] = DisneyTlv.anatomy(target)
+        if newSegments.count == oldCount && index >= 0 && index < oldCount
+            && newSegments[index].kind == oldSegments[index].kind {
+            shown = newSegments[index].title
+        }
+        let named: String = shown
         userEdit(ctx) { (s: inout VFDLabState) -> Void in
             let before: LabPacketBuilder.LabPacketType = s.type
             VFDLabScreen.applyDecoded(&s, decoded)
             s.ledMask = 7
             if decoded.type == before {
-                s.loadMsg = "Edited " + title
+                s.loadMsg = "Edited " + named
             } else {
-                s.loadMsg = "Edited " + title + " — builder now " + decoded.type.label + " (keeps every byte)"
+                s.loadMsg = "Edited " + named + " — builder now " + decoded.type.label + " (keeps every byte)"
             }
         }
         let after: String = resolve(ctx).built
