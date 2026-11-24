@@ -50,6 +50,12 @@ import com.magicmaker.android.core.StarlightColors
 import kotlinx.coroutines.launch
 
 private const val DEFAULT_GLOW_INDEX = 0x1B
+
+/** The colour index of a listed code; one that cannot be read (empty) is 0, as the list's
+ *  StarlightColors.wandColorKey and the iPhone read it, instead of throwing. */
+private fun entryColorIndex(hex: String): Int =
+    runCatching { MagicClassifier.starlightColorIndex(hex) }.getOrDefault(0)
+
 private const val WAND_ASPECT = 600f / 750f
 private const val UPPER_GLOW_FRACTION = 0.94f
 
@@ -124,7 +130,7 @@ fun StarlightWandView(
                 ) {
                     if (colors.isNotEmpty()) {
                         selectedIndex = (selectedIndex + 1) % colors.size
-                        glowColorIndex = MagicClassifier.starlightColorIndex(colors[selectedIndex].hex)
+                        glowColorIndex = entryColorIndex(colors[selectedIndex].hex)
                     }
                 },
             contentAlignment = Alignment.Center,
@@ -221,14 +227,14 @@ fun StarlightWandView(
                                 text = {
                                     Text(
                                         StarlightColors.nameFor(
-                                            MagicClassifier.starlightColorIndex(packet.hex),
+                                            entryColorIndex(packet.hex),
                                         ).uppercase() + "  ·  " + packet.hex.uppercase(),
                                         style = techLabel(),
                                     )
                                 },
                                 onClick = {
                                     selectedIndex = idx
-                                    glowColorIndex = MagicClassifier.starlightColorIndex(packet.hex)
+                                    glowColorIndex = entryColorIndex(packet.hex)
                                     expanded = false
                                 },
                             )

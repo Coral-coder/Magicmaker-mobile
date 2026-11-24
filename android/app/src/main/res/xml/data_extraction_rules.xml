@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+: Google backup and phone-to-phone transfer take all app data except the cloud
+     dictionary token, which stays on this phone only (PacketSync.TOKEN_PREFS). -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="magicmaker_secrets.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="magicmaker_secrets.xml" />
+    </device-transfer>
+</data-extraction-rules>

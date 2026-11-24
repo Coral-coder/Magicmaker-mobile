@@ -222,10 +222,11 @@ object VFDSettingsScreen : VFDScreen {
         return hint(fb, c, y, w, CLOUD_TOKEN_EXPLANATION)
     }
 
-    /** "Cloud dictionary token" prompt (URL keyboard: no auto-capital or autocorrect). Blank = no change. */
+    /** "Cloud dictionary token" prompt (password keyboard: masked, no auto-capital, autocorrect or
+     *  suggestions). Blank = no change. */
     private fun promptToken(ctx: VFDContext) {
         ctx.prompt("CLOUD DICTIONARY TOKEN", "GitHub token for ${BuildConfig.BACKUP_REPO}. Stays on this phone.",
-                   keyboard = VFDKeyboard.url) { typed ->
+                   keyboard = VFDKeyboard.password) { typed ->
             if (typed.isNotBlank()) {
                 PacketSync.saveToken(ctx.context, typed)
                 ctx.store.cloudSync(force = true)

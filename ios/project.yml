@@ -36,9 +36,11 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIBackgroundModes:
           - bluetooth-central
+          - location
         NSBluetoothAlwaysUsageDescription: "MagicMaker scans and sends Disney BLE packets for wand colors and show effects."
         NSBluetoothPeripheralUsageDescription: "MagicMaker transmits BLE packets to MagicBands and wands."
         NSLocalNetworkUsageDescription: "MagicMaker sends transmit commands to your Android relay over the local WiFi hotspot."
+        NSLocationWhenInUseUsageDescription: "MagicMaker tags each captured packet with where it was heard, for the capture map. With Keep running in background on, it also uses location to keep running while you use other apps."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         BGTaskSchedulerPermittedIdentifiers: []

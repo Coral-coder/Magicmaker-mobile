@@ -53,7 +53,8 @@ the update.
 
 ## Notes
 - The updater works with no token (public repo; GitHub allows 60 anonymous API calls an
-  hour per network, plenty for one check per app open).
+  hour per network, plenty for one check per app open). It stays off in **debug** builds:
+  their per-machine debug key could never install the release-signed APK.
 - `-PmmUpdateToken=<PAT>` still works for a local build if the repo is ever private again
   (e.g. via `~/.gradle/gradle.properties`, never committed). A rejected token (401) makes the
   app retry anonymously.

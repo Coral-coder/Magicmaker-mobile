@@ -129,7 +129,8 @@ struct ContentView: View {
     }
 
     /// Every 2 s: keep the relay link up and read its status. On the WiFi relay the link state
-    /// itself (`remoteLinkReady`) comes from this status read.
+    /// itself (`remoteLinkReady`) comes from this status read. "Keep running in background"
+    /// follows the work running (loops, replays, the link) from here too.
     private func pollRelay() {
         if !vm.relayCommandReady {
             vm.ensureRelayLink()
@@ -141,6 +142,7 @@ struct ContentView: View {
         if vm.relayCommandReady, !vm.isCatalogSyncInFlight, catalogMissing {
             vm.refreshAndroidCatalog()
         }
+        vm.updateBackgroundKeepAlive()
     }
 
     private var catalogMissing: Bool {

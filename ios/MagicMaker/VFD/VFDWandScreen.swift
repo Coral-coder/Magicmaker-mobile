@@ -819,7 +819,7 @@ private struct VFDWandState {
     let keys: String
 }
 
-/// The Starlight colour list (WandScreen.starlightColors over learnedStarlightPackets(): a filter,
+/// The Starlight colour list (StarlightColors.wandColors over learnedStarlightPackets(): a filter,
 /// a sort by label and a hex parse per learned code), built again only when the store's revision
 /// or its learned-colour count changes, as WandScreen reloads it on store.revision; the draw runs
 /// twice a frame. A memo only: drawing stays free of visible state.

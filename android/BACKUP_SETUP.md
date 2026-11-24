@@ -36,7 +36,8 @@ GitHub → Settings → Developer settings → **Fine-grained tokens** → Gener
 The app repo is public, so release APKs carry **no** token. Enter it once per phone:
 **Settings → CLOUD DICTIONARY → Cloud dictionary token** → paste → **SAVE**
 (VFD theme: **SET TOKEN**). It is kept in the app's private storage, in its own prefs
-file, and is never written to the library file or an EXPORT. **CLEAR** turns sync off.
+file, and is never written to the library file, an EXPORT or Android's own backup (so a
+new or restored phone needs it entered again). **CLEAR** turns sync off.
 
 Without a token the feature stays dormant (the CLOUD / SYNC NOW row is hidden).
 A local private build can still bake one in with `-PmmBackupToken=…` (never committed);

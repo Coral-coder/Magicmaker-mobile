@@ -38,10 +38,11 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MagicMaker sends transmit commands to your Android relay over the local WiFi hotspot.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>MagicMaker tags each captured packet with where it was heard, for the capture map.</string>
+	<string>MagicMaker tags each captured packet with where it was heard, for the capture map. With Keep running in background on, it also uses location to keep running while you use other apps.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
+		<string>location</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

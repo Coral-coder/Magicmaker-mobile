@@ -11,6 +11,7 @@ Top to bottom:
         | BROADCAST STRENGTH [MIN] [LOW] [MED] [MAX] + hint
         | WAKE SLICE, COMMAND BURST, STARLIGHT WAND SettingSliders, each with its hint
     | SCAN FILTER: SHOW-CTRL / ALL RAW + switch, hint
+    | BACKGROUND: KEEP RUNNING + switch, the state line (alarm while it needs Location), the note
     | ABOUT: MAGICMAKER v<version> (<build>)
 
 Re-expressed for the grid:
@@ -75,26 +76,44 @@ BURST_MS = 3000                                # store.getCommandBurstMs()
 STARLIGHT_MS = 750                             # store.getStarlightBurstMs()
 
 SHOW_CONTROL_ONLY = True                       # scan.showControlOnly
+KEEP_RUNNING = True                            # vm.keepRunningInBackground
+KEEP_ALIVE_STATE = "running"                   # vm.backgroundKeepAlive: off/needsLocation/idle/running
 APP_VERSION, APP_BUILD = "1.3.0", "14"         # MARKETING_VERSION, CURRENT_PROJECT_VERSION
 
 HEADER_NOTE = "Global transmission tuning — applies to every TX."
 STRENGTH_HINT = "Lower = shorter range, fewer nearby bands react · default MAX"
 FILTER_HINT = "Filter MagicBand/device noise out of the scan (default on); flip to see all raw."
+# AppViewModel.BackgroundKeepAlive.text and AppViewModel.backgroundKeepAliveNote
+KEEP_ALIVE_TEXT = {
+    "off": "OFF — iOS suspends MagicMaker soon after you leave it.",
+    "needsLocation": "NEEDS LOCATION — allow Location “While Using” for MagicMaker in iOS Settings.",
+    "idle": "ON — nothing is running right now, so iOS may suspend the app.",
+    "running": "ON — MagicMaker keeps running in the background (blue location indicator).",
+}
+KEEP_ALIVE_NOTE = ("Uses background location to keep MagicMaker running while you use other apps or lock "
+                   "the phone — only while scanning, logging, a loop, show or replay, keep-awake or a relay "
+                   "link is active. Kept running: the relay link, transmits, loops, the random show, replays "
+                   "and the open capture log. iPhone limit: iOS does not pass band or wand packets to apps in "
+                   "the background, so this iPhone hears and records nothing new, and auto-responses don't "
+                   "fire, until you come back to MagicMaker. An Android relay keeps scanning on its own; the "
+                   "ESP32 runs keep-awake and its loops by itself. Uses extra battery.")
 
 # ---------------------------------------------------------------------------------------------
 # App logic (as SettingsScreen.swift computes it)
 # ---------------------------------------------------------------------------------------------
 
 
-def android_relay_linked():
-    """An Android relay (BLE or WiFi) is linked and takes commands; the ESP32 takes only packets."""
-    return RELAY_BACKEND != "esp32" and REMOTE_LINK_READY
+def relay_takes_settings():
+    """A relay is linked and takes commands: an Android relay (BLE or WiFi) or the ESP32."""
+    return REMOTE_LINK_READY
 
 
 def relay_note():
-    if android_relay_linked():
-        return "ANDROID RELAY LINKED — CHANGES ARE SENT TO IT TOO"
-    return "TX MODE AND STRENGTH APPLY ON AN ANDROID RELAY"
+    if not relay_takes_settings():
+        return "TX MODE AND STRENGTH APPLY ON THE RELAY (ANDROID OR ESP32)"
+    if RELAY_BACKEND == "esp32":
+        return "ESP32 LINKED — CHANGES ARE SENT TO IT TOO"
+    return "ANDROID RELAY LINKED — CHANGES ARE SENT TO IT TOO"
 
 
 def tx_mode_hint():
@@ -274,6 +293,16 @@ def scan_filter(fb, L, c, y, w):
     return hint(fb, L, c, y, w, FILTER_HINT)
 
 
+def background(fb, L, c, y, w):
+    y = W.section(fb, L, c, y, w, "BACKGROUND")
+    on = KEEP_RUNNING
+    y = W.toggle(fb, L, c, y, w, "KEEP RUNNING", on, label_color=HIGHLIGHT if on else DIM,
+                 name="toggle:KEEP RUNNING")
+    state_color = ALARM if KEEP_ALIVE_STATE == "needsLocation" else DIM
+    y = W.text_block(fb, L, c, y, w, KEEP_ALIVE_TEXT[KEEP_ALIVE_STATE], color=state_color)
+    return W.text_block(fb, L, c, y, w, KEEP_ALIVE_NOTE, color=DIM)
+
+
 def about(fb, L, c, y, w):
     y = W.section(fb, L, c, y, w, "ABOUT")
     fb.text_fit(c, y, "MAGICMAKER " + app_version_text(), w, "small", DIM)
@@ -287,5 +316,6 @@ def draw(fb, L):
     y = appearance(fb, L, c, y, w)
     y = transmission(fb, L, c, y, w)
     y = scan_filter(fb, L, c, y, w)
+    y = background(fb, L, c, y, w)
     y = about(fb, L, c, y, w)
     return y

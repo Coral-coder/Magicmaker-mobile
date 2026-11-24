@@ -73,7 +73,7 @@ only a repo admin can change visibility (in Settings, as above).
   this repo receive them:
   - A pull request from a **fork** runs without secrets and with a read-only `GITHUB_TOKEN`.
   - The **Run workflow** buttons (TestFlight, Share secrets, Android release) work only for
-    people with write access, which means only you.
+    people with write access to this repo: you, plus any collaborators you add.
 - **Public logs mask secrets.** GitHub replaces every secret's exact value with `***` in run
   logs. That is why the release log prints the artifact name as `***-apk`: the `KEY_ALIAS`
   value is `magicmaker`, so every `magicmaker` in that job's log is masked. Masking only
@@ -150,7 +150,8 @@ The usual suspects, and what the evidence shows:
 - [ ] Bump `.github/RELEASE_VERSION` (or **Run workflow**). In the run, check that
       *Build APK* no longer lists `UPDATE_TOKEN` / `BACKUP_TOKEN`, and that the release has a
       single `app-release.apk`. The *Upload APK as workflow artifact* step now runs only when
-      no Release is published, so it shows as skipped.
+      there is no Release to hold the APK (no version to publish, or publishing failed after a
+      good build, so a signed APK is never lost). On a normal release it shows as skipped.
 
 ## 6. On the phone, after updating
 
@@ -162,13 +163,15 @@ The usual suspects, and what the evidence shows:
   - Standard theme: **SETTINGS** tab → **CLOUD DICTIONARY** → paste it into
     **Cloud dictionary token** → **SAVE**.
   - VFD theme: **SETTINGS** → **CLOUD DICTIONARY** → **SET TOKEN** → paste → **OK**.
+  - Both fields mask what you type, and the token is never shown again afterwards.
   - The section then shows `TOKEN: SET ON THIS PHONE`. A sync starts right away, and the
     **LOGS** tab shows `CLOUD: …` with **SYNC NOW**.
 - Where the token is kept: the app's private storage, in a prefs file of its own
   (`magicmaker_secrets`). It is never written to `/sdcard/MagicMaker/magicmaker_library.json`
-  or to an EXPORT. **CLEAR** removes it. Uninstalling the app removes it too. Android's own
-  device backup (Google backup, `allowBackup`) may copy app data to your Google account,
-  encrypted to that account.
+  or to an EXPORT, and it is left out of Android's own backup (Google backup and
+  phone-to-phone transfer), so a new or restored phone needs it entered again. **CLEAR**
+  removes it. Uninstalling the app removes it too. The app never logs it, and a sync error
+  shows `***` in its place.
 - If the status reads `token rejected (401)`, the token was revoked or has expired. Make a new
   one (step 1) and set it again.
 
@@ -194,3 +197,4 @@ coordinates and `.claude/`.
 | 9 | The firmware flasher docs and scripts still say "PRIVATE repo" and suggest `-Token` / `--token` | `firmware/esp32-transmitter/README.md`, `flash.ps1`, `flash.sh` | none: downloads now work without a token | Tidy the wording later |
 | 10 | TestFlight dSYM artifacts (7-day retention) become downloadable | Actions artifacts | debug symbols only | none |
 | 11 | Only placeholder MAC (`7C:9E:BD:12:34:56`), hotspot IPs and no GPS coordinates or e-mail addresses. Capture logs and libraries live on the phone, not in git | whole tree | none | none |
+| 12 | The iOS TestFlight run logs print the signing certificate's name: `Apple Development: <the name on your Apple developer account>`. Only the Team ID in it is masked | Actions logs of `ios-testflight.yml` (steps *Signing certificate* and *Archive*), past runs and future ones | your name is readable by anyone; not a credential | If you mind: open each such run → **⋯** → **Delete all logs**. Future runs print it again unless the workflow is changed to hide it |

@@ -22,7 +22,7 @@ import java.net.URL
  * private again); if GitHub rejects it (401: revoked or expired) the check retries without it.
  *
  * Requires the release builds to be signed with a STABLE key, or Android will reject
- * the update (signature mismatch). No-ops when no update repo is configured.
+ * the update (signature mismatch). No-ops in debug builds and when no update repo is configured.
  */
 object AppUpdater {
     private const val TAG = "AppUpdater"
@@ -36,6 +36,13 @@ object AppUpdater {
         val repo = BuildConfig.UPDATE_REPO
         if (repo.isBlank()) {
             Log.i(TAG, "OTA not configured (no update repo).")
+            return
+        }
+        // A debug build is signed with a per-machine debug key, so Android would refuse the
+        // release-signed APK anyway: stay quiet instead of offering it on every resume. (Before
+        // the repo went public, debug builds had no token and were dormant the same way.)
+        if (BuildConfig.DEBUG) {
+            Log.i(TAG, "OTA off in debug builds.")
             return
         }
         Thread {

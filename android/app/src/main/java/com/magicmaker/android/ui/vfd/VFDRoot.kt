@@ -80,7 +80,9 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -391,6 +393,11 @@ private fun VFDPromptDialog(renderer: VFDRenderer, req: VFDPromptRequest) {
                     onValueChange = { renderer.promptText = it },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium,
+                    visualTransformation = if (req.keyboard == VFDKeyboard.password) {
+                        PasswordVisualTransformation()
+                    } else {
+                        VisualTransformation.None
+                    },
                     keyboardOptions = KeyboardOptions(
                         capitalization = req.keyboard.capitalization,
                         autoCorrect = false,
@@ -978,6 +985,8 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
         if (promptRequest !== request) return
         val text: String = promptText.text
         promptRequest = null
+        // A secret is not kept in the renderer once its prompt has gone.
+        if (request.keyboard == VFDKeyboard.password) promptText = TextFieldValue("")
         alertClosed()
         runAction("prompt") { request.onDone(text) }
         requestRedraw()
@@ -987,6 +996,7 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
     fun cancelPrompt(request: VFDPromptRequest) {
         if (promptRequest !== request) return
         promptRequest = null
+        if (request.keyboard == VFDKeyboard.password) promptText = TextFieldValue("")
         alertClosed()
         requestRedraw()
     }

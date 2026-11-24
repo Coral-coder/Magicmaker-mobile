@@ -98,7 +98,9 @@ enum class VFDKeyboard {
     ip,
     url,
     /** Hex bytes: ASCII keys, typed in capitals. */
-    hex;
+    hex,
+    /** A secret (the cloud token): masked as typed, no suggestions. Android only. */
+    password;
 
     val keyboardType: KeyboardType
         get() = when (this) {
@@ -109,6 +111,7 @@ enum class VFDKeyboard {
             ip -> KeyboardType.Phone
             url -> KeyboardType.Uri
             hex -> KeyboardType.Ascii
+            password -> KeyboardType.Password
         }
 
     val capitalization: KeyboardCapitalization

@@ -390,14 +390,18 @@ final class AppViewModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.appLifecycleChanged(background: true) }
+            Task { @MainActor [weak self] in
+                self?.appLifecycleChanged(background: true)
+            }
         }
         let toForeground: NSObjectProtocol = center.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.appLifecycleChanged(background: false) }
+            Task { @MainActor [weak self] in
+                self?.appLifecycleChanged(background: false)
+            }
         }
         lifecycleObservers = [toBackground, toForeground]
     }
