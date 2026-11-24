@@ -15,11 +15,21 @@ protocol has to change — the app already knows how to drive this service.
   using the same **wake-ping → command** timing the phone's own transmitter uses, so bands
   actually react (Starlight wand codes and pings are a single burst, no wakeup).
 - A newer write **preempts** an in-flight burst (a fresh tap wins), matching the app.
+- **Chip-side toggles** (firmware 1.2): **keep-awake**, the **TX loop** and the **wand loop** run
+  on the chip itself, one at a time, and keep running when the phone disconnects, is locked or
+  the app is closed. The app sends the packet (hex + label) and the interval; the chip times the
+  bursts. Turning one on turns the others off. They live in RAM only: the board always boots
+  idle, and the app reads back what is running when it links.
+- **Chip settings**: wake preamble, command burst, wand burst, TX power and interleave mode.
+  RAM only; the app pushes its values every time it links (the iPhone is the authority).
+- **The chip never scans.** Scanning, logging, auto-responses and the library stay on the
+  phone; asking the chip to scan is answered `"unsupported"`.
 
 ## Hardware
 
-- Any ESP32 (classic, S3, C3, …). No extra parts. Onboard LED = status
-  (on while connected / transmitting).
+- Any ESP32 (classic, S3, C3, …). No extra parts. Onboard LED = status, blinks only: a short
+  blink every second while waiting for a phone, every 5 s while linked, and one flash per
+  transmission (at most one per 250 ms).
 - **Heltec WiFi LoRa 32 V3 / V3.1 / V3.2**: the same relay plus its OLED screen, lit with
   the PRG button. See **Heltec WiFi LoRa 32 V3** below.
 - Powered from USB or a LiPo. See **Power** below.
@@ -106,8 +116,8 @@ The sketch detects the board when it is compiled (`board.h`); no build flags nee
 
 | Page | Shows |
 |---|---|
-| STATUS | `BLE` LINKED / WAITING FOR PHONE · `TX` IDLE / WAKE / SEND with a progress bar for the current phase · KEEP AWAKE ON / OFF · `PKT` packets sent since boot · the last packet's kind (BAND / WAND / PING) and how long ago |
-| LAST PACKET | kind, length and stream time (`WAKE+` when a wake ping ran first), then the packet hex, seven bytes a line |
+| STATUS | `BLE` LINKED / WAITING FOR PHONE · `TX` IDLE / WAKE / SEND with a progress bar for the current phase · what the chip runs by itself: KEEP AWAKE ON / TX LOOP 3S / WAND LOOP 2.5S / KEEP AWAKE OFF · `PKT` packets sent since boot · the last packet's kind (BAND / WAND / PING / RAW) and how long ago |
+| LAST PACKET | kind (RAW = a replay step or an MBLE tap), length and stream time (`WAKE+` when a wake ping ran first), then the packet hex, seven bytes a line |
 | DEVICE | `BAT` battery voltage and % (`--` without a plausible reading) · `UP` uptime · `BLE` name and the last three bytes of its address · `FW` firmware version and board |
 
 The text uses the app's VFD 5×7 dot-matrix face. `vfd_font_5x7.h` is generated from
@@ -142,9 +152,11 @@ Tuned to sip battery:
 - CPU throttled to **80 MHz** (~half the draw of 240 MHz; still ample for BLE).
 - The **Disney beacon is only on air during a transmit burst** — the rest of the time the
   radio is nearly idle.
-- Idle-connectable advertising is **relaxed (200–400 ms)**; a linked connection requests a
-  **30–50 ms interval with latency**, so the ESP32 mostly sleeps between events (BLE modem
-  sleep).
+- Idle-connectable advertising is **relaxed (200–400 ms)** for 30 s after boot or after a phone
+  leaves, then **slows to ~1–1.3 s**; a linked connection requests a **30–50 ms interval with
+  latency**, so the radio mostly idles between events.
+- `loop()` **sleeps until its next deadline** (a phase end, a loop burst, an LED blink, the
+  screen) and is woken early by a command, a connect/disconnect or PRG; it no longer polls.
 
 Rough idle draw is a few mA on a bare module; a small LiPo lasts a full park day. For even
 longer runtime, drop `NimBLEDevice::setPower()` from `P9` to a lower level (shorter range),
@@ -154,23 +166,103 @@ and remove the status-LED writes.
 
 | Constant | Meaning | Default |
 |---|---|---|
-| `WAKE_MS` | wake-ping stream length before a band command | 520 ms |
-| `DEFAULT_CMD_MS` | command stream length (wire duration overrides if sane) | 4000 ms |
+| `DEFAULT_WAKE_MS` | wake-ping stream before a band command (chip setting at boot; the app's value replaces it) | 520 ms |
+| `DEFAULT_CMD_MS` | band command stream (a duration written with the packet overrides it) | 4000 ms |
+| `DEFAULT_STAR_MS` | wand burst | 500 ms |
+| `PING_MS` | standalone ping burst | 2000 ms |
+| `DEFAULT_POWER_LEVEL` | beacon power 0..3 = −12 / −6 / 0 / +9 dBm | 3 |
+| `LOOP_DEFAULT_MS` | TX / wand loop interval until the app sends one | 3000 ms |
 | `BEACON_ADV_MIN/MAX` | advertising interval during a burst (lower = stronger/quicker) | 20–30 ms |
-| `IDLE_ADV_MIN/MAX` | advertising interval while waiting for a phone | 200–400 ms |
+| `IDLE_ADV_FAST_MIN/MAX` | advertising interval while waiting for a phone, first 30 s | 200–400 ms |
+| `IDLE_ADV_SLOW_MIN/MAX` | … after `IDLE_FAST_WINDOW_MS` | 1022.5–1285 ms |
+| `IDLE_FAST_WINDOW_MS` | fast idle advertising after boot / a disconnect | 30 s |
+| `LED_MIN_FLASH_GAP_MS` | at most one transmit flash per this long (dense replays still blink) | 250 ms |
+| `LOOP_MAX_SLEEP_MS` | longest `loop()` sleep between deadlines | 1000 ms |
 | `SCREEN_ON_MS` | Heltec V3: how long the screen stays lit after the last PRG press | 10 s |
+| `BATTERY_MAH` | Heltec V3: rated LiPo capacity (STATUS `batMah`) | 400 mAh |
 
+The wire clamps (TX-characteristic duration 60–12000 ms, `raw_burst` 60–10000 ms, loop interval
+500–60000 ms, setting ranges) are part of the relay contract and live in `relay_proto.h`.
 Screen internals (frame rate, battery period, panel reset timing) are at the top of
 `oled_ui.h`.
 
 ## Protocol reference
 
-Mirrors `RelayProtocol` (Android) / `AndroidRelayGattClient` (iOS):
+Mirrors `RelayProtocol` / `RelayCommands` (Android) and `AndroidRelayGattClient` (iOS). Code:
+`relay_proto.h` (parsing, STATUS), `relay_engine.h` (jobs and programs), the `.ino` (BLE,
+advertising, LED, screen).
 
 | Characteristic | UUID | Access | Payload |
 |---|---|---|---|
 | Service | `A7830001-0000-1000-8000-00805F9B34FB` | — | — |
 | TX | `A7830002-…` | write | `"{hex}\|{durationMs}"` |
-| Command | `A7830003-…` | write | JSON (acked with `{"ok":true}`) |
-| Status | `A7830004-…` | read | JSON reply / telemetry |
+| Command | `A7830003-…` | write | `{"action":…}` JSON (below) |
+| Status | `A7830004-…` | read | one JSON object: the last command's reply + the chip's state |
 | Catalog | `A7830005-…` | read | `{"ok":true,"items":[]}` (empty; library lives on the phone) |
+
+**TX characteristic.** Split at the last `|`; invalid hex → the write is ignored. Hex: non-hex
+characters skipped, `83 01` put in front when missing, 3–29 bytes. `ms` 0 / absent / not a
+number → the kind's default; otherwise clamped to 60–12000. It is a user send (newest wins):
+band → wake ping (`wakeupPreambleMs`) then the command for `ms` (interleave: 1:1 slices over a
+window of `ms`; under keep-awake: the command alone for `ms`); wand / ping → one burst of `ms`.
+
+**Commands.** `action` is case-insensitive; Android's aliases work. Values: booleans
+`true`/`false`, integers as numbers (quoted digits accepted). Every reply is merged into the next
+STATUS read: `ok`, plus `error` when it failed.
+
+| Action (aliases) | Params | ESP32 |
+|---|---|---|
+| `transmit` (`tx`) | `hex` | user send, chip timing (band `commandBurstMs`, wand `starlightBurstMs`, ping 2000 ms) |
+| `vibrate` (`vib`) | — | the band Vibrate command as a user send |
+| `interrogate` (`ping`, `wakeup`) | — | `8301CC03000100` for 2000 ms |
+| `keep_awake` (`keepawake`) | `enabled` (false), `hex` | program KEEP AWAKE: streams `hex` (≥4 bytes, else the stored one; default the wake ping) whenever nothing else is on air; band sends skip the wake phase |
+| `set_tx_loop` (`tx_loop`, `repeat_tx`) | `enabled` (false), `hex`, `label`, `intervalMs` | program TX LOOP: one burst every `intervalMs` (500–60000, kept when absent, 3000 at boot) after the previous one ends; first burst at once. `hex`/`label` stored when given; on without any hex ever → `"no packet"`; `packetId` ignored |
+| `set_starlight_loop` (`wand_loop`) | same | program WAND LOOP, same rules |
+| `set_wakeup_preamble` (`preamble`) | `ms` / `preambleMs` (520) | 100–3000 |
+| `set_command_burst` (`command_burst`, `burst`) | `ms` / `burstMs` (2000) | 500–12000 |
+| `set_starlight_burst` (`starlight_burst`, `wand_burst`) | `ms` / `burstMs` (500) | 250–5000 |
+| `set_tx_power` (`tx_power`) | `level` (3) | 0–3 = beacon −12 / −6 / 0 / +9 dBm |
+| `set_tx_interleave` (`tx_interleave`) | `enabled` (false) | band sends as 1:1 wake/command slices |
+| `raw_burst` (`replay_burst`) | `hex`, `durationMs` (500) | the packet alone for exactly 60–10000 ms; waits (1 deep, newest replaces) behind a `raw_burst` on air, otherwise preempts |
+| `mble_tap` (`mble`, `tap`) | `token`, `durationMs` (5000) | MBLE beacon (`83 01 0F 11 73 93` + 14-byte token body + power) for 60–10000 ms; preempts; < 4 hex digits → `"bad token"` |
+| `set_scan` (`scan`), `set_auto` (`auto`), `set_recording` (`record`, `log`) | `enabled` | `false` → ok (no-op); otherwise `"unsupported"` (the chip never scans) |
+| `clear_live` (`clear`), `live`, `status` | — | ok |
+| `catalog`, `catalog_sync_begin`/`_chunk` (+ aliases) | — | ok + `"items":[]` |
+| library, auto-rule, scan-filter, live-feed edits, `pairing` | — | `"unsupported"` |
+| anything else | — | `"unknown action"` |
+
+Errors: `bad json`, `bad hex`, `packet too long`, `no packet`, `bad token`, `unsupported`,
+`unknown action`, `busy` (command queue full). Programs: at most one runs; turning one on turns
+the others off (a loop burst on air finishes first; a keep-awake stream stops at once). A user
+send or MBLE tap preempts anything; a preempted loop burst re-arms one interval after the job
+that replaced it. Disconnects change nothing; nothing is stored in flash.
+
+**STATUS** (one object, ≤ 508 bytes, keys in this order):
+
+| Key | When | Meaning |
+|---|---|---|
+| `ok`, `error` | always / on failure | the last command's reply (reset to ok on connect) |
+| `running` | always (`true`) | marks a real status (firmware before 1.2 sent a bare `{"ok":true}`) |
+| `proto`, `fw`, `board` | always | `2`, `"1.2"`, `"HELTEC V3"` / `"ESP32"` |
+| `keepAwake` | always | KEEP AWAKE runs |
+| `txLoopEnabled`, `txLoopIntervalMs` | TX LOOP runs | |
+| `starlightLoopEnabled`, `starlightIntervalMs` | WAND LOOP runs | |
+| `wakeupPreambleMs`, `commandBurstMs`, `starlightBurstMs`, `txPowerLevel`, `txInterleave` | always | chip settings |
+| `uptimeS`, `sent` | always | seconds since boot, jobs put on air since boot |
+| `batMv`, `batPct`, `batMah` | Heltec V3 with a plausible, recent reading | battery |
+| `runMin` / `charging` | with the battery keys | runtime estimate in minutes (omitted while unknown) / `true` while charging |
+| `items` | after a catalog action | `[]` |
+| `keepAwakeHex` | KEEP AWAKE runs | the streamed packet |
+| `txLoopHex`, `txLoopLabel` | TX LOOP runs | its packet and label (label dropped first if the object would exceed 508 bytes) |
+| `starlightLoopHex`, `starlightLoopLabel` | WAND LOOP runs | same |
+
+Example (idle, Heltec):
+
+```
+{"ok":true,"running":true,"proto":2,"fw":"1.2","board":"HELTEC V3","keepAwake":false,"wakeupPreambleMs":520,"commandBurstMs":4000,"starlightBurstMs":500,"txPowerLevel":3,"txInterleave":false,"uptimeS":8123,"sent":42,"batMv":3921,"batPct":68,"batMah":400,"runMin":431}
+```
+
+**Advertising.** Waiting for a phone: flags + service UUID, name `MM_ESP` in the scan response.
+While a packet is on air: manufacturer data only, connectable, 20–30 ms; with no phone linked
+its scan response carries `MM_ESP` + the service UUID, so the app can find the board and relink
+during a keep-awake stream or a loop. Linked and idle: not advertising.

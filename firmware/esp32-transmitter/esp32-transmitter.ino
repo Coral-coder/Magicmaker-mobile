@@ -154,6 +154,12 @@ static void wakeLoop() {
   if (gLoopTask) xTaskNotifyGive(gLoopTask);
 }
 
+// A characteristic value from a C string, without its NUL. (NimBLE's setValue(T) template would
+// store a const char*'s pointer bytes, or a literal's trailing NUL.)
+static void setText(NimBLECharacteristic* c, const char* text) {
+  c->setValue((const uint8_t*)text, strlen(text));
+}
+
 // ---- Advertising manager (loop() only; the only code that drives gAdv) ------------------
 static bool advSame(const AdvState& a, const AdvState& b) {
   if (a.kind != b.kind) return false;
@@ -358,7 +364,7 @@ class StatusCallbacks : public NimBLECharacteristicCallbacks {
 
 class CatalogCallbacks : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* c) override {
-    c->setValue(EMPTY_CATALOG);
+    setText(c, EMPTY_CATALOG);
   }
 };
 
@@ -400,10 +406,10 @@ void setup() {
   cmd->setCallbacks(new CommandCallbacks());
   NimBLECharacteristic* status = svc->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ);
   status->setCallbacks(new StatusCallbacks());
-  status->setValue("{\"ok\":true}");
+  setText(status, "{\"ok\":true}");  // replaced by onRead() on every read
   NimBLECharacteristic* catalog = svc->createCharacteristic(CATALOG_UUID, NIMBLE_PROPERTY::READ);
   catalog->setCallbacks(new CatalogCallbacks());
-  catalog->setValue(EMPTY_CATALOG);
+  setText(catalog, EMPTY_CATALOG);
 
   svc->start();
 
