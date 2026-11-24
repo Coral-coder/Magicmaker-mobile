@@ -1,0 +1,2891 @@
+{
+ "schema": 1,
+ "name": "grouped_hub_two_phones",
+ "description": "The hub is grouped and already holds the iPhone's records. The iPhone links and resumes from its stored watermark. An ungrouped Android links next: the hub hands it the key (JOIN from the peripheral), both pull. Then live pushes: an iPhone rename goes I->H {I,H} and H->A {I,H,A}; an Android rename goes A->H->I; an Android-heard packet takes route 2 (via the hub) to the iPhone. LIVE_PULL re-pulls follow 2 s after each live record.",
+ "latencyMs": 15,
+ "clockBaseMs": 1796000000000,
+ "nodes": {
+  "I": {
+   "deviceId": "A1B2C3D4E5F60718",
+   "kind": 3,
+   "bootId": 4097,
+   "dbId": "9E859EDAA1D4E6A4",
+   "maxMsg": 1024,
+   "caps": 1,
+   "version": "1.4.0",
+   "name": "iPhone",
+   "groupId": "2A2F4A688371E7EF",
+   "groupKey": "B6DDFC8FC47B575D8935C8453BB843EA",
+   "clockKnown": true,
+   "durableHigh": 3,
+   "nextSyncSeq": 4,
+   "ledger": [
+    {
+     "key": "0:8301E100E90600220F5C57B0",
+     "u": 1,
+     "o": null,
+     "c": 405650262,
+     "class": "PRESENCE",
+     "b": "100D008301E100E90600220F5C57B011080100000000000000",
+     "s": 2,
+     "f": null
+    },
+    {
+     "key": "0:8301E100E90C00010F4D575A940705488BB0",
+     "u": 1795913600000,
+     "o": "A1B2C3D4E5F60718",
+     "c": 1632865102,
+     "class": "USER",
+     "b": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+     "s": 1,
+     "f": null
+    },
+    {
+     "key": "1:8301CF0B00C020224EAC7807866F1D",
+     "u": 1795913602000,
+     "o": "A1B2C3D4E5F60718",
+     "c": 1240661119,
+     "class": "NEWWAND",
+     "b": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+     "s": 3,
+     "f": null
+    }
+   ],
+   "peers": {
+    "0100246F28AE52C6": {
+     "dbId": "1269208CA2190C2D",
+     "wm": 3,
+     "excludeOk": true
+    }
+   },
+   "ringCap": null,
+   "epoch": null
+  },
+  "H": {
+   "deviceId": "0100246F28AE52C6",
+   "kind": 1,
+   "bootId": 12291,
+   "dbId": "1269208CA2190C2D",
+   "maxMsg": 512,
+   "caps": 57,
+   "version": "2.0 heltec-v3",
+   "name": "MM_ESP",
+   "groupId": "2A2F4A688371E7EF",
+   "groupKey": "B6DDFC8FC47B575D8935C8453BB843EA",
+   "clockKnown": true,
+   "durableHigh": 3,
+   "nextSyncSeq": 4,
+   "ledger": [
+    {
+     "key": "0:8301E100E90600220F5C57B0",
+     "u": 1,
+     "o": null,
+     "c": 405650262,
+     "class": "PRESENCE",
+     "b": "100D008301E100E90600220F5C57B011080100000000000000",
+     "s": 2,
+     "f": "A1B2C3D4E5F60718"
+    },
+    {
+     "key": "0:8301E100E90C00010F4D575A940705488BB0",
+     "u": 1795913600000,
+     "o": "A1B2C3D4E5F60718",
+     "c": 1632865102,
+     "class": "USER",
+     "b": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+     "s": 1,
+     "f": "A1B2C3D4E5F60718"
+    },
+    {
+     "key": "1:8301CF0B00C020224EAC7807866F1D",
+     "u": 1795913602000,
+     "o": "A1B2C3D4E5F60718",
+     "c": 1240661119,
+     "class": "NEWWAND",
+     "b": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+     "s": 3,
+     "f": "A1B2C3D4E5F60718"
+    }
+   ],
+   "peers": {
+    "A1B2C3D4E5F60718": {
+     "dbId": "9E859EDAA1D4E6A4",
+     "wm": 3,
+     "excludeOk": true
+    }
+   },
+   "ringCap": null,
+   "epoch": null
+  },
+  "A": {
+   "deviceId": "4A1D0B5E77C2903F",
+   "kind": 2,
+   "bootId": 8194,
+   "dbId": "AC34C9F15D8C2AED",
+   "maxMsg": 1024,
+   "caps": 59,
+   "version": "1.4.0",
+   "name": "Pixel 8",
+   "groupId": null,
+   "groupKey": null,
+   "clockKnown": true,
+   "durableHigh": 3,
+   "nextSyncSeq": 4,
+   "ledger": [
+    {
+     "key": "0:8301CC03000100E100E90500090E02B0",
+     "u": 1,
+     "o": null,
+     "c": 131701287,
+     "class": "PRESENCE",
+     "b": "1011008301CC03000100E100E90500090E02B011080100000000000000",
+     "s": 1,
+     "f": null
+    },
+    {
+     "key": "0:8301CC03000100E100E90500090E06B0",
+     "u": 1,
+     "o": null,
+     "c": 81764696,
+     "class": "PRESENCE",
+     "b": "1011008301CC03000100E100E90500090E06B011080100000000000000",
+     "s": 2,
+     "f": null
+    },
+    {
+     "key": "0:8301E100E90E00040FB7A8B6ADA059190248AEB0",
+     "u": 1795913602000,
+     "o": "4A1D0B5E77C2903F",
+     "c": 3916969112,
+     "class": "USER",
+     "b": "1015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103",
+     "s": 3,
+     "f": null
+    }
+   ],
+   "peers": {},
+   "ringCap": 2000,
+   "epoch": 1795996400
+  }
+ },
+ "nonces": [
+  {
+   "link": "I-H",
+   "gen": 1,
+   "node": "H",
+   "nonces": [
+    "280C3AA047009B72"
+   ]
+  },
+  {
+   "link": "I-H",
+   "gen": 1,
+   "node": "I",
+   "nonces": [
+    "06A8433B5E250648"
+   ]
+  },
+  {
+   "link": "A-H",
+   "gen": 1,
+   "node": "H",
+   "nonces": [
+    "1880B08D14C64434",
+    "1F8BDE494E954BA9"
+   ]
+  },
+  {
+   "link": "A-H",
+   "gen": 1,
+   "node": "A",
+   "nonces": [
+    "6C9B029225EF024A",
+    "D5E9C737B56A33DF"
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "i": 0,
+   "t": 0,
+   "ev": "link_up",
+   "link": "I-H",
+   "gen": 1,
+   "central": "I",
+   "peripheral": "H",
+   "mtu": 185
+  },
+  {
+   "i": 1,
+   "t": 0,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 2,
+   "t": 0,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 3,
+   "t": 0,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "010101010208A1B2C3D4E5F6071803010304089E859EDAA1D4E6A405080028F129A201000006040300000007010708020100090200040A0201100B05312E342E300C066950686F6E650D082A2F4A688371E7EF0E0806A8433B5E250648",
+   "fields": {
+    "proto": 1,
+    "deviceId": "A1B2C3D4E5F60718",
+    "kind": 3,
+    "dbId": "9E859EDAA1D4E6A4",
+    "clockMs": 1796000000000,
+    "feedHigh": 3,
+    "subs": 7,
+    "caps": 1,
+    "maxMsg": 1024,
+    "bootId": 4097,
+    "version": "1.4.0",
+    "name": "iPhone",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "06A8433B5E250648"
+   },
+   "frames": [
+    "7000010101010208A1B2C3D4E5F6071803010304089E859EDAA1D4E6A405080028F129A201000006040300000007010708020100090200040A0201100B05312E342E300C066950686F6E650D082A2F4A688371E7EF0E0806A8433B5E250648"
+   ]
+  },
+  {
+   "i": 4,
+   "t": 15,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102080100246F28AE52C603010104081269208CA2190C2D05080F28F129A201000006040300000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E08280C3AA047009B720F10FB54B08400C8B5CC301E80F3088FD0E7",
+   "fields": {
+    "proto": 1,
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "dbId": "1269208CA2190C2D",
+    "clockMs": 1796000000015,
+    "feedHigh": 3,
+    "subs": 7,
+    "caps": 57,
+    "maxMsg": 512,
+    "bootId": 12291,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "280C3AA047009B72",
+    "proof": "FB54B08400C8B5CC301E80F3088FD0E7"
+   },
+   "frames": [
+    "70000101010102080100246F28AE52C603010104081269208CA2190C2D05080F28F129A201000006040300000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E08280C3AA047009B720F10FB54B08400C8B5CC301E80F3088FD0E7"
+   ]
+  },
+  {
+   "i": 5,
+   "t": 15,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "HELLO_X"
+  },
+  {
+   "i": 6,
+   "t": 30,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "HELLO_X"
+  },
+  {
+   "i": 7,
+   "t": 30,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "AUTH",
+   "hex": "0B01106577FACB187311B447FBC0EAC3E28A41",
+   "fields": {
+    "proof": "6577FACB187311B447FBC0EAC3E28A41"
+   },
+   "frames": [
+    "71010B01106577FACB187311B447FBC0EAC3E28A41"
+   ]
+  },
+  {
+   "i": 8,
+   "t": 30,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "AUTHED"
+  },
+  {
+   "i": 9,
+   "t": 30,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010102040300000005081269208CA2190C2D060101",
+   "fields": {
+    "reqId": 1,
+    "since": 3,
+    "dbId": "1269208CA2190C2D",
+    "exclude": 1
+   },
+   "frames": [
+    "72020201010102040300000005081269208CA2190C2D060101"
+   ]
+  },
+  {
+   "i": 10,
+   "t": 30,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "SYNCING"
+  },
+  {
+   "i": 11,
+   "t": 30,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "HB",
+   "hex": "080108A1B2C3D4E5F607180201030302011004040100000005081E28F129A20100000604E80300000701510901000A0222010B05312E342E300C066950686F6E650D0A0100246F28AE52C601020E0280000F010010040300000011089E859EDAA1D4E6A4120403000000",
+   "fields": {
+    "deviceId": "A1B2C3D4E5F60718",
+    "kind": 3,
+    "bootId": 4097,
+    "hbSeq": 1,
+    "ts": 1796000000030,
+    "uptimeS": 1000,
+    "battPct": 81,
+    "charging": 0,
+    "runtimeMin": 290,
+    "version": "1.4.0",
+    "name": "iPhone",
+    "link": [
+     {
+      "peerId": "0100246F28AE52C6",
+      "peerKind": 1,
+      "flags": 2
+     }
+    ],
+    "state": 128,
+    "hops": 0,
+    "feedHigh": 3,
+    "dbId": "9E859EDAA1D4E6A4",
+    "records": 3
+   },
+   "frames": [
+    "7303080108A1B2C3D4E5F607180201030302011004040100000005081E28F129A20100000604E80300000701510901000A0222010B05312E342E300C066950686F6E650D0A0100246F28AE52C601020E0280000F010010040300000011089E859EDAA1D4E6A4120403000000"
+   ]
+  },
+  {
+   "i": 12,
+   "t": 45,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "AUTHED"
+  },
+  {
+   "i": 13,
+   "t": 45,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010102040300000005089E859EDAA1D4E6A4060101",
+   "fields": {
+    "reqId": 1,
+    "since": 3,
+    "dbId": "9E859EDAA1D4E6A4",
+    "exclude": 1
+   },
+   "frames": [
+    "71010201010102040300000005089E859EDAA1D4E6A4060101"
+   ]
+  },
+  {
+   "i": 14,
+   "t": 45,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "SYNCING"
+  },
+  {
+   "i": 15,
+   "t": 45,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801080100246F28AE52C60201010302033004040100000005082D28F129A20100000604E80300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803000F010010040300000011081269208CA2190C2D120403000000",
+   "fields": {
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "bootId": 12291,
+    "hbSeq": 1,
+    "ts": 1796000000045,
+    "uptimeS": 1000,
+    "battPct": 68,
+    "battMv": 3910,
+    "charging": 0,
+    "runtimeMin": 300,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "link": [
+     {
+      "peerId": "A1B2C3D4E5F60718",
+      "peerKind": 3,
+      "flags": 0
+     }
+    ],
+    "hops": 0,
+    "feedHigh": 3,
+    "dbId": "1269208CA2190C2D",
+    "records": 3
+   },
+   "frames": [
+    "72020801080100246F28AE52C60201010302033004040100000005082D28F129A20100000604E80300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803000F010010040300000011081269208CA2190C2D120403000000"
+   ]
+  },
+  {
+   "i": 16,
+   "t": 45,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010101020403000000030100040403000000050100",
+   "fields": {
+    "reqId": 1,
+    "scannedTo": 3,
+    "more": 0,
+    "feedHigh": 3,
+    "count": 0
+   },
+   "frames": [
+    "730304010101020403000000030100040403000000050100"
+   ]
+  },
+  {
+   "i": 17,
+   "t": 60,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010101020403000000030100040403000000050100",
+   "fields": {
+    "reqId": 1,
+    "scannedTo": 3,
+    "more": 0,
+    "feedHigh": 3,
+    "count": 0
+   },
+   "frames": [
+    "740404010101020403000000030100040403000000050100"
+   ]
+  },
+  {
+   "i": 18,
+   "t": 60,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "SYNCED"
+  },
+  {
+   "i": 19,
+   "t": 75,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "SYNCED"
+  },
+  {
+   "i": 20,
+   "t": 1000,
+   "ev": "link_up",
+   "link": "A-H",
+   "gen": 1,
+   "central": "A",
+   "peripheral": "H",
+   "mtu": 247
+  },
+  {
+   "i": 21,
+   "t": 1000,
+   "ev": "state",
+   "node": "H",
+   "link": "A-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 22,
+   "t": 1000,
+   "ev": "state",
+   "node": "A",
+   "link": "A-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 23,
+   "t": 1000,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102084A1D0B5E77C2903F0301020408AC34C9F15D8C2AED0508E82BF129A201000006040300000007010508023B00090200040A0202200B05312E342E300C07506978656C20380D0800000000000000000E086C9B029225EF024A",
+   "fields": {
+    "proto": 1,
+    "deviceId": "4A1D0B5E77C2903F",
+    "kind": 2,
+    "dbId": "AC34C9F15D8C2AED",
+    "clockMs": 1796000001000,
+    "feedHigh": 3,
+    "subs": 5,
+    "caps": 59,
+    "maxMsg": 1024,
+    "bootId": 8194,
+    "version": "1.4.0",
+    "name": "Pixel 8",
+    "groupId": "0000000000000000",
+    "nonce": "6C9B029225EF024A"
+   },
+   "frames": [
+    "70000101010102084A1D0B5E77C2903F0301020408AC34C9F15D8C2AED0508E82BF129A201000006040300000007010508023B00090200040A0202200B05312E342E300C07506978656C20380D0800000000000000000E086C9B029225EF024A"
+   ]
+  },
+  {
+   "i": 24,
+   "t": 1015,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102080100246F28AE52C603010104081269208CA2190C2D0508F72BF129A201000006040300000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E081880B08D14C64434",
+   "fields": {
+    "proto": 1,
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "dbId": "1269208CA2190C2D",
+    "clockMs": 1796000001015,
+    "feedHigh": 3,
+    "subs": 7,
+    "caps": 57,
+    "maxMsg": 512,
+    "bootId": 12291,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "1880B08D14C64434"
+   },
+   "frames": [
+    "70000101010102080100246F28AE52C603010104081269208CA2190C2D0508F72BF129A201000006040300000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E081880B08D14C64434"
+   ]
+  },
+  {
+   "i": 25,
+   "t": 1015,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "session",
+   "type": "JOIN",
+   "hex": "0C01082A2F4A688371E7EF0210B6DDFC8FC47B575D8935C8453BB843EA",
+   "fields": {
+    "groupId": "2A2F4A688371E7EF",
+    "groupKey": "B6DDFC8FC47B575D8935C8453BB843EA"
+   },
+   "frames": [
+    "71010C01082A2F4A688371E7EF0210B6DDFC8FC47B575D8935C8453BB843EA"
+   ]
+  },
+  {
+   "i": 26,
+   "t": 1030,
+   "ev": "state",
+   "node": "A",
+   "link": "A-H",
+   "state": "HELLO_X"
+  },
+  {
+   "i": 27,
+   "t": 1030,
+   "ev": "group",
+   "node": "A",
+   "link": "A-H",
+   "groupId": "2A2F4A688371E7EF",
+   "rekey": false
+  },
+  {
+   "i": 28,
+   "t": 1030,
+   "ev": "state",
+   "node": "A",
+   "link": "A-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 29,
+   "t": 1030,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102084A1D0B5E77C2903F0301020408AC34C9F15D8C2AED0508062CF129A201000006040300000007010508023B00090200040A0202200B05312E342E300C07506978656C20380D082A2F4A688371E7EF0E08D5E9C737B56A33DF",
+   "fields": {
+    "proto": 1,
+    "deviceId": "4A1D0B5E77C2903F",
+    "kind": 2,
+    "dbId": "AC34C9F15D8C2AED",
+    "clockMs": 1796000001030,
+    "feedHigh": 3,
+    "subs": 5,
+    "caps": 59,
+    "maxMsg": 1024,
+    "bootId": 8194,
+    "version": "1.4.0",
+    "name": "Pixel 8",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "D5E9C737B56A33DF"
+   },
+   "frames": [
+    "71010101010102084A1D0B5E77C2903F0301020408AC34C9F15D8C2AED0508062CF129A201000006040300000007010508023B00090200040A0202200B05312E342E300C07506978656C20380D082A2F4A688371E7EF0E08D5E9C737B56A33DF"
+   ]
+  },
+  {
+   "i": 30,
+   "t": 1045,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102080100246F28AE52C603010104081269208CA2190C2D0508152CF129A201000006040300000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E081F8BDE494E954BA90F102A7BBF756DBAB42CFCB1B63E70D07229",
+   "fields": {
+    "proto": 1,
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "dbId": "1269208CA2190C2D",
+    "clockMs": 1796000001045,
+    "feedHigh": 3,
+    "subs": 7,
+    "caps": 57,
+    "maxMsg": 512,
+    "bootId": 12291,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "1F8BDE494E954BA9",
+    "proof": "2A7BBF756DBAB42CFCB1B63E70D07229"
+   },
+   "frames": [
+    "72020101010102080100246F28AE52C603010104081269208CA2190C2D0508152CF129A201000006040300000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E081F8BDE494E954BA90F102A7BBF756DBAB42CFCB1B63E70D07229"
+   ]
+  },
+  {
+   "i": 31,
+   "t": 1045,
+   "ev": "state",
+   "node": "H",
+   "link": "A-H",
+   "state": "HELLO_X"
+  },
+  {
+   "i": 32,
+   "t": 1060,
+   "ev": "state",
+   "node": "A",
+   "link": "A-H",
+   "state": "HELLO_X"
+  },
+  {
+   "i": 33,
+   "t": 1060,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "session",
+   "type": "AUTH",
+   "hex": "0B011011453759369EB3CB572DC7C3E732C74B",
+   "fields": {
+    "proof": "11453759369EB3CB572DC7C3E732C74B"
+   },
+   "frames": [
+    "72020B011011453759369EB3CB572DC7C3E732C74B"
+   ]
+  },
+  {
+   "i": 34,
+   "t": 1060,
+   "ev": "state",
+   "node": "A",
+   "link": "A-H",
+   "state": "AUTHED"
+  },
+  {
+   "i": 35,
+   "t": 1060,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010102040000000005081269208CA2190C2D060101",
+   "fields": {
+    "reqId": 1,
+    "since": 0,
+    "dbId": "1269208CA2190C2D",
+    "exclude": 1
+   },
+   "frames": [
+    "73030201010102040000000005081269208CA2190C2D060101"
+   ]
+  },
+  {
+   "i": 36,
+   "t": 1060,
+   "ev": "state",
+   "node": "A",
+   "link": "A-H",
+   "state": "SYNCING"
+  },
+  {
+   "i": 37,
+   "t": 1060,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801084A1D0B5E77C2903F020102030202200404010000000508242CF129A20100000604E90300000701360802480F0901000A02B4000B05312E342E300C07506978656C20380D0A0100246F28AE52C601020E0201000F01001004030000001108AC34C9F15D8C2AED12040300000013020C00",
+   "fields": {
+    "deviceId": "4A1D0B5E77C2903F",
+    "kind": 2,
+    "bootId": 8194,
+    "hbSeq": 1,
+    "ts": 1796000001060,
+    "uptimeS": 1001,
+    "battPct": 54,
+    "battMv": 3912,
+    "charging": 0,
+    "runtimeMin": 180,
+    "version": "1.4.0",
+    "name": "Pixel 8",
+    "link": [
+     {
+      "peerId": "0100246F28AE52C6",
+      "peerKind": 1,
+      "flags": 2
+     }
+    ],
+    "state": 1,
+    "hops": 0,
+    "feedHigh": 3,
+    "dbId": "AC34C9F15D8C2AED",
+    "records": 3,
+    "hubAirAgoS": 12
+   },
+   "frames": [
+    "74040801084A1D0B5E77C2903F020102030202200404010000000508242CF129A20100000604E90300000701360802480F0901000A02B4000B05312E342E300C07506978656C20380D0A0100246F28AE52C601020E0201000F01001004030000001108AC34C9F15D8C2AED12040300000013020C00"
+   ]
+  },
+  {
+   "i": 38,
+   "t": 1075,
+   "ev": "state",
+   "node": "H",
+   "link": "A-H",
+   "state": "AUTHED"
+  },
+  {
+   "i": 39,
+   "t": 1075,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "session",
+   "type": "PULL",
+   "hex": "020101010204000000000508AC34C9F15D8C2AED060101",
+   "fields": {
+    "reqId": 1,
+    "since": 0,
+    "dbId": "AC34C9F15D8C2AED",
+    "exclude": 1
+   },
+   "frames": [
+    "7303020101010204000000000508AC34C9F15D8C2AED060101"
+   ]
+  },
+  {
+   "i": 40,
+   "t": 1075,
+   "ev": "state",
+   "node": "H",
+   "link": "A-H",
+   "state": "SYNCING"
+  },
+  {
+   "i": 41,
+   "t": 1075,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801080100246F28AE52C6020101030203300404020000000508332CF129A20100000604E90300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803010D0A4A1D0B5E77C2903F02020F010010040300000011081269208CA2190C2D120403000000",
+   "fields": {
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "bootId": 12291,
+    "hbSeq": 2,
+    "ts": 1796000001075,
+    "uptimeS": 1001,
+    "battPct": 68,
+    "battMv": 3910,
+    "charging": 0,
+    "runtimeMin": 300,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "link": [
+     {
+      "peerId": "A1B2C3D4E5F60718",
+      "peerKind": 3,
+      "flags": 1
+     },
+     {
+      "peerId": "4A1D0B5E77C2903F",
+      "peerKind": 2,
+      "flags": 2
+     }
+    ],
+    "hops": 0,
+    "feedHigh": 3,
+    "dbId": "1269208CA2190C2D",
+    "records": 3
+   },
+   "frames": [
+    "74040801080100246F28AE52C6020101030203300404020000000508332CF129A20100000604E90300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803010D0A4A1D0B5E77C2903F02020F010010040300000011081269208CA2190C2D120403000000"
+   ]
+  },
+  {
+   "i": 42,
+   "t": 1075,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104010000000201011013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+   "fields": {
+    "seq": 1,
+    "reqId": 1,
+    "bodyHex": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90C00010F4D575A940705488BB0"
+     },
+     "updatedAt": 1795913600000,
+     "origin": "A1B2C3D4E5F60718",
+     "flags": 2,
+     "label": "Main Street Glow",
+     "category": 1,
+     "kind": "show",
+     "place": 3
+    }
+   },
+   "frames": [
+    "7505030104010000000201011013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103"
+   ]
+  },
+  {
+   "i": 43,
+   "t": 1075,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "REC",
+   "hex": "03010402000000020101100D008301E100E90600220F5C57B011080100000000000000",
+   "fields": {
+    "seq": 2,
+    "reqId": 1,
+    "bodyHex": "100D008301E100E90600220F5C57B011080100000000000000",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90600220F5C57B0"
+     },
+     "updatedAt": 1
+    }
+   },
+   "frames": [
+    "760603010402000000020101100D008301E100E90600220F5C57B011080100000000000000"
+   ]
+  },
+  {
+   "i": 44,
+   "t": 1075,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104030000000201011010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+   "fields": {
+    "seq": 3,
+    "reqId": 1,
+    "bodyHex": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+    "body": {
+     "key": {
+      "ns": 1,
+      "packet": "8301CF0B00C020224EAC7807866F1D"
+     },
+     "updatedAt": 1795913602000,
+     "origin": "A1B2C3D4E5F60718",
+     "label": "Lights out"
+    }
+   },
+   "frames": [
+    "7707030104030000000201011010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574"
+   ]
+  },
+  {
+   "i": 45,
+   "t": 1075,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010101020403000000030100040403000000050103",
+   "fields": {
+    "reqId": 1,
+    "scannedTo": 3,
+    "more": 0,
+    "feedHigh": 3,
+    "count": 3
+   },
+   "frames": [
+    "780804010101020403000000030100040403000000050103"
+   ]
+  },
+  {
+   "i": 46,
+   "t": 1075,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801084A1D0B5E77C2903F020102030202200404010000000508242CF129A20100000604E90300000701360802480F0901000A02B4000B05312E342E300C07506978656C20380D0A0100246F28AE52C601020E0201000F01011004030000001108AC34C9F15D8C2AED12040300000013020C00",
+   "fields": {
+    "deviceId": "4A1D0B5E77C2903F",
+    "kind": 2,
+    "bootId": 8194,
+    "hbSeq": 1,
+    "ts": 1796000001060,
+    "uptimeS": 1001,
+    "battPct": 54,
+    "battMv": 3912,
+    "charging": 0,
+    "runtimeMin": 180,
+    "version": "1.4.0",
+    "name": "Pixel 8",
+    "link": [
+     {
+      "peerId": "0100246F28AE52C6",
+      "peerKind": 1,
+      "flags": 2
+     }
+    ],
+    "state": 1,
+    "hops": 1,
+    "feedHigh": 3,
+    "dbId": "AC34C9F15D8C2AED",
+    "records": 3,
+    "hubAirAgoS": 12
+   },
+   "frames": [
+    "74040801084A1D0B5E77C2903F020102030202200404010000000508242CF129A20100000604E90300000701360802480F0901000A02B4000B05312E342E300C07506978656C20380D0A0100246F28AE52C601020E0201000F01011004030000001108AC34C9F15D8C2AED12040300000013020C00"
+   ]
+  },
+  {
+   "i": 47,
+   "t": 1090,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104010000000201011011008301CC03000100E100E90500090E02B011080100000000000000",
+   "fields": {
+    "seq": 1,
+    "reqId": 1,
+    "bodyHex": "1011008301CC03000100E100E90500090E02B011080100000000000000",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301CC03000100E100E90500090E02B0"
+     },
+     "updatedAt": 1
+    }
+   },
+   "frames": [
+    "7505030104010000000201011011008301CC03000100E100E90500090E02B011080100000000000000"
+   ]
+  },
+  {
+   "i": 48,
+   "t": 1090,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104020000000201011011008301CC03000100E100E90500090E06B011080100000000000000",
+   "fields": {
+    "seq": 2,
+    "reqId": 1,
+    "bodyHex": "1011008301CC03000100E100E90500090E06B011080100000000000000",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301CC03000100E100E90500090E06B0"
+     },
+     "updatedAt": 1
+    }
+   },
+   "frames": [
+    "7606030104020000000201011011008301CC03000100E100E90500090E06B011080100000000000000"
+   ]
+  },
+  {
+   "i": 49,
+   "t": 1090,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104030000000201011015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103",
+   "fields": {
+    "seq": 3,
+    "reqId": 1,
+    "bodyHex": "1015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90E00040FB7A8B6ADA059190248AEB0"
+     },
+     "updatedAt": 1795913602000,
+     "origin": "4A1D0B5E77C2903F",
+     "flags": 2,
+     "label": "Kiss Goodnight",
+     "category": 1,
+     "kind": "show",
+     "place": 3
+    }
+   },
+   "frames": [
+    "7707030104030000000201011015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103"
+   ]
+  },
+  {
+   "i": 50,
+   "t": 1090,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010101020403000000030100040403000000050103",
+   "fields": {
+    "reqId": 1,
+    "scannedTo": 3,
+    "more": 0,
+    "feedHigh": 3,
+    "count": 3
+   },
+   "frames": [
+    "780804010101020403000000030100040403000000050103"
+   ]
+  },
+  {
+   "i": 51,
+   "t": 1090,
+   "ev": "apply",
+   "node": "A",
+   "link": "A-H",
+   "key": "0:8301E100E90C00010F4D575A940705488BB0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 52,
+   "t": 1090,
+   "ev": "apply",
+   "node": "A",
+   "link": "A-H",
+   "key": "0:8301E100E90600220F5C57B0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 53,
+   "t": 1090,
+   "ev": "apply",
+   "node": "A",
+   "link": "A-H",
+   "key": "1:8301CF0B00C020224EAC7807866F1D",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 54,
+   "t": 1090,
+   "ev": "durable",
+   "node": "A",
+   "durableHigh": 6
+  },
+  {
+   "i": 55,
+   "t": 1090,
+   "ev": "state",
+   "node": "A",
+   "link": "A-H",
+   "state": "SYNCED"
+  },
+  {
+   "i": 56,
+   "t": 1105,
+   "ev": "apply",
+   "node": "H",
+   "link": "A-H",
+   "key": "0:8301CC03000100E100E90500090E02B0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 57,
+   "t": 1105,
+   "ev": "apply",
+   "node": "H",
+   "link": "A-H",
+   "key": "0:8301CC03000100E100E90500090E06B0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 58,
+   "t": 1105,
+   "ev": "apply",
+   "node": "H",
+   "link": "A-H",
+   "key": "0:8301E100E90E00040FB7A8B6ADA059190248AEB0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 59,
+   "t": 1105,
+   "ev": "state",
+   "node": "H",
+   "link": "A-H",
+   "state": "SYNCED"
+  },
+  {
+   "i": 60,
+   "t": 3105,
+   "ev": "durable",
+   "node": "H",
+   "durableHigh": 6
+  },
+  {
+   "i": 61,
+   "t": 6060,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801084A1D0B5E77C2903F020102030202200404020000000508AC3FF129A20100000604EE0300000701360802480F0901000A02B4000B05312E342E300C07506978656C20380D0A0100246F28AE52C601030E0201000F01001004060000001108AC34C9F15D8C2AED12040600000013020C00",
+   "fields": {
+    "deviceId": "4A1D0B5E77C2903F",
+    "kind": 2,
+    "bootId": 8194,
+    "hbSeq": 2,
+    "ts": 1796000006060,
+    "uptimeS": 1006,
+    "battPct": 54,
+    "battMv": 3912,
+    "charging": 0,
+    "runtimeMin": 180,
+    "version": "1.4.0",
+    "name": "Pixel 8",
+    "link": [
+     {
+      "peerId": "0100246F28AE52C6",
+      "peerKind": 1,
+      "flags": 3
+     }
+    ],
+    "state": 1,
+    "hops": 0,
+    "feedHigh": 6,
+    "dbId": "AC34C9F15D8C2AED",
+    "records": 6,
+    "hubAirAgoS": 12
+   },
+   "frames": [
+    "79090801084A1D0B5E77C2903F020102030202200404020000000508AC3FF129A20100000604EE0300000701360802480F0901000A02B4000B05312E342E300C07506978656C20380D0A0100246F28AE52C601030E0201000F01001004060000001108AC34C9F15D8C2AED12040600000013020C00"
+   ]
+  },
+  {
+   "i": 62,
+   "t": 6075,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801080100246F28AE52C6020101030203300404030000000508BB3FF129A20100000604EE0300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803010D0A4A1D0B5E77C2903F02030F010010040600000011081269208CA2190C2D120406000000",
+   "fields": {
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "bootId": 12291,
+    "hbSeq": 3,
+    "ts": 1796000006075,
+    "uptimeS": 1006,
+    "battPct": 68,
+    "battMv": 3910,
+    "charging": 0,
+    "runtimeMin": 300,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "link": [
+     {
+      "peerId": "A1B2C3D4E5F60718",
+      "peerKind": 3,
+      "flags": 1
+     },
+     {
+      "peerId": "4A1D0B5E77C2903F",
+      "peerKind": 2,
+      "flags": 3
+     }
+    ],
+    "hops": 0,
+    "feedHigh": 6,
+    "dbId": "1269208CA2190C2D",
+    "records": 6
+   },
+   "frames": [
+    "75050801080100246F28AE52C6020101030203300404030000000508BB3FF129A20100000604EE0300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803010D0A4A1D0B5E77C2903F02030F010010040600000011081269208CA2190C2D120406000000"
+   ]
+  },
+  {
+   "i": 63,
+   "t": 6075,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801080100246F28AE52C6020101030203300404030000000508BB3FF129A20100000604EE0300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803010D0A4A1D0B5E77C2903F02030F010010040600000011081269208CA2190C2D120406000000",
+   "fields": {
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "bootId": 12291,
+    "hbSeq": 3,
+    "ts": 1796000006075,
+    "uptimeS": 1006,
+    "battPct": 68,
+    "battMv": 3910,
+    "charging": 0,
+    "runtimeMin": 300,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "link": [
+     {
+      "peerId": "A1B2C3D4E5F60718",
+      "peerKind": 3,
+      "flags": 1
+     },
+     {
+      "peerId": "4A1D0B5E77C2903F",
+      "peerKind": 2,
+      "flags": 3
+     }
+    ],
+    "hops": 0,
+    "feedHigh": 6,
+    "dbId": "1269208CA2190C2D",
+    "records": 6
+   },
+   "frames": [
+    "79090801080100246F28AE52C6020101030203300404030000000508BB3FF129A20100000604EE0300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803010D0A4A1D0B5E77C2903F02030F010010040600000011081269208CA2190C2D120406000000"
+   ]
+  },
+  {
+   "i": 64,
+   "t": 6075,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801084A1D0B5E77C2903F020102030202200404020000000508AC3FF129A20100000604EE0300000701360802480F0901000A02B4000B05312E342E300C07506978656C20380D0A0100246F28AE52C601030E0201000F01011004060000001108AC34C9F15D8C2AED12040600000013020C00",
+   "fields": {
+    "deviceId": "4A1D0B5E77C2903F",
+    "kind": 2,
+    "bootId": 8194,
+    "hbSeq": 2,
+    "ts": 1796000006060,
+    "uptimeS": 1006,
+    "battPct": 54,
+    "battMv": 3912,
+    "charging": 0,
+    "runtimeMin": 180,
+    "version": "1.4.0",
+    "name": "Pixel 8",
+    "link": [
+     {
+      "peerId": "0100246F28AE52C6",
+      "peerKind": 1,
+      "flags": 3
+     }
+    ],
+    "state": 1,
+    "hops": 1,
+    "feedHigh": 6,
+    "dbId": "AC34C9F15D8C2AED",
+    "records": 6,
+    "hubAirAgoS": 12
+   },
+   "frames": [
+    "76060801084A1D0B5E77C2903F020102030202200404020000000508AC3FF129A20100000604EE0300000701360802480F0901000A02B4000B05312E342E300C07506978656C20380D0A0100246F28AE52C601030E0201000F01011004060000001108AC34C9F15D8C2AED12040600000013020C00"
+   ]
+  },
+  {
+   "i": 65,
+   "t": 6075,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "session",
+   "type": "PULL",
+   "hex": "020101020204030000000508AC34C9F15D8C2AED060101",
+   "fields": {
+    "reqId": 2,
+    "since": 3,
+    "dbId": "AC34C9F15D8C2AED",
+    "exclude": 1
+   },
+   "frames": [
+    "7A0A020101020204030000000508AC34C9F15D8C2AED060101"
+   ]
+  },
+  {
+   "i": 66,
+   "t": 6090,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010202040300000005081269208CA2190C2D060101",
+   "fields": {
+    "reqId": 2,
+    "since": 3,
+    "dbId": "1269208CA2190C2D",
+    "exclude": 1
+   },
+   "frames": [
+    "75050201010202040300000005081269208CA2190C2D060101"
+   ]
+  },
+  {
+   "i": 67,
+   "t": 6090,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010202040300000005081269208CA2190C2D060101",
+   "fields": {
+    "reqId": 2,
+    "since": 3,
+    "dbId": "1269208CA2190C2D",
+    "exclude": 1
+   },
+   "frames": [
+    "7A0A0201010202040300000005081269208CA2190C2D060101"
+   ]
+  },
+  {
+   "i": 68,
+   "t": 6090,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010102020406000000030100040406000000050100",
+   "fields": {
+    "reqId": 2,
+    "scannedTo": 6,
+    "more": 0,
+    "feedHigh": 6,
+    "count": 0
+   },
+   "frames": [
+    "7B0B04010102020406000000030100040406000000050100"
+   ]
+  },
+  {
+   "i": 69,
+   "t": 6105,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104040000000201021011008301CC03000100E100E90500090E02B011080100000000000000",
+   "fields": {
+    "seq": 4,
+    "reqId": 2,
+    "bodyHex": "1011008301CC03000100E100E90500090E02B011080100000000000000",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301CC03000100E100E90500090E02B0"
+     },
+     "updatedAt": 1
+    }
+   },
+   "frames": [
+    "7707030104040000000201021011008301CC03000100E100E90500090E02B011080100000000000000"
+   ]
+  },
+  {
+   "i": 70,
+   "t": 6105,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104050000000201021011008301CC03000100E100E90500090E06B011080100000000000000",
+   "fields": {
+    "seq": 5,
+    "reqId": 2,
+    "bodyHex": "1011008301CC03000100E100E90500090E06B011080100000000000000",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301CC03000100E100E90500090E06B0"
+     },
+     "updatedAt": 1
+    }
+   },
+   "frames": [
+    "7808030104050000000201021011008301CC03000100E100E90500090E06B011080100000000000000"
+   ]
+  },
+  {
+   "i": 71,
+   "t": 6105,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104060000000201021015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103",
+   "fields": {
+    "seq": 6,
+    "reqId": 2,
+    "bodyHex": "1015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90E00040FB7A8B6ADA059190248AEB0"
+     },
+     "updatedAt": 1795913602000,
+     "origin": "4A1D0B5E77C2903F",
+     "flags": 2,
+     "label": "Kiss Goodnight",
+     "category": 1,
+     "kind": "show",
+     "place": 3
+    }
+   },
+   "frames": [
+    "7909030104060000000201021015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103"
+   ]
+  },
+  {
+   "i": 72,
+   "t": 6105,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010102020406000000030100040406000000050103",
+   "fields": {
+    "reqId": 2,
+    "scannedTo": 6,
+    "more": 0,
+    "feedHigh": 6,
+    "count": 3
+   },
+   "frames": [
+    "7A0A04010102020406000000030100040406000000050103"
+   ]
+  },
+  {
+   "i": 73,
+   "t": 6105,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010102020406000000030100040406000000050100",
+   "fields": {
+    "reqId": 2,
+    "scannedTo": 6,
+    "more": 0,
+    "feedHigh": 6,
+    "count": 0
+   },
+   "frames": [
+    "7B0B04010102020406000000030100040406000000050100"
+   ]
+  },
+  {
+   "i": 74,
+   "t": 6120,
+   "ev": "apply",
+   "node": "I",
+   "link": "I-H",
+   "key": "0:8301CC03000100E100E90500090E02B0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 75,
+   "t": 6120,
+   "ev": "apply",
+   "node": "I",
+   "link": "I-H",
+   "key": "0:8301CC03000100E100E90500090E06B0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 76,
+   "t": 6120,
+   "ev": "apply",
+   "node": "I",
+   "link": "I-H",
+   "key": "0:8301E100E90E00040FB7A8B6ADA059190248AEB0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 77,
+   "t": 6120,
+   "ev": "durable",
+   "node": "I",
+   "durableHigh": 6
+  },
+  {
+   "i": 78,
+   "t": 6120,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "HB",
+   "hex": "080108A1B2C3D4E5F60718020103030201100404020000000508E83FF129A20100000604EE0300000701510901000A0222010B05312E342E300C066950686F6E650D0A0100246F28AE52C601030E0280000F010010040600000011089E859EDAA1D4E6A4120406000000",
+   "fields": {
+    "deviceId": "A1B2C3D4E5F60718",
+    "kind": 3,
+    "bootId": 4097,
+    "hbSeq": 2,
+    "ts": 1796000006120,
+    "uptimeS": 1006,
+    "battPct": 81,
+    "charging": 0,
+    "runtimeMin": 290,
+    "version": "1.4.0",
+    "name": "iPhone",
+    "link": [
+     {
+      "peerId": "0100246F28AE52C6",
+      "peerKind": 1,
+      "flags": 3
+     }
+    ],
+    "state": 128,
+    "hops": 0,
+    "feedHigh": 6,
+    "dbId": "9E859EDAA1D4E6A4",
+    "records": 6
+   },
+   "frames": [
+    "7606080108A1B2C3D4E5F60718020103030201100404020000000508E83FF129A20100000604EE0300000701510901000A0222010B05312E342E300C066950686F6E650D0A0100246F28AE52C601030E0280000F010010040600000011089E859EDAA1D4E6A4120406000000"
+   ]
+  },
+  {
+   "i": 79,
+   "t": 6135,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "HB",
+   "hex": "080108A1B2C3D4E5F60718020103030201100404020000000508E83FF129A20100000604EE0300000701510901000A0222010B05312E342E300C066950686F6E650D0A0100246F28AE52C601030E0280000F010110040600000011089E859EDAA1D4E6A4120406000000",
+   "fields": {
+    "deviceId": "A1B2C3D4E5F60718",
+    "kind": 3,
+    "bootId": 4097,
+    "hbSeq": 2,
+    "ts": 1796000006120,
+    "uptimeS": 1006,
+    "battPct": 81,
+    "charging": 0,
+    "runtimeMin": 290,
+    "version": "1.4.0",
+    "name": "iPhone",
+    "link": [
+     {
+      "peerId": "0100246F28AE52C6",
+      "peerKind": 1,
+      "flags": 3
+     }
+    ],
+    "state": 128,
+    "hops": 1,
+    "feedHigh": 6,
+    "dbId": "9E859EDAA1D4E6A4",
+    "records": 6
+   },
+   "frames": [
+    "7C0C080108A1B2C3D4E5F60718020103030201100404020000000508E83FF129A20100000604EE0300000701510901000A0222010B05312E342E300C066950686F6E650D0A0100246F28AE52C601030E0280000F010110040600000011089E859EDAA1D4E6A4120406000000"
+   ]
+  },
+  {
+   "i": 80,
+   "t": 6135,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010202040300000005089E859EDAA1D4E6A4060101",
+   "fields": {
+    "reqId": 2,
+    "since": 3,
+    "dbId": "9E859EDAA1D4E6A4",
+    "exclude": 1
+   },
+   "frames": [
+    "7B0B0201010202040300000005089E859EDAA1D4E6A4060101"
+   ]
+  },
+  {
+   "i": 81,
+   "t": 6150,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010102020406000000030100040406000000050100",
+   "fields": {
+    "reqId": 2,
+    "scannedTo": 6,
+    "more": 0,
+    "feedHigh": 6,
+    "count": 0
+   },
+   "frames": [
+    "770704010102020406000000030100040406000000050100"
+   ]
+  },
+  {
+   "i": 82,
+   "t": 9000,
+   "ev": "local",
+   "node": "I",
+   "op": "edit",
+   "cls": "USER",
+   "key": "0:8301E100E90600220F5C57B0",
+   "bodyHex": "100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+   "seq": 7
+  },
+  {
+   "i": 83,
+   "t": 9000,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104070000000201000308A1B2C3D4E5F6071803080100246F28AE52C6100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+   "fields": {
+    "seq": 7,
+    "reqId": 0,
+    "seenBy": [
+     "A1B2C3D4E5F60718",
+     "0100246F28AE52C6"
+    ],
+    "bodyHex": "100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90600220F5C57B0"
+     },
+     "updatedAt": 1796000009000,
+     "origin": "A1B2C3D4E5F60718",
+     "flags": 2,
+     "label": "Sparkle Trail",
+     "category": 2,
+     "kind": "animation",
+     "place": 3
+    }
+   },
+   "frames": [
+    "7808030104070000000201000308A1B2C3D4E5F6071803080100246F28AE52C6100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103"
+   ]
+  },
+  {
+   "i": 84,
+   "t": 9015,
+   "ev": "apply",
+   "node": "H",
+   "link": "I-H",
+   "key": "0:8301E100E90600220F5C57B0",
+   "status": "ACCEPT",
+   "live": true
+  },
+  {
+   "i": 85,
+   "t": 9015,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104070000000201000308A1B2C3D4E5F6071803080100246F28AE52C603084A1D0B5E77C2903F100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+   "fields": {
+    "seq": 7,
+    "reqId": 0,
+    "seenBy": [
+     "A1B2C3D4E5F60718",
+     "0100246F28AE52C6",
+     "4A1D0B5E77C2903F"
+    ],
+    "bodyHex": "100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90600220F5C57B0"
+     },
+     "updatedAt": 1796000009000,
+     "origin": "A1B2C3D4E5F60718",
+     "flags": 2,
+     "label": "Sparkle Trail",
+     "category": 2,
+     "kind": "animation",
+     "place": 3
+    }
+   },
+   "frames": [
+    "7D0D030104070000000201000308A1B2C3D4E5F6071803080100246F28AE52C603084A1D0B5E77C2903F100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103"
+   ]
+  },
+  {
+   "i": 86,
+   "t": 9030,
+   "ev": "apply",
+   "node": "A",
+   "link": "A-H",
+   "key": "0:8301E100E90600220F5C57B0",
+   "status": "ACCEPT",
+   "live": true
+  },
+  {
+   "i": 87,
+   "t": 9300,
+   "ev": "durable",
+   "node": "I",
+   "durableHigh": 7
+  },
+  {
+   "i": 88,
+   "t": 9330,
+   "ev": "durable",
+   "node": "A",
+   "durableHigh": 7
+  },
+  {
+   "i": 89,
+   "t": 10000,
+   "ev": "local",
+   "node": "A",
+   "op": "edit",
+   "cls": "USER",
+   "key": "0:8301CC03000100E100E90500090E02B0",
+   "bodyHex": "1011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+   "seq": 8
+  },
+  {
+   "i": 90,
+   "t": 10000,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "0301040800000002010003084A1D0B5E77C2903F03080100246F28AE52C61011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+   "fields": {
+    "seq": 8,
+    "reqId": 0,
+    "seenBy": [
+     "4A1D0B5E77C2903F",
+     "0100246F28AE52C6"
+    ],
+    "bodyHex": "1011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301CC03000100E100E90500090E02B0"
+     },
+     "updatedAt": 1796000010000,
+     "origin": "4A1D0B5E77C2903F",
+     "flags": 2,
+     "label": "Blue",
+     "category": 3,
+     "kind": "color",
+     "place": 2
+    }
+   },
+   "frames": [
+    "7C0C0301040800000002010003084A1D0B5E77C2903F03080100246F28AE52C61011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102"
+   ]
+  },
+  {
+   "i": 91,
+   "t": 10015,
+   "ev": "apply",
+   "node": "H",
+   "link": "A-H",
+   "key": "0:8301CC03000100E100E90500090E02B0",
+   "status": "ACCEPT",
+   "live": true
+  },
+  {
+   "i": 92,
+   "t": 10015,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "REC",
+   "hex": "0301040800000002010003084A1D0B5E77C2903F03080100246F28AE52C60308A1B2C3D4E5F607181011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+   "fields": {
+    "seq": 8,
+    "reqId": 0,
+    "seenBy": [
+     "4A1D0B5E77C2903F",
+     "0100246F28AE52C6",
+     "A1B2C3D4E5F60718"
+    ],
+    "bodyHex": "1011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301CC03000100E100E90500090E02B0"
+     },
+     "updatedAt": 1796000010000,
+     "origin": "4A1D0B5E77C2903F",
+     "flags": 2,
+     "label": "Blue",
+     "category": 3,
+     "kind": "color",
+     "place": 2
+    }
+   },
+   "frames": [
+    "7C0C0301040800000002010003084A1D0B5E77C2903F03080100246F28AE52C60308A1B2C3D4E5F607181011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102"
+   ]
+  },
+  {
+   "i": 93,
+   "t": 10030,
+   "ev": "apply",
+   "node": "I",
+   "link": "I-H",
+   "key": "0:8301CC03000100E100E90500090E02B0",
+   "status": "ACCEPT",
+   "live": true
+  },
+  {
+   "i": 94,
+   "t": 10300,
+   "ev": "durable",
+   "node": "A",
+   "durableHigh": 8
+  },
+  {
+   "i": 95,
+   "t": 10330,
+   "ev": "durable",
+   "node": "I",
+   "durableHigh": 8
+  },
+  {
+   "i": 96,
+   "t": 11000,
+   "ev": "local",
+   "node": "A",
+   "op": "heard",
+   "epoch": 1795996400,
+   "seq": 1,
+   "packet": "8301E100E90E00730FBBBBB8BBB859190248AEB0",
+   "route": 2
+  },
+  {
+   "i": 97,
+   "t": 11000,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "EVT",
+   "hex": "0501084A1D0B5E77C2903F0204F0BA0C6B0304010000000408F852F129A201000005148301E100E90E00730FBBBBB8BBB859190248AEB00601C60804E13CEB100904285662CF0A0208000B06D0C1B2A394000D084A1D0B5E77C2903F0D080100246F28AE52C6",
+   "fields": {
+    "origin": "4A1D0B5E77C2903F",
+    "epoch": 1795996400,
+    "seq": 1,
+    "ts": 1796000011000,
+    "packet": "8301E100E90E00730FBBBBB8BBB859190248AEB0",
+    "rssi": -58,
+    "lat": 283852001,
+    "lon": -815639000,
+    "acc": 8,
+    "addr": "D0C1B2A39400",
+    "seenBy": [
+     "4A1D0B5E77C2903F",
+     "0100246F28AE52C6"
+    ]
+   },
+   "frames": [
+    "7D0D0501084A1D0B5E77C2903F0204F0BA0C6B0304010000000408F852F129A201000005148301E100E90E00730FBBBBB8BBB859190248AEB00601C60804E13CEB100904285662CF0A0208000B06D0C1B2A394000D084A1D0B5E77C2903F0D080100246F28AE52C6"
+   ]
+  },
+  {
+   "i": 98,
+   "t": 11015,
+   "ev": "durable",
+   "node": "H",
+   "durableHigh": 8
+  },
+  {
+   "i": 99,
+   "t": 11015,
+   "ev": "timer",
+   "node": "H",
+   "link": "I-H",
+   "name": "LIVE_PULL"
+  },
+  {
+   "i": 100,
+   "t": 11015,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010302040600000005089E859EDAA1D4E6A4060101",
+   "fields": {
+    "reqId": 3,
+    "since": 6,
+    "dbId": "9E859EDAA1D4E6A4",
+    "exclude": 1
+   },
+   "frames": [
+    "7D0D0201010302040600000005089E859EDAA1D4E6A4060101"
+   ]
+  },
+  {
+   "i": 101,
+   "t": 11015,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "EVT",
+   "hex": "0501084A1D0B5E77C2903F0204F0BA0C6B0304010000000408F852F129A201000005148301E100E90E00730FBBBBB8BBB859190248AEB00601C60804E13CEB100904285662CF0A0208000B06D0C1B2A394000D084A1D0B5E77C2903F0D080100246F28AE52C60D08A1B2C3D4E5F60718",
+   "fields": {
+    "origin": "4A1D0B5E77C2903F",
+    "epoch": 1795996400,
+    "seq": 1,
+    "ts": 1796000011000,
+    "packet": "8301E100E90E00730FBBBBB8BBB859190248AEB0",
+    "rssi": -58,
+    "lat": 283852001,
+    "lon": -815639000,
+    "acc": 8,
+    "addr": "D0C1B2A39400",
+    "seenBy": [
+     "4A1D0B5E77C2903F",
+     "0100246F28AE52C6",
+     "A1B2C3D4E5F60718"
+    ]
+   },
+   "frames": [
+    "7E0E0501084A1D0B5E77C2903F0204F0BA0C6B0304010000000408F852F129A201000005148301E100E90E00730FBBBBB8BBB859190248AEB00601C60804E13CEB100904285662CF0A0208000B06D0C1B2A394000D084A1D0B5E77C2903F0D080100246F28AE52C60D08A1B2C3D4E5F60718"
+   ]
+  },
+  {
+   "i": 102,
+   "t": 11030,
+   "ev": "timer",
+   "node": "A",
+   "link": "A-H",
+   "name": "LIVE_PULL"
+  },
+  {
+   "i": 103,
+   "t": 11030,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010302040600000005081269208CA2190C2D060101",
+   "fields": {
+    "reqId": 3,
+    "since": 6,
+    "dbId": "1269208CA2190C2D",
+    "exclude": 1
+   },
+   "frames": [
+    "7E0E0201010302040600000005081269208CA2190C2D060101"
+   ]
+  },
+  {
+   "i": 104,
+   "t": 11030,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "03010407000000020103100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+   "fields": {
+    "seq": 7,
+    "reqId": 3,
+    "bodyHex": "100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90600220F5C57B0"
+     },
+     "updatedAt": 1796000009000,
+     "origin": "A1B2C3D4E5F60718",
+     "flags": 2,
+     "label": "Sparkle Trail",
+     "category": 2,
+     "kind": "animation",
+     "place": 3
+    }
+   },
+   "frames": [
+    "790903010407000000020103100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103"
+   ]
+  },
+  {
+   "i": 105,
+   "t": 11030,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010103020408000000030100040408000000050101",
+   "fields": {
+    "reqId": 3,
+    "scannedTo": 8,
+    "more": 0,
+    "feedHigh": 8,
+    "count": 1
+   },
+   "frames": [
+    "7A0A04010103020408000000030100040408000000050101"
+   ]
+  },
+  {
+   "i": 106,
+   "t": 11030,
+   "ev": "ingest",
+   "node": "I",
+   "link": "I-H",
+   "origin": "4A1D0B5E77C2903F",
+   "epoch": 1795996400,
+   "seq": 1,
+   "result": "ACCEPT",
+   "replay": false,
+   "lost": 0
+  },
+  {
+   "i": 107,
+   "t": 11045,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "REC",
+   "hex": "03010407000000020103100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+   "fields": {
+    "seq": 7,
+    "reqId": 3,
+    "bodyHex": "100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90600220F5C57B0"
+     },
+     "updatedAt": 1796000009000,
+     "origin": "A1B2C3D4E5F60718",
+     "flags": 2,
+     "label": "Sparkle Trail",
+     "category": 2,
+     "kind": "animation",
+     "place": 3
+    }
+   },
+   "frames": [
+    "7E0E03010407000000020103100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103"
+   ]
+  },
+  {
+   "i": 108,
+   "t": 11045,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010103020408000000030100040408000000050101",
+   "fields": {
+    "reqId": 3,
+    "scannedTo": 8,
+    "more": 0,
+    "feedHigh": 8,
+    "count": 1
+   },
+   "frames": [
+    "7F0F04010103020408000000030100040408000000050101"
+   ]
+  },
+  {
+   "i": 109,
+   "t": 11045,
+   "ev": "apply",
+   "node": "H",
+   "link": "I-H",
+   "key": "0:8301E100E90600220F5C57B0",
+   "status": "DUPLICATE",
+   "live": false
+  },
+  {
+   "i": 110,
+   "t": 11060,
+   "ev": "apply",
+   "node": "A",
+   "link": "A-H",
+   "key": "0:8301E100E90600220F5C57B0",
+   "status": "DUPLICATE",
+   "live": false
+  },
+  {
+   "i": 111,
+   "t": 11400,
+   "ev": "local",
+   "node": "A",
+   "op": "heard",
+   "epoch": 1795996400,
+   "seq": 2,
+   "packet": "8301E100E90C00410F4D4E5A940F1B488BB0",
+   "route": 2
+  },
+  {
+   "i": 112,
+   "t": 11400,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "EVT",
+   "hex": "0501084A1D0B5E77C2903F0204F0BA0C6B03040200000004088854F129A201000005128301E100E90C00410F4D4E5A940F1B488BB00601B90804E23CEB100904285662CF0A0208000B06D0C1B2A394000D084A1D0B5E77C2903F0D080100246F28AE52C6",
+   "fields": {
+    "origin": "4A1D0B5E77C2903F",
+    "epoch": 1795996400,
+    "seq": 2,
+    "ts": 1796000011400,
+    "packet": "8301E100E90C00410F4D4E5A940F1B488BB0",
+    "rssi": -71,
+    "lat": 283852002,
+    "lon": -815639000,
+    "acc": 8,
+    "addr": "D0C1B2A39400",
+    "seenBy": [
+     "4A1D0B5E77C2903F",
+     "0100246F28AE52C6"
+    ]
+   },
+   "frames": [
+    "7F0F0501084A1D0B5E77C2903F0204F0BA0C6B03040200000004088854F129A201000005128301E100E90C00410F4D4E5A940F1B488BB00601B90804E23CEB100904285662CF0A0208000B06D0C1B2A394000D084A1D0B5E77C2903F0D080100246F28AE52C6"
+   ]
+  },
+  {
+   "i": 113,
+   "t": 11415,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "EVT",
+   "hex": "0501084A1D0B5E77C2903F0204F0BA0C6B03040200000004088854F129A201000005128301E100E90C00410F4D4E5A940F1B488BB00601B90804E23CEB100904285662CF0A0208000B06D0C1B2A394000D084A1D0B5E77C2903F0D080100246F28AE52C60D08A1B2C3D4E5F60718",
+   "fields": {
+    "origin": "4A1D0B5E77C2903F",
+    "epoch": 1795996400,
+    "seq": 2,
+    "ts": 1796000011400,
+    "packet": "8301E100E90C00410F4D4E5A940F1B488BB0",
+    "rssi": -71,
+    "lat": 283852002,
+    "lon": -815639000,
+    "acc": 8,
+    "addr": "D0C1B2A39400",
+    "seenBy": [
+     "4A1D0B5E77C2903F",
+     "0100246F28AE52C6",
+     "A1B2C3D4E5F60718"
+    ]
+   },
+   "frames": [
+    "7F0F0501084A1D0B5E77C2903F0204F0BA0C6B03040200000004088854F129A201000005128301E100E90C00410F4D4E5A940F1B488BB00601B90804E23CEB100904285662CF0A0208000B06D0C1B2A394000D084A1D0B5E77C2903F0D080100246F28AE52C60D08A1B2C3D4E5F60718"
+   ]
+  },
+  {
+   "i": 114,
+   "t": 11430,
+   "ev": "ingest",
+   "node": "I",
+   "link": "I-H",
+   "origin": "4A1D0B5E77C2903F",
+   "epoch": 1795996400,
+   "seq": 2,
+   "result": "ACCEPT",
+   "replay": false,
+   "lost": 0
+  },
+  {
+   "i": 115,
+   "t": 12015,
+   "ev": "timer",
+   "node": "H",
+   "link": "A-H",
+   "name": "LIVE_PULL"
+  },
+  {
+   "i": 116,
+   "t": 12015,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "H",
+   "to": "A",
+   "by": "session",
+   "type": "PULL",
+   "hex": "020101030204060000000508AC34C9F15D8C2AED060101",
+   "fields": {
+    "reqId": 3,
+    "since": 6,
+    "dbId": "AC34C9F15D8C2AED",
+    "exclude": 1
+   },
+   "frames": [
+    "7010020101030204060000000508AC34C9F15D8C2AED060101"
+   ]
+  },
+  {
+   "i": 117,
+   "t": 12030,
+   "ev": "timer",
+   "node": "I",
+   "link": "I-H",
+   "name": "LIVE_PULL"
+  },
+  {
+   "i": 118,
+   "t": 12030,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010302040600000005081269208CA2190C2D060101",
+   "fields": {
+    "reqId": 3,
+    "since": 6,
+    "dbId": "1269208CA2190C2D",
+    "exclude": 1
+   },
+   "frames": [
+    "7B0B0201010302040600000005081269208CA2190C2D060101"
+   ]
+  },
+  {
+   "i": 119,
+   "t": 12030,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104080000000201031011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+   "fields": {
+    "seq": 8,
+    "reqId": 3,
+    "bodyHex": "1011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301CC03000100E100E90500090E02B0"
+     },
+     "updatedAt": 1796000010000,
+     "origin": "4A1D0B5E77C2903F",
+     "flags": 2,
+     "label": "Blue",
+     "category": 3,
+     "kind": "color",
+     "place": 2
+    }
+   },
+   "frames": [
+    "7010030104080000000201031011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102"
+   ]
+  },
+  {
+   "i": 120,
+   "t": 12030,
+   "ev": "msg",
+   "link": "A-H",
+   "gen": 1,
+   "from": "A",
+   "to": "H",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010103020408000000030100040408000000050101",
+   "fields": {
+    "reqId": 3,
+    "scannedTo": 8,
+    "more": 0,
+    "feedHigh": 8,
+    "count": 1
+   },
+   "frames": [
+    "711104010103020408000000030100040408000000050101"
+   ]
+  },
+  {
+   "i": 121,
+   "t": 12045,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104080000000201031011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+   "fields": {
+    "seq": 8,
+    "reqId": 3,
+    "bodyHex": "1011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301CC03000100E100E90500090E02B0"
+     },
+     "updatedAt": 1796000010000,
+     "origin": "4A1D0B5E77C2903F",
+     "flags": 2,
+     "label": "Blue",
+     "category": 3,
+     "kind": "color",
+     "place": 2
+    }
+   },
+   "frames": [
+    "7010030104080000000201031011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102"
+   ]
+  },
+  {
+   "i": 122,
+   "t": 12045,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010103020408000000030100040408000000050101",
+   "fields": {
+    "reqId": 3,
+    "scannedTo": 8,
+    "more": 0,
+    "feedHigh": 8,
+    "count": 1
+   },
+   "frames": [
+    "711104010103020408000000030100040408000000050101"
+   ]
+  },
+  {
+   "i": 123,
+   "t": 12045,
+   "ev": "apply",
+   "node": "H",
+   "link": "A-H",
+   "key": "0:8301CC03000100E100E90500090E02B0",
+   "status": "DUPLICATE",
+   "live": false
+  },
+  {
+   "i": 124,
+   "t": 12060,
+   "ev": "apply",
+   "node": "I",
+   "link": "I-H",
+   "key": "0:8301CC03000100E100E90500090E02B0",
+   "status": "DUPLICATE",
+   "live": false
+  }
+ ],
+ "final": {
+  "t": 16000,
+  "nodes": {
+   "I": {
+    "dbId": "9E859EDAA1D4E6A4",
+    "groupId": "2A2F4A688371E7EF",
+    "durableHigh": 8,
+    "nextSyncSeq": 9,
+    "ledger": [
+     {
+      "key": "0:8301CC03000100E100E90500090E02B0",
+      "u": 1796000010000,
+      "o": "4A1D0B5E77C2903F",
+      "c": 1813234056,
+      "class": "USER",
+      "b": "1011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+      "s": 8,
+      "f": "0100246F28AE52C6"
+     },
+     {
+      "key": "0:8301CC03000100E100E90500090E06B0",
+      "u": 1,
+      "o": null,
+      "c": 81764696,
+      "class": "PRESENCE",
+      "b": "1011008301CC03000100E100E90500090E06B011080100000000000000",
+      "s": 5,
+      "f": "0100246F28AE52C6"
+     },
+     {
+      "key": "0:8301E100E90600220F5C57B0",
+      "u": 1796000009000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 2220562542,
+      "class": "USER",
+      "b": "100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+      "s": 7,
+      "f": null
+     },
+     {
+      "key": "0:8301E100E90C00010F4D575A940705488BB0",
+      "u": 1795913600000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1632865102,
+      "class": "USER",
+      "b": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+      "s": 1,
+      "f": null
+     },
+     {
+      "key": "0:8301E100E90E00040FB7A8B6ADA059190248AEB0",
+      "u": 1795913602000,
+      "o": "4A1D0B5E77C2903F",
+      "c": 3916969112,
+      "class": "USER",
+      "b": "1015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103",
+      "s": 6,
+      "f": "0100246F28AE52C6"
+     },
+     {
+      "key": "1:8301CF0B00C020224EAC7807866F1D",
+      "u": 1795913602000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1240661119,
+      "class": "NEWWAND",
+      "b": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+      "s": 3,
+      "f": null
+     }
+    ],
+    "peers": {
+     "0100246F28AE52C6": {
+      "dbId": "1269208CA2190C2D",
+      "wm": 8,
+      "excludeOk": true
+     }
+    },
+    "evtWindows": {
+     "4A1D0B5E77C2903F": [
+      {
+       "epoch": 1795996400,
+       "hc": 2,
+       "bits": "0000000000000000"
+      }
+     ]
+    }
+   },
+   "H": {
+    "dbId": "1269208CA2190C2D",
+    "groupId": "2A2F4A688371E7EF",
+    "durableHigh": 8,
+    "nextSyncSeq": 9,
+    "ledger": [
+     {
+      "key": "0:8301CC03000100E100E90500090E02B0",
+      "u": 1796000010000,
+      "o": "4A1D0B5E77C2903F",
+      "c": 1813234056,
+      "class": "USER",
+      "b": "1011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+      "s": 8,
+      "f": "4A1D0B5E77C2903F"
+     },
+     {
+      "key": "0:8301CC03000100E100E90500090E06B0",
+      "u": 1,
+      "o": null,
+      "c": 81764696,
+      "class": "PRESENCE",
+      "b": "1011008301CC03000100E100E90500090E06B011080100000000000000",
+      "s": 5,
+      "f": "4A1D0B5E77C2903F"
+     },
+     {
+      "key": "0:8301E100E90600220F5C57B0",
+      "u": 1796000009000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 2220562542,
+      "class": "USER",
+      "b": "100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+      "s": 7,
+      "f": "A1B2C3D4E5F60718"
+     },
+     {
+      "key": "0:8301E100E90C00010F4D575A940705488BB0",
+      "u": 1795913600000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1632865102,
+      "class": "USER",
+      "b": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+      "s": 1,
+      "f": "A1B2C3D4E5F60718"
+     },
+     {
+      "key": "0:8301E100E90E00040FB7A8B6ADA059190248AEB0",
+      "u": 1795913602000,
+      "o": "4A1D0B5E77C2903F",
+      "c": 3916969112,
+      "class": "USER",
+      "b": "1015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103",
+      "s": 6,
+      "f": "4A1D0B5E77C2903F"
+     },
+     {
+      "key": "1:8301CF0B00C020224EAC7807866F1D",
+      "u": 1795913602000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1240661119,
+      "class": "NEWWAND",
+      "b": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+      "s": 3,
+      "f": "A1B2C3D4E5F60718"
+     }
+    ],
+    "peers": {
+     "4A1D0B5E77C2903F": {
+      "dbId": "AC34C9F15D8C2AED",
+      "wm": 8,
+      "excludeOk": true
+     },
+     "A1B2C3D4E5F60718": {
+      "dbId": "9E859EDAA1D4E6A4",
+      "wm": 8,
+      "excludeOk": true
+     }
+    }
+   },
+   "A": {
+    "dbId": "AC34C9F15D8C2AED",
+    "groupId": "2A2F4A688371E7EF",
+    "durableHigh": 8,
+    "nextSyncSeq": 9,
+    "ledger": [
+     {
+      "key": "0:8301CC03000100E100E90500090E02B0",
+      "u": 1796000010000,
+      "o": "4A1D0B5E77C2903F",
+      "c": 1813234056,
+      "class": "USER",
+      "b": "1011008301CC03000100E100E90500090E02B01108104FF129A201000012084A1D0B5E77C2903F1301021404426C75651501031705636F6C6F72180102",
+      "s": 8,
+      "f": null
+     },
+     {
+      "key": "0:8301CC03000100E100E90500090E06B0",
+      "u": 1,
+      "o": null,
+      "c": 81764696,
+      "class": "PRESENCE",
+      "b": "1011008301CC03000100E100E90500090E06B011080100000000000000",
+      "s": 2,
+      "f": null
+     },
+     {
+      "key": "0:8301E100E90600220F5C57B0",
+      "u": 1796000009000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 2220562542,
+      "class": "USER",
+      "b": "100D008301E100E90600220F5C57B01108284BF129A20100001208A1B2C3D4E5F60718130102140D537061726B6C6520547261696C1501021709616E696D6174696F6E180103",
+      "s": 7,
+      "f": "0100246F28AE52C6"
+     },
+     {
+      "key": "0:8301E100E90C00010F4D575A940705488BB0",
+      "u": 1795913600000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1632865102,
+      "class": "USER",
+      "b": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+      "s": 4,
+      "f": "0100246F28AE52C6"
+     },
+     {
+      "key": "0:8301E100E90E00040FB7A8B6ADA059190248AEB0",
+      "u": 1795913602000,
+      "o": "4A1D0B5E77C2903F",
+      "c": 3916969112,
+      "class": "USER",
+      "b": "1015008301E100E90E00040FB7A8B6ADA059190248AEB01108D0D3CA24A201000012084A1D0B5E77C2903F130102140E4B69737320476F6F646E69676874150101170473686F77180103",
+      "s": 3,
+      "f": null
+     },
+     {
+      "key": "1:8301CF0B00C020224EAC7807866F1D",
+      "u": 1795913602000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1240661119,
+      "class": "NEWWAND",
+      "b": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+      "s": 6,
+      "f": "0100246F28AE52C6"
+     }
+    ],
+    "peers": {
+     "0100246F28AE52C6": {
+      "dbId": "1269208CA2190C2D",
+      "wm": 8,
+      "excludeOk": true
+     }
+    },
+    "epoch": 1795996400,
+    "evtSeq": 2,
+    "ring": [
+     [
+      1795996400,
+      1
+     ],
+     [
+      1795996400,
+      2
+     ]
+    ]
+   }
+  }
+ }
+}

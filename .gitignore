@@ -17,3 +17,4 @@ firmware/esp32-transmitter/.tools/
 # PlatformIO's temporary .ino -> .cpp conversion when building this folder in place
 # (if committed, arduino-cli would compile it next to the .ino: duplicate setup/loop)
 firmware/esp32-transmitter/*.ino.cpp
+__pycache__/

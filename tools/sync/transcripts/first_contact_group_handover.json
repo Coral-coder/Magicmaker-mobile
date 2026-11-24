@@ -1,0 +1,854 @@
+{
+ "schema": 1,
+ "name": "first_contact_group_handover",
+ "description": "A grouped iPhone meets a fresh, ungrouped hub: HELLO exchange, the iPhone hands the group key over (JOIN), both restart at LINKED, the HMAC challenge passes, both pull, the hub flushes and advertises its new feedHigh in an on-change HB, the iPhone re-pulls and exclusion makes that page empty.",
+ "latencyMs": 15,
+ "clockBaseMs": 1796000000000,
+ "nodes": {
+  "I": {
+   "deviceId": "A1B2C3D4E5F60718",
+   "kind": 3,
+   "bootId": 4097,
+   "dbId": "9E859EDAA1D4E6A4",
+   "maxMsg": 1024,
+   "caps": 1,
+   "version": "1.4.0",
+   "name": "iPhone",
+   "groupId": "2A2F4A688371E7EF",
+   "groupKey": "B6DDFC8FC47B575D8935C8453BB843EA",
+   "clockKnown": true,
+   "durableHigh": 3,
+   "nextSyncSeq": 4,
+   "ledger": [
+    {
+     "key": "0:8301E100E90600220F5C57B0",
+     "u": 1,
+     "o": null,
+     "c": 405650262,
+     "class": "PRESENCE",
+     "b": "100D008301E100E90600220F5C57B011080100000000000000",
+     "s": 2,
+     "f": null
+    },
+    {
+     "key": "0:8301E100E90C00010F4D575A940705488BB0",
+     "u": 1795913600000,
+     "o": "A1B2C3D4E5F60718",
+     "c": 1632865102,
+     "class": "USER",
+     "b": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+     "s": 1,
+     "f": null
+    },
+    {
+     "key": "1:8301CF0B00C020224EAC7807866F1D",
+     "u": 1795913602000,
+     "o": "A1B2C3D4E5F60718",
+     "c": 1240661119,
+     "class": "NEWWAND",
+     "b": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+     "s": 3,
+     "f": null
+    }
+   ],
+   "peers": {},
+   "ringCap": null,
+   "epoch": null
+  },
+  "H": {
+   "deviceId": "0100246F28AE52C6",
+   "kind": 1,
+   "bootId": 12291,
+   "dbId": "1269208CA2190C2D",
+   "maxMsg": 512,
+   "caps": 57,
+   "version": "2.0 heltec-v3",
+   "name": "MM_ESP",
+   "groupId": null,
+   "groupKey": null,
+   "clockKnown": false,
+   "durableHigh": 0,
+   "nextSyncSeq": 1,
+   "ledger": [],
+   "peers": {},
+   "ringCap": null,
+   "epoch": null
+  }
+ },
+ "nonces": [
+  {
+   "link": "I-H",
+   "gen": 1,
+   "node": "H",
+   "nonces": [
+    "280C3AA047009B72",
+    "1880B08D14C64434"
+   ]
+  },
+  {
+   "link": "I-H",
+   "gen": 1,
+   "node": "I",
+   "nonces": [
+    "06A8433B5E250648",
+    "D2C9D698C9CE3295"
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "i": 0,
+   "t": 0,
+   "ev": "link_up",
+   "link": "I-H",
+   "gen": 1,
+   "central": "I",
+   "peripheral": "H",
+   "mtu": 185
+  },
+  {
+   "i": 1,
+   "t": 0,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 2,
+   "t": 0,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 3,
+   "t": 0,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "010101010208A1B2C3D4E5F6071803010304089E859EDAA1D4E6A405080028F129A201000006040300000007010708020100090200040A0201100B05312E342E300C066950686F6E650D082A2F4A688371E7EF0E0806A8433B5E250648",
+   "fields": {
+    "proto": 1,
+    "deviceId": "A1B2C3D4E5F60718",
+    "kind": 3,
+    "dbId": "9E859EDAA1D4E6A4",
+    "clockMs": 1796000000000,
+    "feedHigh": 3,
+    "subs": 7,
+    "caps": 1,
+    "maxMsg": 1024,
+    "bootId": 4097,
+    "version": "1.4.0",
+    "name": "iPhone",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "06A8433B5E250648"
+   },
+   "frames": [
+    "7000010101010208A1B2C3D4E5F6071803010304089E859EDAA1D4E6A405080028F129A201000006040300000007010708020100090200040A0201100B05312E342E300C066950686F6E650D082A2F4A688371E7EF0E0806A8433B5E250648"
+   ]
+  },
+  {
+   "i": 4,
+   "t": 15,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102080100246F28AE52C603010104081269208CA2190C2D0508000000000000000006040000000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D0800000000000000000E08280C3AA047009B72",
+   "fields": {
+    "proto": 1,
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "dbId": "1269208CA2190C2D",
+    "clockMs": 0,
+    "feedHigh": 0,
+    "subs": 7,
+    "caps": 57,
+    "maxMsg": 512,
+    "bootId": 12291,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "groupId": "0000000000000000",
+    "nonce": "280C3AA047009B72"
+   },
+   "frames": [
+    "70000101010102080100246F28AE52C603010104081269208CA2190C2D0508000000000000000006040000000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D0800000000000000000E08280C3AA047009B72"
+   ]
+  },
+  {
+   "i": 5,
+   "t": 15,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "HELLO_X"
+  },
+  {
+   "i": 6,
+   "t": 30,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "JOIN",
+   "hex": "0C01082A2F4A688371E7EF0210B6DDFC8FC47B575D8935C8453BB843EA",
+   "fields": {
+    "groupId": "2A2F4A688371E7EF",
+    "groupKey": "B6DDFC8FC47B575D8935C8453BB843EA"
+   },
+   "frames": [
+    "71010C01082A2F4A688371E7EF0210B6DDFC8FC47B575D8935C8453BB843EA"
+   ]
+  },
+  {
+   "i": 7,
+   "t": 30,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "010101010208A1B2C3D4E5F6071803010304089E859EDAA1D4E6A405081E28F129A201000006040300000007010708020100090200040A0201100B05312E342E300C066950686F6E650D082A2F4A688371E7EF0E08D2C9D698C9CE3295",
+   "fields": {
+    "proto": 1,
+    "deviceId": "A1B2C3D4E5F60718",
+    "kind": 3,
+    "dbId": "9E859EDAA1D4E6A4",
+    "clockMs": 1796000000030,
+    "feedHigh": 3,
+    "subs": 7,
+    "caps": 1,
+    "maxMsg": 1024,
+    "bootId": 4097,
+    "version": "1.4.0",
+    "name": "iPhone",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "D2C9D698C9CE3295"
+   },
+   "frames": [
+    "7202010101010208A1B2C3D4E5F6071803010304089E859EDAA1D4E6A405081E28F129A201000006040300000007010708020100090200040A0201100B05312E342E300C066950686F6E650D082A2F4A688371E7EF0E08D2C9D698C9CE3295"
+   ]
+  },
+  {
+   "i": 8,
+   "t": 45,
+   "ev": "group",
+   "node": "H",
+   "link": "I-H",
+   "groupId": "2A2F4A688371E7EF",
+   "rekey": false
+  },
+  {
+   "i": 9,
+   "t": 45,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 10,
+   "t": 45,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102080100246F28AE52C603010104081269208CA2190C2D0508000000000000000006040000000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E081880B08D14C644340F1071101E5632317DF41C68B63076B4B95B",
+   "fields": {
+    "proto": 1,
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "dbId": "1269208CA2190C2D",
+    "clockMs": 0,
+    "feedHigh": 0,
+    "subs": 7,
+    "caps": 57,
+    "maxMsg": 512,
+    "bootId": 12291,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "1880B08D14C64434",
+    "proof": "71101E5632317DF41C68B63076B4B95B"
+   },
+   "frames": [
+    "71010101010102080100246F28AE52C603010104081269208CA2190C2D0508000000000000000006040000000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E081880B08D14C644340F1071101E5632317DF41C68B63076B4B95B"
+   ]
+  },
+  {
+   "i": 11,
+   "t": 45,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "HELLO_X"
+  },
+  {
+   "i": 12,
+   "t": 60,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "HELLO_X"
+  },
+  {
+   "i": 13,
+   "t": 60,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "AUTH",
+   "hex": "0B011053A623D0A2B9239150F32470327FDE8C",
+   "fields": {
+    "proof": "53A623D0A2B9239150F32470327FDE8C"
+   },
+   "frames": [
+    "73030B011053A623D0A2B9239150F32470327FDE8C"
+   ]
+  },
+  {
+   "i": 14,
+   "t": 60,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "AUTHED"
+  },
+  {
+   "i": 15,
+   "t": 60,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010102040000000005081269208CA2190C2D060101",
+   "fields": {
+    "reqId": 1,
+    "since": 0,
+    "dbId": "1269208CA2190C2D",
+    "exclude": 1
+   },
+   "frames": [
+    "74040201010102040000000005081269208CA2190C2D060101"
+   ]
+  },
+  {
+   "i": 16,
+   "t": 60,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "SYNCING"
+  },
+  {
+   "i": 17,
+   "t": 60,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "HB",
+   "hex": "080108A1B2C3D4E5F607180201030302011004040100000005083C28F129A20100000604E80300000701510901000A0222010B05312E342E300C066950686F6E650D0A0100246F28AE52C601020E0280000F010010040300000011089E859EDAA1D4E6A4120403000000",
+   "fields": {
+    "deviceId": "A1B2C3D4E5F60718",
+    "kind": 3,
+    "bootId": 4097,
+    "hbSeq": 1,
+    "ts": 1796000000060,
+    "uptimeS": 1000,
+    "battPct": 81,
+    "charging": 0,
+    "runtimeMin": 290,
+    "version": "1.4.0",
+    "name": "iPhone",
+    "link": [
+     {
+      "peerId": "0100246F28AE52C6",
+      "peerKind": 1,
+      "flags": 2
+     }
+    ],
+    "state": 128,
+    "hops": 0,
+    "feedHigh": 3,
+    "dbId": "9E859EDAA1D4E6A4",
+    "records": 3
+   },
+   "frames": [
+    "7505080108A1B2C3D4E5F607180201030302011004040100000005083C28F129A20100000604E80300000701510901000A0222010B05312E342E300C066950686F6E650D0A0100246F28AE52C601020E0280000F010010040300000011089E859EDAA1D4E6A4120403000000"
+   ]
+  },
+  {
+   "i": 18,
+   "t": 75,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "AUTHED"
+  },
+  {
+   "i": 19,
+   "t": 75,
+   "ev": "note",
+   "text": "H learns the time from I's HELLO clockMs"
+  },
+  {
+   "i": 20,
+   "t": 75,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010102040000000005089E859EDAA1D4E6A4060101",
+   "fields": {
+    "reqId": 1,
+    "since": 0,
+    "dbId": "9E859EDAA1D4E6A4",
+    "exclude": 1
+   },
+   "frames": [
+    "72020201010102040000000005089E859EDAA1D4E6A4060101"
+   ]
+  },
+  {
+   "i": 21,
+   "t": 75,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "SYNCING"
+  },
+  {
+   "i": 22,
+   "t": 75,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801080100246F28AE52C60201010302033004040100000005084B28F129A20100000604E80300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803000F010010040000000011081269208CA2190C2D120400000000",
+   "fields": {
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "bootId": 12291,
+    "hbSeq": 1,
+    "ts": 1796000000075,
+    "uptimeS": 1000,
+    "battPct": 68,
+    "battMv": 3910,
+    "charging": 0,
+    "runtimeMin": 300,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "link": [
+     {
+      "peerId": "A1B2C3D4E5F60718",
+      "peerKind": 3,
+      "flags": 0
+     }
+    ],
+    "hops": 0,
+    "feedHigh": 0,
+    "dbId": "1269208CA2190C2D",
+    "records": 0
+   },
+   "frames": [
+    "73030801080100246F28AE52C60201010302033004040100000005084B28F129A20100000604E80300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803000F010010040000000011081269208CA2190C2D120400000000"
+   ]
+  },
+  {
+   "i": 23,
+   "t": 75,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010101020400000000030100040400000000050100",
+   "fields": {
+    "reqId": 1,
+    "scannedTo": 0,
+    "more": 0,
+    "feedHigh": 0,
+    "count": 0
+   },
+   "frames": [
+    "740404010101020400000000030100040400000000050100"
+   ]
+  },
+  {
+   "i": 24,
+   "t": 90,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104010000000201011013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+   "fields": {
+    "seq": 1,
+    "reqId": 1,
+    "bodyHex": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90C00010F4D575A940705488BB0"
+     },
+     "updatedAt": 1795913600000,
+     "origin": "A1B2C3D4E5F60718",
+     "flags": 2,
+     "label": "Main Street Glow",
+     "category": 1,
+     "kind": "show",
+     "place": 3
+    }
+   },
+   "frames": [
+    "7606030104010000000201011013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103"
+   ]
+  },
+  {
+   "i": 25,
+   "t": 90,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "03010402000000020101100D008301E100E90600220F5C57B011080100000000000000",
+   "fields": {
+    "seq": 2,
+    "reqId": 1,
+    "bodyHex": "100D008301E100E90600220F5C57B011080100000000000000",
+    "body": {
+     "key": {
+      "ns": 0,
+      "packet": "8301E100E90600220F5C57B0"
+     },
+     "updatedAt": 1
+    }
+   },
+   "frames": [
+    "770703010402000000020101100D008301E100E90600220F5C57B011080100000000000000"
+   ]
+  },
+  {
+   "i": 26,
+   "t": 90,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "REC",
+   "hex": "030104030000000201011010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+   "fields": {
+    "seq": 3,
+    "reqId": 1,
+    "bodyHex": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+    "body": {
+     "key": {
+      "ns": 1,
+      "packet": "8301CF0B00C020224EAC7807866F1D"
+     },
+     "updatedAt": 1795913602000,
+     "origin": "A1B2C3D4E5F60718",
+     "label": "Lights out"
+    }
+   },
+   "frames": [
+    "7808030104030000000201011010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574"
+   ]
+  },
+  {
+   "i": 27,
+   "t": 90,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010101020403000000030100040403000000050103",
+   "fields": {
+    "reqId": 1,
+    "scannedTo": 3,
+    "more": 0,
+    "feedHigh": 3,
+    "count": 3
+   },
+   "frames": [
+    "790904010101020403000000030100040403000000050103"
+   ]
+  },
+  {
+   "i": 28,
+   "t": 90,
+   "ev": "state",
+   "node": "I",
+   "link": "I-H",
+   "state": "SYNCED"
+  },
+  {
+   "i": 29,
+   "t": 105,
+   "ev": "apply",
+   "node": "H",
+   "link": "I-H",
+   "key": "0:8301E100E90C00010F4D575A940705488BB0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 30,
+   "t": 105,
+   "ev": "apply",
+   "node": "H",
+   "link": "I-H",
+   "key": "0:8301E100E90600220F5C57B0",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 31,
+   "t": 105,
+   "ev": "apply",
+   "node": "H",
+   "link": "I-H",
+   "key": "1:8301CF0B00C020224EAC7807866F1D",
+   "status": "ACCEPT",
+   "live": false
+  },
+  {
+   "i": 32,
+   "t": 105,
+   "ev": "state",
+   "node": "H",
+   "link": "I-H",
+   "state": "SYNCED"
+  },
+  {
+   "i": 33,
+   "t": 2105,
+   "ev": "durable",
+   "node": "H",
+   "durableHigh": 3
+  },
+  {
+   "i": 34,
+   "t": 5075,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "HB",
+   "hex": "0801080100246F28AE52C6020101030203300404020000000508D33BF129A20100000604ED0300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803010F010010040300000011081269208CA2190C2D120403000000",
+   "fields": {
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "bootId": 12291,
+    "hbSeq": 2,
+    "ts": 1796000005075,
+    "uptimeS": 1005,
+    "battPct": 68,
+    "battMv": 3910,
+    "charging": 0,
+    "runtimeMin": 300,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "link": [
+     {
+      "peerId": "A1B2C3D4E5F60718",
+      "peerKind": 3,
+      "flags": 1
+     }
+    ],
+    "hops": 0,
+    "feedHigh": 3,
+    "dbId": "1269208CA2190C2D",
+    "records": 3
+   },
+   "frames": [
+    "75050801080100246F28AE52C6020101030203300404020000000508D33BF129A20100000604ED0300000701440802460F0901000A022C010B0D322E302068656C7465632D76330C064D4D5F4553500D0AA1B2C3D4E5F6071803010F010010040300000011081269208CA2190C2D120403000000"
+   ]
+  },
+  {
+   "i": 35,
+   "t": 5090,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "I",
+   "to": "H",
+   "by": "session",
+   "type": "PULL",
+   "hex": "0201010202040000000005081269208CA2190C2D060101",
+   "fields": {
+    "reqId": 2,
+    "since": 0,
+    "dbId": "1269208CA2190C2D",
+    "exclude": 1
+   },
+   "frames": [
+    "7A0A0201010202040000000005081269208CA2190C2D060101"
+   ]
+  },
+  {
+   "i": 36,
+   "t": 5105,
+   "ev": "msg",
+   "link": "I-H",
+   "gen": 1,
+   "from": "H",
+   "to": "I",
+   "by": "node",
+   "type": "PAGE_END",
+   "hex": "04010102020403000000030100040403000000050100",
+   "fields": {
+    "reqId": 2,
+    "scannedTo": 3,
+    "more": 0,
+    "feedHigh": 3,
+    "count": 0
+   },
+   "frames": [
+    "760604010102020403000000030100040403000000050100"
+   ]
+  }
+ ],
+ "final": {
+  "t": 9000,
+  "nodes": {
+   "I": {
+    "dbId": "9E859EDAA1D4E6A4",
+    "groupId": "2A2F4A688371E7EF",
+    "durableHigh": 3,
+    "nextSyncSeq": 4,
+    "ledger": [
+     {
+      "key": "0:8301E100E90600220F5C57B0",
+      "u": 1,
+      "o": null,
+      "c": 405650262,
+      "class": "PRESENCE",
+      "b": "100D008301E100E90600220F5C57B011080100000000000000",
+      "s": 2,
+      "f": null
+     },
+     {
+      "key": "0:8301E100E90C00010F4D575A940705488BB0",
+      "u": 1795913600000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1632865102,
+      "class": "USER",
+      "b": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+      "s": 1,
+      "f": null
+     },
+     {
+      "key": "1:8301CF0B00C020224EAC7807866F1D",
+      "u": 1795913602000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1240661119,
+      "class": "NEWWAND",
+      "b": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+      "s": 3,
+      "f": null
+     }
+    ],
+    "peers": {
+     "0100246F28AE52C6": {
+      "dbId": "1269208CA2190C2D",
+      "wm": 3,
+      "excludeOk": true
+     }
+    },
+    "evtWindows": {}
+   },
+   "H": {
+    "dbId": "1269208CA2190C2D",
+    "groupId": "2A2F4A688371E7EF",
+    "durableHigh": 3,
+    "nextSyncSeq": 4,
+    "ledger": [
+     {
+      "key": "0:8301E100E90600220F5C57B0",
+      "u": 1,
+      "o": null,
+      "c": 405650262,
+      "class": "PRESENCE",
+      "b": "100D008301E100E90600220F5C57B011080100000000000000",
+      "s": 2,
+      "f": "A1B2C3D4E5F60718"
+     },
+     {
+      "key": "0:8301E100E90C00010F4D575A940705488BB0",
+      "u": 1795913600000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1632865102,
+      "class": "USER",
+      "b": "1013008301E100E90C00010F4D575A940705488BB0110800CCCA24A20100001208A1B2C3D4E5F6071813010214104D61696E2053747265657420476C6F77150101170473686F77180103",
+      "s": 1,
+      "f": "A1B2C3D4E5F60718"
+     },
+     {
+      "key": "1:8301CF0B00C020224EAC7807866F1D",
+      "u": 1795913602000,
+      "o": "A1B2C3D4E5F60718",
+      "c": 1240661119,
+      "class": "NEWWAND",
+      "b": "1010018301CF0B00C020224EAC7807866F1D1108D0D3CA24A20100001208A1B2C3D4E5F60718140A4C6967687473206F7574",
+      "s": 3,
+      "f": "A1B2C3D4E5F60718"
+     }
+    ],
+    "peers": {
+     "A1B2C3D4E5F60718": {
+      "dbId": "9E859EDAA1D4E6A4",
+      "wm": 3,
+      "excludeOk": true
+     }
+    }
+   }
+  }
+ }
+}

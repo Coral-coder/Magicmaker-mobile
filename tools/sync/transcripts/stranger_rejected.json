@@ -1,0 +1,650 @@
+{
+ "schema": 1,
+ "name": "stranger_rejected",
+ "description": "A grouped hub meets: (1) a stranger's iPhone in another group: HELLO, HELLO reply, ERR AUTH, FOREIGN on both, the hub disconnects; (2) an impostor that copies the groupId but has no key: it gets a valid proofP it cannot use, sends a wrong AUTH, gets ERR AUTH and is dropped; (3) an old app that connects but never says HELLO: dropped at the 10 s member deadline; (4) a future-protocol central (proto 2): ERR PROTO, INCOMPATIBLE, then dropped at the deadline.",
+ "latencyMs": 15,
+ "clockBaseMs": 1796000000000,
+ "nodes": {
+  "H": {
+   "deviceId": "0100246F28AE52C6",
+   "kind": 1,
+   "bootId": 12291,
+   "dbId": "1269208CA2190C2D",
+   "maxMsg": 512,
+   "caps": 57,
+   "version": "2.0 heltec-v3",
+   "name": "MM_ESP",
+   "groupId": "2A2F4A688371E7EF",
+   "groupKey": "B6DDFC8FC47B575D8935C8453BB843EA",
+   "clockKnown": true,
+   "durableHigh": 1,
+   "nextSyncSeq": 2,
+   "ledger": [
+    {
+     "key": "0:8301E100E90C00010F4D575A940705488BB0",
+     "u": 1,
+     "o": null,
+     "c": 3462763218,
+     "class": "PRESENCE",
+     "b": "1013008301E100E90C00010F4D575A940705488BB011080100000000000000",
+     "s": 1,
+     "f": null
+    }
+   ],
+   "peers": {},
+   "ringCap": null,
+   "epoch": null
+  },
+  "S": {
+   "deviceId": "5E1F00C0FFEE0001",
+   "kind": 3,
+   "bootId": 20485,
+   "dbId": "E3D0704555935E89",
+   "maxMsg": 1024,
+   "caps": 1,
+   "version": "1.4.0",
+   "name": "iPhone",
+   "groupId": "B9ED47D2B0B80B66",
+   "groupKey": "A04E9ED312FC509D45E1C8258461BDC3",
+   "clockKnown": true,
+   "durableHigh": 0,
+   "nextSyncSeq": 1,
+   "ledger": [],
+   "peers": {},
+   "ringCap": null,
+   "epoch": null
+  },
+  "X": {
+   "deviceId": "BADC0FFEE0DDF00D",
+   "kind": 3,
+   "scripted": true
+  },
+  "Y": {
+   "deviceId": "01D0A99000000001",
+   "kind": 3,
+   "scripted": true
+  },
+  "Z": {
+   "deviceId": "2222222222222222",
+   "kind": 3,
+   "scripted": true
+  }
+ },
+ "nonces": [
+  {
+   "link": "S-H",
+   "gen": 1,
+   "node": "H",
+   "nonces": [
+    "280C3AA047009B72"
+   ]
+  },
+  {
+   "link": "S-H",
+   "gen": 1,
+   "node": "S",
+   "nonces": [
+    "02AF7189CD37D223"
+   ]
+  },
+  {
+   "link": "X-H",
+   "gen": 1,
+   "node": "H",
+   "nonces": [
+    "1880B08D14C64434"
+   ]
+  },
+  {
+   "link": "Y-H",
+   "gen": 1,
+   "node": "H",
+   "nonces": []
+  },
+  {
+   "link": "Z-H",
+   "gen": 1,
+   "node": "H",
+   "nonces": []
+  }
+ ],
+ "steps": [
+  {
+   "i": 0,
+   "t": 0,
+   "ev": "link_up",
+   "link": "S-H",
+   "gen": 1,
+   "central": "S",
+   "peripheral": "H",
+   "mtu": 185
+  },
+  {
+   "i": 1,
+   "t": 0,
+   "ev": "state",
+   "node": "H",
+   "link": "S-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 2,
+   "t": 0,
+   "ev": "state",
+   "node": "S",
+   "link": "S-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 3,
+   "t": 0,
+   "ev": "msg",
+   "link": "S-H",
+   "gen": 1,
+   "from": "S",
+   "to": "H",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102085E1F00C0FFEE00010301030408E3D0704555935E8905080028F129A201000006040000000007010708020100090200040A0205500B05312E342E300C066950686F6E650D08B9ED47D2B0B80B660E0802AF7189CD37D223",
+   "fields": {
+    "proto": 1,
+    "deviceId": "5E1F00C0FFEE0001",
+    "kind": 3,
+    "dbId": "E3D0704555935E89",
+    "clockMs": 1796000000000,
+    "feedHigh": 0,
+    "subs": 7,
+    "caps": 1,
+    "maxMsg": 1024,
+    "bootId": 20485,
+    "version": "1.4.0",
+    "name": "iPhone",
+    "groupId": "B9ED47D2B0B80B66",
+    "nonce": "02AF7189CD37D223"
+   },
+   "frames": [
+    "70000101010102085E1F00C0FFEE00010301030408E3D0704555935E8905080028F129A201000006040000000007010708020100090200040A0205500B05312E342E300C066950686F6E650D08B9ED47D2B0B80B660E0802AF7189CD37D223"
+   ]
+  },
+  {
+   "i": 4,
+   "t": 15,
+   "ev": "msg",
+   "link": "S-H",
+   "gen": 1,
+   "from": "H",
+   "to": "S",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102080100246F28AE52C603010104081269208CA2190C2D05080F28F129A201000006040100000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E08280C3AA047009B72",
+   "fields": {
+    "proto": 1,
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "dbId": "1269208CA2190C2D",
+    "clockMs": 1796000000015,
+    "feedHigh": 1,
+    "subs": 7,
+    "caps": 57,
+    "maxMsg": 512,
+    "bootId": 12291,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "280C3AA047009B72"
+   },
+   "frames": [
+    "70000101010102080100246F28AE52C603010104081269208CA2190C2D05080F28F129A201000006040100000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E08280C3AA047009B72"
+   ]
+  },
+  {
+   "i": 5,
+   "t": 15,
+   "ev": "msg",
+   "link": "S-H",
+   "gen": 1,
+   "from": "H",
+   "to": "S",
+   "by": "session",
+   "type": "ERR",
+   "hex": "0A01010A020101",
+   "fields": {
+    "code": 10,
+    "refType": 1
+   },
+   "frames": [
+    "71010A01010A020101"
+   ]
+  },
+  {
+   "i": 6,
+   "t": 15,
+   "ev": "state",
+   "node": "H",
+   "link": "S-H",
+   "state": "FOREIGN"
+  },
+  {
+   "i": 7,
+   "t": 15,
+   "ev": "foreign",
+   "node": "H",
+   "link": "S-H"
+  },
+  {
+   "i": 8,
+   "t": 15,
+   "ev": "disconnect",
+   "node": "H",
+   "link": "S-H",
+   "reason": "foreign",
+   "retryMs": null
+  },
+  {
+   "i": 9,
+   "t": 30,
+   "ev": "msg",
+   "link": "S-H",
+   "gen": 1,
+   "from": "S",
+   "to": "H",
+   "by": "session",
+   "type": "ERR",
+   "hex": "0A01010A020101",
+   "fields": {
+    "code": 10,
+    "refType": 1
+   },
+   "frames": [
+    "71010A01010A020101"
+   ]
+  },
+  {
+   "i": 10,
+   "t": 30,
+   "ev": "state",
+   "node": "S",
+   "link": "S-H",
+   "state": "FOREIGN"
+  },
+  {
+   "i": 11,
+   "t": 30,
+   "ev": "foreign",
+   "node": "S",
+   "link": "S-H"
+  },
+  {
+   "i": 12,
+   "t": 30,
+   "ev": "disconnect",
+   "node": "S",
+   "link": "S-H",
+   "reason": "foreign",
+   "retryMs": null
+  },
+  {
+   "i": 13,
+   "t": 31,
+   "ev": "link_down",
+   "link": "S-H",
+   "reason": "foreign"
+  },
+  {
+   "i": 14,
+   "t": 31,
+   "ev": "state",
+   "node": "H",
+   "link": "S-H",
+   "state": "CLOSED"
+  },
+  {
+   "i": 15,
+   "t": 31,
+   "ev": "state",
+   "node": "S",
+   "link": "S-H",
+   "state": "CLOSED"
+  },
+  {
+   "i": 16,
+   "t": 2000,
+   "ev": "link_up",
+   "link": "X-H",
+   "gen": 1,
+   "central": "X",
+   "peripheral": "H",
+   "mtu": 185
+  },
+  {
+   "i": 17,
+   "t": 2000,
+   "ev": "state",
+   "node": "H",
+   "link": "X-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 18,
+   "t": 2000,
+   "ev": "msg",
+   "link": "X-H",
+   "gen": 1,
+   "from": "X",
+   "to": "H",
+   "by": "script",
+   "type": "HELLO",
+   "hex": "010101010208BADC0FFEE0DDF00D03010304086305F64B23B619EF0508D02FF129A201000006040000000007010708020100090200040A0207000D082A2F4A688371E7EF0E087E0C2665128FF4FF",
+   "fields": {
+    "proto": 1,
+    "deviceId": "BADC0FFEE0DDF00D",
+    "kind": 3,
+    "dbId": "6305F64B23B619EF",
+    "clockMs": 1796000002000,
+    "feedHigh": 0,
+    "subs": 7,
+    "caps": 1,
+    "maxMsg": 1024,
+    "bootId": 7,
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "7E0C2665128FF4FF"
+   },
+   "frames": [
+    "7000010101010208BADC0FFEE0DDF00D03010304086305F64B23B619EF0508D02FF129A201000006040000000007010708020100090200040A0207000D082A2F4A688371E7EF0E087E0C2665128FF4FF"
+   ]
+  },
+  {
+   "i": 19,
+   "t": 2015,
+   "ev": "msg",
+   "link": "X-H",
+   "gen": 1,
+   "from": "H",
+   "to": "X",
+   "by": "session",
+   "type": "HELLO",
+   "hex": "0101010102080100246F28AE52C603010104081269208CA2190C2D0508DF2FF129A201000006040100000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E081880B08D14C644340F10792529138B49BE6E5E00C9C1A2EE2E11",
+   "fields": {
+    "proto": 1,
+    "deviceId": "0100246F28AE52C6",
+    "kind": 1,
+    "dbId": "1269208CA2190C2D",
+    "clockMs": 1796000002015,
+    "feedHigh": 1,
+    "subs": 7,
+    "caps": 57,
+    "maxMsg": 512,
+    "bootId": 12291,
+    "version": "2.0 heltec-v3",
+    "name": "MM_ESP",
+    "groupId": "2A2F4A688371E7EF",
+    "nonce": "1880B08D14C64434",
+    "proof": "792529138B49BE6E5E00C9C1A2EE2E11"
+   },
+   "frames": [
+    "70000101010102080100246F28AE52C603010104081269208CA2190C2D0508DF2FF129A201000006040100000007010708023900090200020A0203300B0D322E302068656C7465632D76330C064D4D5F4553500D082A2F4A688371E7EF0E081880B08D14C644340F10792529138B49BE6E5E00C9C1A2EE2E11"
+   ]
+  },
+  {
+   "i": 20,
+   "t": 2015,
+   "ev": "state",
+   "node": "H",
+   "link": "X-H",
+   "state": "HELLO_X"
+  },
+  {
+   "i": 21,
+   "t": 2040,
+   "ev": "msg",
+   "link": "X-H",
+   "gen": 1,
+   "from": "X",
+   "to": "H",
+   "by": "script",
+   "type": "AUTH",
+   "hex": "0B011000000000000000000000000000000000",
+   "fields": {
+    "proof": "00000000000000000000000000000000"
+   },
+   "frames": [
+    "71010B011000000000000000000000000000000000"
+   ]
+  },
+  {
+   "i": 22,
+   "t": 2055,
+   "ev": "msg",
+   "link": "X-H",
+   "gen": 1,
+   "from": "H",
+   "to": "X",
+   "by": "session",
+   "type": "ERR",
+   "hex": "0A01010A02010B",
+   "fields": {
+    "code": 10,
+    "refType": 11
+   },
+   "frames": [
+    "71010A01010A02010B"
+   ]
+  },
+  {
+   "i": 23,
+   "t": 2055,
+   "ev": "state",
+   "node": "H",
+   "link": "X-H",
+   "state": "FOREIGN"
+  },
+  {
+   "i": 24,
+   "t": 2055,
+   "ev": "foreign",
+   "node": "H",
+   "link": "X-H"
+  },
+  {
+   "i": 25,
+   "t": 2055,
+   "ev": "disconnect",
+   "node": "H",
+   "link": "X-H",
+   "reason": "foreign",
+   "retryMs": null
+  },
+  {
+   "i": 26,
+   "t": 2071,
+   "ev": "link_down",
+   "link": "X-H",
+   "reason": "foreign"
+  },
+  {
+   "i": 27,
+   "t": 2071,
+   "ev": "state",
+   "node": "H",
+   "link": "X-H",
+   "state": "CLOSED"
+  },
+  {
+   "i": 28,
+   "t": 4000,
+   "ev": "link_up",
+   "link": "Y-H",
+   "gen": 1,
+   "central": "Y",
+   "peripheral": "H",
+   "mtu": 185
+  },
+  {
+   "i": 29,
+   "t": 4000,
+   "ev": "state",
+   "node": "H",
+   "link": "Y-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 30,
+   "t": 14000,
+   "ev": "timer",
+   "node": "H",
+   "link": "Y-H",
+   "name": "DEADLINE"
+  },
+  {
+   "i": 31,
+   "t": 14000,
+   "ev": "disconnect",
+   "node": "H",
+   "link": "Y-H",
+   "reason": "auth_deadline",
+   "retryMs": null
+  },
+  {
+   "i": 32,
+   "t": 14016,
+   "ev": "link_down",
+   "link": "Y-H",
+   "reason": "auth_deadline"
+  },
+  {
+   "i": 33,
+   "t": 14016,
+   "ev": "state",
+   "node": "H",
+   "link": "Y-H",
+   "state": "CLOSED"
+  },
+  {
+   "i": 34,
+   "t": 16000,
+   "ev": "link_up",
+   "link": "Z-H",
+   "gen": 1,
+   "central": "Z",
+   "peripheral": "H",
+   "mtu": 185
+  },
+  {
+   "i": 35,
+   "t": 16000,
+   "ev": "state",
+   "node": "H",
+   "link": "Z-H",
+   "state": "LINKED"
+  },
+  {
+   "i": 36,
+   "t": 16000,
+   "ev": "msg",
+   "link": "Z-H",
+   "gen": 1,
+   "from": "Z",
+   "to": "H",
+   "by": "script",
+   "type": "HELLO",
+   "hex": "0101010202082222222222222222600E70726F746F2032206669656C6473",
+   "fields": null,
+   "frames": [
+    "70000101010202082222222222222222600E70726F746F2032206669656C6473"
+   ],
+   "decodeError": "missing"
+  },
+  {
+   "i": 37,
+   "t": 16015,
+   "ev": "msg",
+   "link": "Z-H",
+   "gen": 1,
+   "from": "H",
+   "to": "Z",
+   "by": "session",
+   "type": "ERR",
+   "hex": "0A010104020101",
+   "fields": {
+    "code": 4,
+    "refType": 1
+   },
+   "frames": [
+    "70000A010104020101"
+   ]
+  },
+  {
+   "i": 38,
+   "t": 16015,
+   "ev": "state",
+   "node": "H",
+   "link": "Z-H",
+   "state": "INCOMPATIBLE"
+  },
+  {
+   "i": 39,
+   "t": 26000,
+   "ev": "timer",
+   "node": "H",
+   "link": "Z-H",
+   "name": "DEADLINE"
+  },
+  {
+   "i": 40,
+   "t": 26000,
+   "ev": "disconnect",
+   "node": "H",
+   "link": "Z-H",
+   "reason": "auth_deadline",
+   "retryMs": null
+  },
+  {
+   "i": 41,
+   "t": 26016,
+   "ev": "link_down",
+   "link": "Z-H",
+   "reason": "auth_deadline"
+  },
+  {
+   "i": 42,
+   "t": 26016,
+   "ev": "state",
+   "node": "H",
+   "link": "Z-H",
+   "state": "CLOSED"
+  }
+ ],
+ "final": {
+  "t": 30000,
+  "nodes": {
+   "H": {
+    "dbId": "1269208CA2190C2D",
+    "groupId": "2A2F4A688371E7EF",
+    "durableHigh": 1,
+    "nextSyncSeq": 2,
+    "ledger": [
+     {
+      "key": "0:8301E100E90C00010F4D575A940705488BB0",
+      "u": 1,
+      "o": null,
+      "c": 3462763218,
+      "class": "PRESENCE",
+      "b": "1013008301E100E90C00010F4D575A940705488BB011080100000000000000",
+      "s": 1,
+      "f": null
+     }
+    ],
+    "peers": {}
+   },
+   "S": {
+    "dbId": "E3D0704555935E89",
+    "groupId": "B9ED47D2B0B80B66",
+    "durableHigh": 0,
+    "nextSyncSeq": 1,
+    "ledger": [],
+    "peers": {},
+    "evtWindows": {}
+   }
+  }
+ }
+}
