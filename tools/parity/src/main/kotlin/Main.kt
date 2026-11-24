@@ -532,7 +532,8 @@ private fun corpus(repoRoot: File, builderHexes: List<String>, labHexes: List<St
 private fun ledMasks(repoRoot: File): List<Map<String, Any?>> {
     val file = File(repoRoot, "android/app/src/main/java/com/magicmaker/android/ui/LabPacketBuilderPanel.kt")
     val text = file.readText(Charsets.UTF_8)
-    val start = text.indexOf("private val LED_MASKS")
+    // The panel's visibility may change (private / internal); find the declaration either way.
+    val start = Regex("""(?m)^\s*(?:private |internal |public )?val LED_MASKS\b""").find(text)?.range?.first ?: -1
     check(start >= 0) { "LED_MASKS not found in ${file.path}" }
     val end = text.indexOf("\n)", start)
     check(end > start) { "LED_MASKS: end of list not found in ${file.path}" }
