@@ -30,7 +30,7 @@ Band commands prepend wakeup ping automatically.
 |------|-----|
 | Standalone | Everything on device |
 | WiFi / iPhone | Hotspot + HTTP `:8765`, QR on Relay tab |
-| BLE GATT / iPhone | GATT service `A7830001`, device name `MagicMaker-Android` |
+| BLE GATT / iPhone | GATT service `A7830001`, tagged `MM_AND` in scan-response service data; no device name is advertised and the phone's Bluetooth name is never changed (a name left as `MagicMaker-Android` by older builds is restored on start) |
 
 ## Build & deploy
 

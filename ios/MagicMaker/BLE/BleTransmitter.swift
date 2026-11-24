@@ -96,7 +96,7 @@ final class BleTransmitter {
             }
         case .androidBle, .esp32:
             if !central.relayGatt.isReady {
-                let target = relayBackend == .esp32 ? "MM_ESP" : "MagicMaker-Android"
+                let target: String = AndroidRelayGattClient.targetLabel(for: relayBackend)
                 onStatus?("Waiting for \(target) — tap Retry in Remote")
                 central.reconnectRelay()
                 onResult(false)

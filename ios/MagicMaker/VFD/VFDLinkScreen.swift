@@ -51,7 +51,7 @@ private enum VFDLinkKeys {
     static let hint: String = "TAP REPLAY · SWIPE ← DEL · SWIPE → TX/TAG"
     static let pocketNote: String = "Control Android from your pocket: BLE when close, WiFi hotspot + QR when Android is in your backpack."
     static let esp32Note: String = "Power on the MagicMaker ESP32. iPhone auto-connects and transmits through it while you keep scanning. No pairing needed."
-    static let bleNote: String = "Put Android in BLE GATT / iPhone mode. iPhone auto-connects to MagicMaker-Android."
+    static let bleNote: String = "Put Android in BLE GATT / iPhone mode. iPhone auto-connects to the Android relay."
     static let importCaption: String = "ADDS THE ANDROID PACKETS THE IPHONE LIBRARY DOES NOT HAVE YET"
     static let listen: String = "LISTEN 0x0183 MANUFACTURER"
     static let ipLabel: String = "Android IP (hotspot gateway)"

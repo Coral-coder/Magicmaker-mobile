@@ -12,6 +12,7 @@ laid out and approved as PNGs before anything in `ios/` changes. Generated files
 | `vfd_font.py` | 5×7 bitmap font plus the Scale2x/Scale3x mid and big sizes (`--sheet OUT.png`, `--check`) |
 | `gen_swift.py` | writes the glyph tables as Swift (`VFDGlyphs.swift`) |
 | `gen_kotlin.py` | writes the glyph tables as Kotlin (`android/.../ui/vfd/VFDGlyphs.kt`; `--check` = up to date) |
+| `gen_c.py` | writes the small 5×7 face (ASCII 32–126 + fallback box) as a C table for the Heltec V3 OLED (`firmware/esp32-transmitter/vfd_font_5x7.h`; `--check` = up to date) |
 | `golden.py` | golden ops + expected results; replayed by `ios/VFDCheck` and Android's `VFDGoldenTest` |
 | `vfd.py` | core renderer: devices, palette, `FrameBuffer` drawing primitives (`fb.base` = the base colour it is drawn in), `render_png` (`python vfd.py` runs a self-test) |
 | `widgets.py` | app chrome (header, telemetry line, tab bar) and content widgets, built on `vfd.py` |

@@ -33,7 +33,7 @@ import com.magicmaker.android.ui.techLabel
  * RELAY / REMOTE, the STANDALONE note, the MODE selectors (STANDALONE, WIFI / IPHONE, BLE GATT /
  * IPHONE; a pick saves relay_mode and sends ACTION_SET_RELAY, as the FilterChips do), then per
  * mode: the standalone note; the GATT panel (permission / service warnings in alarm ink, the link
- * dot and state, ADV NAME and STATUS info rows, the local-use note); or the WiFi hotspot panel
+ * dot and state, ADV TAG and STATUS info rows, the local-use note); or the WiFi hotspot panel
  * (NEARBY permission warning with GRANT NEARBY, SSID / PASS / GW, the pairing QR drawn on the grid
  * as true black and white cells in a "SCAN WITH IPHONE REMOTE" panel — a tap shows it full size in
  * a sheet — or the expected AP, the HTTP endpoints, then the GATT panel). BATTERY OPT-OUT opens the
@@ -233,7 +233,7 @@ object VFDRelayScreen : VFDScreen {
 
     // MARK: - Panels
 
-    /** GattRelayPanel: the permission / service warning, the link dot and state, ADV NAME,
+    /** GattRelayPanel: the permission / service warning, the link dot and state, ADV TAG,
      *  STATUS (when there is one) and the local-use note. Returns the next free row. */
     private fun gattPanel(ctx: VFDContext, fb: VFDFrameBuffer, L: VFDLayout, s: ServiceState.UiState, c: Int,
                           top: Int, w: Int): Int {
@@ -254,7 +254,8 @@ object VFDRelayScreen : VFDScreen {
         statusDot(fb, c, r, dot)
         fb.textFit(c + 7 + 5, r, VFDW.upper(label), w - 12, VFDSize.small, VFDInk.text)
         y = r + VFDW.line + 1
-        y = infoRow(fb, c, y + 2, w, "ADV NAME", RelayProtocol.DEVICE_NAME, upper = false)
+        // The relay advertises no name (the phone's Bluetooth name is left alone), only this tag.
+        y = infoRow(fb, c, y + 2, w, "ADV TAG", RelayProtocol.RELAY_TAG + "  (phone name unchanged)")
         if (s.status.isNotEmpty()) {
             y = infoRow(fb, c, y, w, "STATUS", s.status, color = VFDInk.dim)
         }

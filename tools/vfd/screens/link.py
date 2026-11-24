@@ -169,7 +169,7 @@ def backend_note():
         return ("Power on the MagicMaker ESP32. iPhone auto-connects and transmits through it while "
                 "you keep scanning. No pairing needed.")
     if BACKEND == "Android BLE":
-        return "Put Android in BLE GATT / iPhone mode. iPhone auto-connects to MagicMaker-Android."
+        return "Put Android in BLE GATT / iPhone mode. iPhone auto-connects to the Android relay."
     return ""
 
 

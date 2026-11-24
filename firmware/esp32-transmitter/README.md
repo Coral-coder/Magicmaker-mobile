@@ -20,6 +20,8 @@ protocol has to change — the app already knows how to drive this service.
 
 - Any ESP32 (classic, S3, C3, …). No extra parts. Onboard LED = status
   (on while connected / transmitting).
+- **Heltec WiFi LoRa 32 V3 / V3.1 / V3.2**: the same relay plus its OLED screen, lit with
+  the PRG button. See **Heltec WiFi LoRa 32 V3** below.
 - Powered from USB or a LiPo. See **Power** below.
 
 ## Flashing (Windows)
@@ -85,6 +87,52 @@ In the app, choose the **ESP32 transmitter** backend (Remote/Relay settings). Th
 finds the ESP32 by its service UUID and links automatically — then every transmit is sent
 to the ESP32 instead of the phone advertising, so the phone stays free to scan.
 
+## Heltec WiFi LoRa 32 V3
+
+The Heltec build is the same relay (same name, UUIDs, timing, keep-awake, newest-wins)
+plus the onboard 0.96" OLED. The white LED (GPIO35) is the status LED, as on other boards.
+The sketch detects the board when it is compiled (`board.h`); no build flags needed.
+
+**The screen is off and unpowered unless you are using it.**
+
+- Press **PRG** → the screen lights on the **STATUS** page.
+- Press again → next page: **STATUS → LAST PACKET → DEVICE → STATUS …**
+- It goes dark **10 s after the last press** (`SCREEN_ON_MS` at the top of the `.ino`).
+- Nothing else lights it: no boot splash, not a phone connecting, not a transmit.
+- At runtime PRG is just a button. It only selects flashing mode when held while you tap
+  **RST**.
+
+| Page | Shows |
+|---|---|
+| STATUS | `BLE` LINKED / WAITING FOR PHONE · `TX` IDLE / WAKE / SEND with a progress bar for the current phase · KEEP AWAKE ON / OFF · `PKT` packets sent since boot · the last packet's kind (BAND / WAND / PING) and how long ago |
+| LAST PACKET | kind, length and stream time (`WAKE+` when a wake ping ran first), then the packet hex, seven bytes a line |
+| DEVICE | `BAT` battery voltage and % (`--` without a plausible reading) · `UP` uptime · `BLE` name and the last three bytes of its address · `FW` firmware version and board |
+
+The text uses the app's VFD 5×7 dot-matrix face. `vfd_font_5x7.h` is generated from
+`tools/vfd/vfd_font.py` by `python3 tools/vfd/gen_c.py` (`--check` tells whether it is
+current). Screen code: `oled_ui.h` (power, button, battery), `oled_pages.h` (layout).
+
+**Power notes**
+
+- Screen off means: display off, I2C stopped and its pins released (nothing back-powers the
+  panel through pull-ups), OLED reset held low, and the **Vext rail (GPIO36) switched off**,
+  so the panel and the rail draw nothing. `setup()` puts it in that state first thing at boot.
+- While lit it redraws at most 4×/s and sends only the 8-pixel rows that changed. Lighting
+  it pauses the firmware's main loop for under 0.1 s (panel reset + first frame); a
+  transmit in progress at that moment runs that much longer.
+- No Wi-Fi. The SX1262 LoRa radio is never initialised (left in its power-on state).
+- CPU stays at 80 MHz and advertising is unchanged, as on other boards.
+
+**Battery**
+
+- A LiPo on the battery connector is read on GPIO1 through the board's divider (×4.9, ×1.045
+  calibration). The divider is switched on (GPIO37) only for a reading, **only while the
+  screen is lit, at most every 5 s**, and switched off again straight after.
+- The divider switch is active LOW on V3.0/V3.1 and active HIGH on V3.2: the firmware tries
+  LOW, then HIGH if that reads ~0 V, and remembers which worked.
+- The % is a rough LiPo resting-voltage estimate; it reads high while charging. Without a
+  battery it shows `--` or the charger's output voltage.
+
 ## Power (backpack use)
 
 Tuned to sip battery:
@@ -108,6 +156,10 @@ and remove the status-LED writes.
 | `DEFAULT_CMD_MS` | command stream length (wire duration overrides if sane) | 4000 ms |
 | `BEACON_ADV_MIN/MAX` | advertising interval during a burst (lower = stronger/quicker) | 20–30 ms |
 | `IDLE_ADV_MIN/MAX` | advertising interval while waiting for a phone | 200–400 ms |
+| `SCREEN_ON_MS` | Heltec V3: how long the screen stays lit after the last PRG press | 10 s |
+
+Screen internals (frame rate, battery period, panel reset timing) are at the top of
+`oled_ui.h`.
 
 ## Protocol reference
 

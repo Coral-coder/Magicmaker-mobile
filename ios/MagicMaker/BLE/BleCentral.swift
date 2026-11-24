@@ -186,7 +186,8 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
         isRelayScanning = true
-        delegate?.bleCentral(didUpdate: "Scanning for MagicMaker-Android…")
+        let target: String = AndroidRelayGattClient.targetLabel(for: RelayBackend.load())
+        delegate?.bleCentral(didUpdate: "Scanning for \(target)…")
     }
 
     func stopRelayDiscovery() {
@@ -250,16 +251,9 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
         }
     }
 
+    /// The relay service UUID, or the relay's service-data tag (the Android relay's "MM_AND").
     private func advertisesRelayService(_ advertisementData: [String: Any]) -> Bool {
-        guard let uuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] else {
-            return false
-        }
-        for uuid in uuids {
-            if AndroidRelayGattClient.uuidMatches(uuid, AndroidRelayGattClient.serviceUUID) {
-                return true
-            }
-        }
-        return false
+        AndroidRelayGattClient.advertisesRelayService(advertisementData)
     }
 
     /// The best Disney payload in one advertisement, as canonical hex. Every place a payload can

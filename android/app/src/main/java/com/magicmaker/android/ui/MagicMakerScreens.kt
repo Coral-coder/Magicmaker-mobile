@@ -2171,7 +2171,7 @@ private fun GattRelayPanel(state: ServiceState.UiState, bleGranted: Boolean) {
     } else if (!state.running) {
         Text("Service not running — grant permissions and reopen app.", style = techLabel(), color = AppColors.Amber)
     }
-    Text("ADV NAME: ${RelayProtocol.DEVICE_NAME}", style = techLabel(), color = AppColors.CyanDim)
+    Text("ADV TAG: ${RelayProtocol.RELAY_TAG} (phone name unchanged)", style = techLabel(), color = AppColors.CyanDim)
     Text(
         if (state.relayLinked) "LINK: IPHONE CONNECTED (remote active)" else "LINK: GATT LISTENING (local OK)",
         style = techLabel(),

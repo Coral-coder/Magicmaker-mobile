@@ -6,17 +6,93 @@ protocol RelayGattScanning: AnyObject {
     func resumeScanAfterRelayConnect(restartDisneyScan: Bool)
 }
 
-/// iPhone → Android BLE GATT relay (MagicMaker-Android foreground service).
+/// iPhone → BLE GATT relay: the Android relay foreground service, or the ESP32 transmitter
+/// (same service and characteristics).
 final class AndroidRelayGattClient: NSObject {
     static let serviceUUID = CBUUID(string: "A7830001-0000-1000-8000-00805F9B34FB")
     static let transmitUUID = CBUUID(string: "A7830002-0000-1000-8000-00805F9B34FB")
     static let commandUUID = CBUUID(string: "A7830003-0000-1000-8000-00805F9B34FB")
     static let statusUUID = CBUUID(string: "A7830004-0000-1000-8000-00805F9B34FB")
     static let catalogUUID = CBUUID(string: "A7830005-0000-1000-8000-00805F9B34FB")
-    static let deviceName = "MagicMaker-Android"
+    /// The Android relay's tag: ASCII service data on `serviceUUID` in its scan response. It
+    /// advertises no name, so the phone's own Bluetooth name is never changed.
+    static let androidRelayTag = "MM_AND"
+    /// What older Android builds renamed the phone to and advertised; still recognised.
+    static let legacyAndroidName = "MagicMaker-Android"
     /// The ESP32 transmitter's advertised name ("MM_ESP"); older firmware used "MagicMaker-ESP32".
     static let esp32Name = "MM_ESP"
     static let esp32Names: [String] = ["MM_ESP", "MagicMaker-ESP32"]
+
+    /// Which relay an advertisement or a name identifies.
+    enum RelayKind {
+        case android
+        case esp32
+
+        /// Whether the selected backend links to this relay.
+        func matches(_ backend: RelayBackend) -> Bool {
+            switch self {
+            case .android: return backend == .androidBle
+            case .esp32: return backend == .esp32
+            }
+        }
+    }
+
+    /// How status texts name the device the backend links to ("MM_ESP", or "the Android relay",
+    /// which keeps the phone's own name).
+    static func targetLabel(for backend: RelayBackend) -> String {
+        backend == .esp32 ? esp32Name : "the Android relay"
+    }
+
+    static func isEsp32Name(_ name: String) -> Bool {
+        esp32Names.contains(where: { (prefix: String) -> Bool in name.hasPrefix(prefix) })
+    }
+
+    /// The relay a name identifies: an ESP32 name, or the legacy Android name. Any other name
+    /// (the phone's own name included) identifies neither.
+    static func relayKind(forName name: String?) -> RelayKind? {
+        guard let name, !name.isEmpty else { return nil }
+        if isEsp32Name(name) { return .esp32 }
+        if name.hasPrefix(legacyAndroidName) { return .android }
+        return nil
+    }
+
+    /// The relay a service-data tag on `serviceUUID` identifies ("MM_AND" is the Android relay).
+    static func relayKind(forTag tag: Data) -> RelayKind? {
+        let text: String = String(decoding: tag, as: UTF8.self)
+        if text.hasPrefix(androidRelayTag) { return .android }
+        if text.hasPrefix(esp32Name) { return .esp32 }
+        return nil
+    }
+
+    /// The service data an advertisement carries on `serviceUUID`, if any.
+    static func relayServiceData(_ advertisementData: [String: Any]) -> Data? {
+        guard let entries = advertisementData[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data] else {
+            return nil
+        }
+        for (uuid, value) in entries where Self.uuidMatches(uuid, Self.serviceUUID) {
+            return value
+        }
+        return nil
+    }
+
+    /// The relay an advertisement identifies: its service-data tag first, then its advertised
+    /// name. nil when it carries neither (e.g. a primary advertisement before its scan response).
+    static func advertisedRelayKind(_ advertisementData: [String: Any]) -> RelayKind? {
+        if let tag = relayServiceData(advertisementData), let kind = relayKind(forTag: tag) {
+            return kind
+        }
+        return relayKind(forName: advertisementData[CBAdvertisementDataLocalNameKey] as? String)
+    }
+
+    /// Lists the relay service UUID, or carries service data on it. Every relay advertisement
+    /// does one or the other; a Disney packet never does.
+    static func advertisesRelayService(_ advertisementData: [String: Any]) -> Bool {
+        if let uuids = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID],
+           uuids.contains(where: { (uuid: CBUUID) -> Bool in Self.uuidMatches(uuid, Self.serviceUUID) }) {
+            return true
+        }
+        return relayServiceData(advertisementData) != nil
+    }
 
     var onStatus: ((String) -> Void)?
     var onCommandReady: (() -> Void)?
@@ -82,10 +158,22 @@ final class AndroidRelayGattClient: NSObject {
 
     static func uuidMatches(_ a: CBUUID, _ b: CBUUID) -> Bool {
         if a == b { return true }
-        let norm: (CBUUID) -> String = {
-            $0.uuidString.replacingOccurrences(of: "-", with: "").uppercased()
+        return canonicalUUIDHex(a) == canonicalUUIDHex(b)
+    }
+
+    /// The Bluetooth Base UUID after its first 32 bits (`-0000-1000-8000-00805F9B34FB`).
+    private static let baseUUIDTail: String = "00001000800000805F9B34FB"
+
+    /// A UUID as 32 upper-case hex digits, with 16- and 32-bit short forms expanded on the
+    /// Bluetooth Base UUID. The relay service A7830001-0000-1000-8000-00805F9B34FB is base-derived,
+    /// so Android advertises it (service UUID and the "MM_AND" service data) in its 32-bit form.
+    static func canonicalUUIDHex(_ uuid: CBUUID) -> String {
+        let hex: String = uuid.uuidString.replacingOccurrences(of: "-", with: "").uppercased()
+        switch hex.count {
+        case 4: return "0000" + hex + baseUUIDTail
+        case 8: return hex + baseUUIDTail
+        default: return hex
         }
-        return norm(a) == norm(b)
     }
 
     func resetForRetry(central: CBCentralManager) {
@@ -109,8 +197,10 @@ final class AndroidRelayGattClient: NSObject {
         guard !isCommandReady else { return true }
         if connectInProgress, relay != nil { return true }
 
-        let connected = central.retrieveConnectedPeripherals(withServices: [Self.serviceUUID])
-        guard let peripheral = connected.first(where: { isRelayPeripheral($0) }) else { return false }
+        let connected: [CBPeripheral] = central.retrieveConnectedPeripherals(withServices: [Self.serviceUUID])
+        let match: CBPeripheral? = connected.first(where: { isRelayPeripheral($0) })
+            ?? connected.first(where: { isConnectedAndroidRelayCandidate($0) })
+        guard let peripheral = match else { return false }
 
         if let relay, relay.identifier != peripheral.identifier {
             disconnectRelay(central: central)
@@ -171,20 +261,13 @@ final class AndroidRelayGattClient: NSObject {
         peripheral.delegate = self
     }
 
-    // Match only the device the SELECTED backend targets, by name — the ESP32 and a standalone
-    // Android relay advertise the same service UUID, so with both running we must not cross the
-    // streams: ESP32 backend links only to MM_ESP (or the older MagicMaker-ESP32 name), Android BLE
-    // only to MagicMaker-Android.
+    // Match only the device the SELECTED backend targets — the ESP32 and a standalone Android
+    // relay advertise the same service UUID, so with both running we must not cross the streams:
+    // ESP32 backend links only to MM_ESP (or the older MagicMaker-ESP32 name), Android BLE only to
+    // the Android relay (its "MM_AND" service-data tag, or the legacy MagicMaker-Android name).
     private func nameMatchesBackend(_ name: String?) -> Bool {
-        switch RelayBackend.load() {
-        case .esp32:
-            guard let name = name else { return false }
-            return Self.esp32Names.contains(where: { (prefix: String) -> Bool in name.hasPrefix(prefix) })
-        case .androidBle:
-            return name == Self.deviceName || name?.hasPrefix("MagicMaker-Android") == true
-        default:
-            return false
-        }
+        guard let kind = Self.relayKind(forName: name) else { return false }
+        return kind.matches(RelayBackend.load())
     }
 
     func isRelayPeripheral(_ peripheral: CBPeripheral) -> Bool {
@@ -194,22 +277,34 @@ final class AndroidRelayGattClient: NSObject {
         return nameMatchesBackend(peripheral.name)
     }
 
-    func isRelayAdvertisement(_ advertisementData: [String: Any]) -> Bool {
-        guard RelayBackend.load().usesBleRelayLink else { return false }
+    /// A system-connected peripheral with the relay service that may be the Android relay. It
+    /// advertises no name, so once connected CoreBluetooth knows it by the phone's own name.
+    /// Android BLE only, and never a peripheral known by an ESP32 name.
+    private func isConnectedAndroidRelayCandidate(_ peripheral: CBPeripheral) -> Bool {
+        guard RelayBackend.load() == .androidBle else { return false }
+        guard let name = peripheral.name else { return true }
+        return !Self.isEsp32Name(name)
+    }
 
+    /// `peripheralName` is what CoreBluetooth already calls the advertiser (an earlier scan
+    /// response, or its GAP name); it only keeps the Android fallback off a known ESP32.
+    func isRelayAdvertisement(_ advertisementData: [String: Any], peripheralName: String? = nil) -> Bool {
+        let backend: RelayBackend = RelayBackend.load()
+        guard backend.usesBleRelayLink else { return false }
+
+        // The tag or a known name is authoritative (tells the ESP32 from the Android relay).
+        if let kind = Self.advertisedRelayKind(advertisementData) { return kind.matches(backend) }
+
+        // Any other advertised name is not a relay.
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String
-        let services = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
-        let hasService = services.contains(where: { Self.uuidMatches($0, Self.serviceUUID) })
+        if let name, !name.isEmpty { return false }
 
-        // Name is authoritative when present (distinguishes ESP32 vs Android).
-        if let name, !name.isEmpty { return nameMatchesBackend(name) }
-        // Name not yet seen: ESP32 mode waits for the (reliable) scan-response name so it never
-        // grabs the Android relay by the shared service UUID. Android mode keeps its legacy
-        // service-UUID discovery.
-        switch RelayBackend.load() {
-        case .androidBle: return hasService
-        default: return false
-        }
+        // Neither tag nor name seen yet: ESP32 mode waits for the (reliable) scan-response name so
+        // it never grabs the Android relay by the shared service UUID. Android mode keeps its
+        // legacy service-UUID discovery, but never for an advertiser known by an ESP32 name.
+        guard backend == .androidBle else { return false }
+        if let peripheralName, Self.isEsp32Name(peripheralName) { return false }
+        return Self.advertisesRelayService(advertisementData)
     }
 
     func ensureLink(central: CBCentralManager) -> Bool {
@@ -246,7 +341,7 @@ final class AndroidRelayGattClient: NSObject {
     }
 
     func handleDiscovery(_ peripheral: CBPeripheral, advertisementData: [String: Any], central: CBCentralManager) -> Bool {
-        guard isRelayAdvertisement(advertisementData) else { return false }
+        guard isRelayAdvertisement(advertisementData, peripheralName: peripheral.name) else { return false }
         guard central.state == .poweredOn else { return true }
 
         if isCommandReady { return true }
@@ -631,7 +726,7 @@ final class AndroidRelayGattClient: NSObject {
         markProgress()
         scanCoordinator?.pauseScanForRelayConnect()
         armLinkTimeout()
-        onStatus?("Found MagicMaker-Android — connecting…")
+        onStatus?("Found \(Self.targetLabel(for: RelayBackend.load())) — connecting…")
         central.connect(peripheral, options: connectOptions)
     }
 

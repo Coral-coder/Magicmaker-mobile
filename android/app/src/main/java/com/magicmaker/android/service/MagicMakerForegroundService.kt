@@ -25,6 +25,7 @@ import com.magicmaker.android.ble.BleAdvertiser
 import com.magicmaker.android.ble.BleScanner
 import com.magicmaker.android.core.*
 import com.magicmaker.android.data.MagicStore
+import com.magicmaker.android.relay.BluetoothNameRepair
 import com.magicmaker.android.relay.HotspotManager
 import com.magicmaker.android.relay.RelayCommands
 import com.magicmaker.android.relay.RelayGattServer
@@ -504,6 +505,8 @@ class MagicMakerForegroundService : Service() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putBoolean(PREF_SERVICE_STARTED, true)
             .apply()
+        // App start: put the phone's own Bluetooth name back if an older build renamed it.
+        val nameNotice: String? = repairPhoneBluetoothName()
 
         bleAdvertiser = BleAdvertiser(
             adapter.bluetoothLeAdvertiser,
@@ -529,7 +532,7 @@ class MagicMakerForegroundService : Service() {
         publishState {
             it.copy(
                 running = true,
-                status = "Scanning",
+                status = nameNotice ?: "Scanning",
                 scanActive = true,
                 relayMode = relayMode,
                 autoEnabled = autoEnabled,
@@ -1210,6 +1213,19 @@ class MagicMakerForegroundService : Service() {
                 }
             }
         }
+        // Relay start: also undo an older build's Bluetooth rename (a no-op once it has been done).
+        repairPhoneBluetoothName()?.let { publishStatus(it) }
+    }
+
+    /**
+     * Relay builds before RelayProtocol.RELAY_TAG renamed the phone's Bluetooth adapter to
+     * "MagicMaker-Android" (system-wide) and never put it back. Undo that once per process (see
+     * BluetoothNameRepair) and return the status-line notice to show, else null. Never renames
+     * anything that is not that legacy name.
+     */
+    private fun repairPhoneBluetoothName(): String? {
+        val adapter = getSystemService(BluetoothManager::class.java)?.adapter
+        return BluetoothNameRepair.repairIfRenamed(this, adapter)?.let { BluetoothNameRepair.statusMessage(it) }
     }
 
     private fun startGattRelay(handlers: RelayCommands.Handlers) {

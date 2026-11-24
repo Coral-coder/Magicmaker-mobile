@@ -135,7 +135,7 @@ private struct LinkRelayPanel: View {
         case .esp32:
             noteText("Power on the MagicMaker ESP32. iPhone auto-connects and transmits through it while you keep scanning. No pairing needed.")
         case .androidBle:
-            noteText("Put Android in BLE GATT / iPhone mode. iPhone auto-connects to MagicMaker-Android.")
+            noteText("Put Android in BLE GATT / iPhone mode. iPhone auto-connects to the Android relay.")
         }
     }
 

@@ -270,6 +270,15 @@ class RelayGattServer(
         }
     }
 
+    /**
+     * Connectable relay advertising. No device name anywhere, and the phone's Bluetooth name is
+     * never changed (older builds called adapter.setName, renaming the phone system-wide; see
+     * BluetoothNameRepair). Primary ADV: flags + the relay service UUID. Scan response: service
+     * data on that UUID = RelayProtocol.RELAY_TAG ("MM_AND"), which the iPhone uses to tell this
+     * relay apart from the ESP32 (same service, advertises the name "MM_ESP"). The UUID is
+     * Bluetooth-Base derived, so the stack sends it in 32-bit form (service data 2 + 4 + 6 = 12
+     * bytes); even as 128-bit it would be 2 + 16 + 6 = 24, within the 31-byte limit.
+     */
     private fun startConnectableAdvertising(adapter: BluetoothAdapter) {
         connectableAdvertiser = adapter.bluetoothLeAdvertiser
         val settings = AdvertiseSettings.Builder()
@@ -277,12 +286,16 @@ class RelayGattServer(
             .setConnectable(true)
             .setTimeout(0)
             .build()
+        val serviceUuid = ParcelUuid(SERVICE_UUID)
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
-            .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addServiceUuid(serviceUuid)
             .build()
         val scanResponse = AdvertiseData.Builder()
-            .setIncludeDeviceName(true)
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addServiceData(serviceUuid, RelayProtocol.relayTagBytes())
             .build()
 
         val cb = object : AdvertiseCallback() {
@@ -295,7 +308,6 @@ class RelayGattServer(
         }
         connectableCallback = cb
         connectableAdvertiser?.startAdvertising(settings, data, scanResponse, cb)
-        runCatching { adapter.setName(RelayProtocol.DEVICE_NAME) }
     }
 
     fun pauseConnectableAdvertising() {
