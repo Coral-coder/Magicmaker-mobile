@@ -1273,6 +1273,140 @@ void checkTranscript(const std::string& path) {
   if (good) ok("transcripts");
 }
 
+// ---- constants and completeness ------------------------------------------------------------------
+// Every protocol constant in vectors.json must equal the C++ one. A constant the table below does
+// not know fails too, so a new constant in the generator gets reviewed on the C++ side.
+void checkConstants(const Value& v) {
+  struct Num {
+    const char* name;
+    int64_t value;
+  };
+  static const Num nums[] = {
+      {"proto", PROTO},
+      {"frameVersion", FRAME_VERSION},
+      {"frameHeaderLen", (int64_t)FRAME_HEADER_LEN},
+      {"attOverhead", (int64_t)ATT_OVERHEAD},
+      {"mtuMin", MTU_MIN},
+      {"mtuMax", MTU_MAX},  // not in vectors.json (yet); listed so it is checked once it is
+      {"smallMtuBelow", SMALL_MTU_BELOW},
+      {"maxMsgMin", MAXMSG_MIN},
+      {"hubMaxMsg", HUB_MAXMSG},
+      {"phoneMaxMsg", PHONE_MAXMSG},
+      {"packetMin", PACKET_MIN},
+      {"packetMax", PACKET_MAX},
+      {"labelMax", LABEL_MAX},
+      {"noteMax", NOTE_MAX},
+      {"kindMax", KIND_MAX},
+      {"bodyMax", BODY_MAX},
+      {"seenByMax", SEENBY_MAX},
+      {"hbLinksMax", HB_LINKS_MAX},
+      {"hbEvtWmMax", HB_EVTWM_MAX},
+      {"uPresence", U_PRESENCE},
+      {"uLegacyAndroid", U_LEGACY_ANDROID},
+      {"uLegacyIos", U_LEGACY_IOS},
+      {"uMinMs", U_MIN_MS},
+      {"futureBoundMs", FUTURE_BOUND_MS},
+      {"pullLimitDefault", PULL_LIMIT_DEFAULT},
+      {"pullMaxBytesDefault", PULL_MAXBYTES_DEFAULT},
+      {"pullLimitSmall", PULL_LIMIT_SMALL},
+      {"pullMaxBytesSmall", PULL_MAXBYTES_SMALL},
+      {"pullMaxBytesMin", PULL_MAXBYTES_MIN},
+      {"helloTimeoutMs", T_HELLO_MS},
+      {"helloTries", HELLO_TRIES},
+      {"incompatibleRetryMs", T_RETRY_INCOMPATIBLE_MS},
+      {"authTimeoutMs", T_AUTH_MS},
+      {"memberDeadlineMs", T_DEADLINE_MS},
+      {"pageTimeoutMs", T_PAGE_MS},
+      {"pageTries", PAGE_TRIES},
+      {"pageFailRetryMs", T_PAGE_FAIL_RETRY_MS},
+      {"livePullMs", T_LIVE_PULL_MS},
+      {"hbIntervalMs", T_HB_MS},
+      {"hbSpacingMs", T_HB_SPACING_MS},
+      {"pathFreshMs", T_PATH_FRESH_MS},
+      {"notReadyRetryMs", NOT_READY_RETRY_MS},
+      {"busyRetryMs", BUSY_RETRY_MS},
+      {"defaultRetryMs", DEFAULT_RETRY_MS},
+      {"evtWindowBits", EVT_WINDOW_BITS},
+      {"evtEpochsKept", EVT_EPOCHS_KEPT},
+      {"evtReplayDedupeMs", EVT_REPLAY_DEDUPE_MS},
+      {"evtRingAndroid", EVT_RING_ANDROID},  // not in vectors.json (yet)
+      {"tombstoneCapPhone", TOMBSTONE_CAP_PHONE},
+  };
+  const Value& c = v["constants"];
+  for (const auto& kv : c.o) {
+    const std::string& k = kv.first;
+    const Value& x = kv.second;
+    const std::string what = "constant " + k;
+    bool good = true;
+    bool known = true;
+    if (k == "fixtures") {
+      continue;  // test fixtures (keys, ids), not protocol constants
+    } else if (k == "fnv64Offset") {
+      good = expectStr(fmtHex16(FNV64_OFFSET), x.asStr(), what);
+    } else if (k == "fnv64Prime") {
+      good = expectStr(fmtHex16(FNV64_PRIME), x.asStr(), what);
+    } else if (k == "groupIdPrefix") {
+      good = expectStr(hex(GROUP_ID_PREFIX, 8), x.asStr(), what);
+    } else if (k == "proofPPrefix") {
+      good = expectStr(hex(PROOF_P_PREFIX, 8), x.asStr(), what);
+    } else if (k == "proofCPrefix") {
+      good = expectStr(hex(PROOF_C_PREFIX, 8), x.asStr(), what);
+    } else if (k == "messageTypes" || k == "errorCodes") {
+      const bool types = k == "messageTypes";
+      good = expectInt((int64_t)x.o.size(), types ? (int64_t)MSG_JOIN : (int64_t)E_NOT_READY,
+                       what + " count");
+      for (const auto& e : x.o) {
+        const int64_t code = e.second.asInt();
+        const std::string got = types ? msgTypeName((uint8_t)code) : errCodeName((uint8_t)code);
+        good = expectStr(got, e.first, what + " " + std::to_string(code)) && good;
+        if (types) good = expectStr(msgSpec((uint8_t)code) ? "spec" : "none", "spec", what + " spec") && good;
+      }
+    } else {
+      known = false;
+      for (const Num& n : nums) {
+        if (k != n.name) continue;
+        known = true;
+        good = expectInt(n.value, x.asInt(), what);
+      }
+    }
+    if (!known) {
+      fail(what, "not in the C++ constants table (test_sync.cc checkConstants)", jmini::dump(x));
+      good = false;
+    }
+    if (good) ok("constants");
+  }
+}
+
+// Every item of every group must have been checked and passed: a group the generator emptied or
+// renamed, or an item a check skipped, fails here instead of silently shrinking the coverage.
+void checkComplete(const Value& v, size_t transcripts, size_t transcriptMsgs) {
+  auto need = [](const std::string& group, size_t want) {
+    const int got = g_checked.count(group) ? g_checked[group] : 0;
+    if (want == 0) fail("completeness " + group, "an empty group", "at least one item");
+    if ((size_t)got != want)
+      fail("completeness " + group, std::to_string(got) + " passed", std::to_string(want) + " items");
+  };
+  for (const auto& kv : v.o) {
+    if (kv.first == "routing") {
+      for (const auto& r : kv.second.o) need("routing." + r.first, r.second.size());
+    } else if (kv.second.t == Value::ARR) {
+      need(kv.first, kv.second.size());
+    }
+  }
+  need("transcripts", transcripts);
+  need("transcript messages", transcriptMsgs);
+}
+
+size_t countTranscriptMsgs(const std::vector<std::string>& paths) {
+  size_t n = 0;
+  for (const auto& p : paths) {
+    const Value j = jmini::parseFile(p);  // a named value: the steps must outlive the loop
+    for (const auto& st : j["steps"].a)
+      if (st["ev"].asStr() == "msg") n++;
+  }
+  return n;
+}
+
 std::vector<std::string> listTranscripts(const std::string& dir) {
   std::vector<std::string> out;
   DIR* d = opendir(dir.c_str());
@@ -1296,6 +1430,7 @@ int main(int argc, char** argv) {
       std::printf("FAIL unexpected schema/proto\n");
       return 1;
     }
+    checkConstants(v);
     checkPrimitives(v);
     checkBodies(v);
     checkApply(v);
@@ -1308,6 +1443,7 @@ int main(int argc, char** argv) {
     const auto ts = listTranscripts(dir + "/transcripts");
     if (ts.empty()) fail("transcripts", "none found", dir + "/transcripts/*.json");
     for (const auto& p : ts) checkTranscript(p);
+    checkComplete(v, ts.size(), countTranscriptMsgs(ts));
   } catch (const std::exception& e) {
     std::printf("FAIL exception: %s\n", e.what());
     return 1;
