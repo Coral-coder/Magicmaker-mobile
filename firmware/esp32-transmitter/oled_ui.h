@@ -6,7 +6,8 @@
 // splash, not a phone connecting, not a transmit.
 //
 // On the DEVICE page a press steps on when PRG is released; holding it BUTTON_LONG_MS instead
-// picks the next battery capacity (power.h), and again every BUTTON_LONG_MS while held.
+// picks the next battery capacity (power.h), and again every BUTTON_LONG_MS while held, for at
+// most one round of the presets (a button held down in a bag must not keep the screen lit).
 //
 //   off  = SSD1306 display off, I2C stopped and its pins released (no back-powering through
 //          pull-ups), reset held LOW (never driven high into an unpowered panel), Vext HIGH so
@@ -197,17 +198,17 @@ static void screenPoll() {
   }
 
   // Held on the DEVICE page: the next battery capacity now, and again every BUTTON_LONG_MS.
-  if (gBtnDown && gBtnOnDevice && gScrPower == SCREEN_ON &&
+  if (gBtnDown && gBtnOnDevice && gScrPower == SCREEN_ON && gBtnLongSteps < BATTERY_PRESET_COUNT &&
       now - gBtnDownMs >= BUTTON_LONG_MS * (uint32_t)(gBtnLongSteps + 1)) {
     powerCycleCapacity(now);
-    if (gBtnLongSteps < 255) gBtnLongSteps++;
+    gBtnLongSteps++;
     gScrPressMs = now;
     gScrCapMarked = true;
     gScrCapMarkMs = now;
     gScrFrameNow = true;
   }
 
-  if (gScrPower != SCREEN_OFF && !gBtnDown && now - gScrPressMs >= gScrOnMs) {
+  if (gScrPower != SCREEN_OFF && now - gScrPressMs >= gScrOnMs) {
     screenPowerOff();
   } else if (gScrPower == SCREEN_POWERING && now - gScrPowerMs >= SCREEN_VEXT_SETTLE_MS) {
     screenInitPanel();
@@ -234,8 +235,10 @@ static uint32_t screenNextDueMs(uint32_t now) {
   uint32_t due = 0xFFFFFFFFu;
   if (gBtnRaw != gBtnDown) scrDueAt(due, gBtnChangeMs + BUTTON_DEBOUNCE_MS, now);
   if (gScrPower == SCREEN_OFF) return due;
-  if (gBtnDown && gBtnOnDevice) scrDueAt(due, gBtnDownMs + BUTTON_LONG_MS * (uint32_t)(gBtnLongSteps + 1), now);
-  if (!gBtnDown) scrDueAt(due, gScrPressMs + gScrOnMs, now);
+  if (gBtnDown && gBtnOnDevice && gBtnLongSteps < BATTERY_PRESET_COUNT) {
+    scrDueAt(due, gBtnDownMs + BUTTON_LONG_MS * (uint32_t)(gBtnLongSteps + 1), now);
+  }
+  scrDueAt(due, gScrPressMs + gScrOnMs, now);
   if (gScrPower == SCREEN_POWERING) scrDueAt(due, gScrPowerMs + SCREEN_VEXT_SETTLE_MS, now);
   if (gScrPower == SCREEN_ON) scrDueAt(due, gScrFrameNow ? now : gScrFrameMs + SCREEN_FRAME_MS, now);
   return due;
