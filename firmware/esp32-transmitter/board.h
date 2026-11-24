@@ -43,4 +43,12 @@ static const uint8_t HV3_OLED_SDA_PIN = 17;  // SSD1306 I2C data  (not the varia
 static const uint8_t HV3_PRG_PIN      = 0;   // PRG button, active LOW (strapping pin: only read it)
 static const uint8_t HV3_VBAT_ADC_PIN = 1;   // battery through a ~1:4.9 divider (ADC1 channel 0)
 static const uint8_t HV3_VBAT_CTRL_PIN = 37; // divider switch: V3.0/V3.1 on = LOW, V3.2 on = HIGH
+// SX1262 LoRa radio (on 3V3, not Vext; unused here, put to sleep at boot by power.h). Same pins
+// as the variant's SS / SCK / MOSI / MISO / RST_LoRa / BUSY_LoRa.
+static const uint8_t HV3_LORA_NSS_PIN  = 8;
+static const uint8_t HV3_LORA_SCK_PIN  = 9;
+static const uint8_t HV3_LORA_MOSI_PIN = 10;
+static const uint8_t HV3_LORA_MISO_PIN = 11;
+static const uint8_t HV3_LORA_RST_PIN  = 12;
+static const uint8_t HV3_LORA_BUSY_PIN = 13;
 #endif

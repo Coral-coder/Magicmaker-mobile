@@ -1,9 +1,12 @@
-// OLED screen of the Heltec WiFi LoRa 32 V3 build: power, PRG button, battery, frame updates.
+// OLED screen of the Heltec WiFi LoRa 32 V3 build: power, PRG button, frame updates.
 //
 // Power first: the panel is OFF and UNPOWERED unless you are using it. Pressing PRG (GPIO0)
 // powers it up on the STATUS page; further presses step through the pages; it powers down
 // again SCREEN_ON_MS (top of the .ino) after the last press. Nothing else wakes it: no boot
 // splash, not a phone connecting, not a transmit.
+//
+// On the DEVICE page a press steps on when PRG is released; holding it BUTTON_LONG_MS instead
+// picks the next battery capacity (power.h), and again every BUTTON_LONG_MS while held.
 //
 //   off  = SSD1306 display off, I2C stopped and its pins released (no back-powering through
 //          pull-ups), reset held LOW (never driven high into an unpowered panel), Vext HIGH so
@@ -12,8 +15,7 @@
 //
 // Everything here runs in loop() context; nothing is touched from the BLE callbacks (they run
 // on the NimBLE task). The PRG interrupt only wakes loop() (which sleeps between deadlines);
-// debouncing stays in screenPoll(). The battery divider is switched on only for a reading, only
-// while the screen is lit, at most every BATTERY_PERIOD_MS.
+// debouncing stays in screenPoll(). Battery readings and the runtime live in power.h.
 #pragma once
 
 #include "board.h"
@@ -25,6 +27,7 @@
 #include <NimBLEDevice.h>
 #include <esp_timer.h>
 #include "oled_pages.h"
+#include "power.h"
 
 // ---- Tuning ----------------------------------------------------------------------------
 static const uint32_t SCREEN_FRAME_MS       = 250;    // at most 4 frames/s while lit
@@ -33,14 +36,8 @@ static const uint16_t OLED_RESET_PULSE_MS   = 10;     // u8g2 default 100: sized
 static const uint16_t OLED_POST_RESET_MS    = 20;     // u8g2 default 100
 static const uint32_t OLED_I2C_HZ           = 400000;
 static const uint32_t BUTTON_DEBOUNCE_MS    = 25;
-static const uint32_t BATTERY_PERIOD_MS     = 5000;
-static const uint32_t BATTERY_SETTLE_MS     = 10;     // divider switched on -> ADC reading
-static const uint8_t  BATTERY_SAMPLES       = 8;
-static const float    BATTERY_DIVIDER       = 4.9f * 1.045f;  // pin mV -> battery mV
-static const int32_t  BATTERY_DIVIDER_ON_MV = 1000;   // below this the divider was off (wrong ADC_CTRL level)
-static const int32_t  BATTERY_MIN_MV        = 2500;   // plausible single-cell LiPo range
-static const int32_t  BATTERY_MAX_MV        = 4600;
-static const uint32_t BATTERY_REPORT_MAX_AGE_MS = 600000;  // STATUS reports a reading at most this old
+static const uint32_t BUTTON_LONG_MS        = 1000;   // DEVICE page: hold PRG this long for the next capacity
+static const uint32_t SCREEN_CAP_MARK_MS    = 1500;   // the changed capacity stays highlighted this long
 
 // ---- State (loop-owned) ----------------------------------------------------------------
 enum ScreenPower : uint8_t { SCREEN_OFF, SCREEN_POWERING, SCREEN_ON };
@@ -62,6 +59,11 @@ static uint32_t gScrRowHash[8];                // per 8-px row of the last frame
 static bool     gBtnRaw        = false;        // PRG level as last sampled (true = pressed)
 static bool     gBtnDown       = false;        // debounced
 static uint32_t gBtnChangeMs   = 0;
+static uint32_t gBtnDownMs     = 0;            // debounced press start
+static bool     gBtnOnDevice   = false;        // this press started on the lit DEVICE page
+static uint8_t  gBtnLongSteps  = 0;            // capacity steps taken by this press
+static bool     gScrCapMarked  = false;        // a capacity was picked ...
+static uint32_t gScrCapMarkMs  = 0;            // ... at this time
 
 // Packet stats, fed by the sketch from beginTransmit().
 static uint32_t gScrSent       = 0;
@@ -75,73 +77,7 @@ static bool     gScrLastWake   = false;
 static const char* gScrName   = "";           // BLE device name
 static char     gScrAddr[9]    = "";           // last three BLE address bytes, read once
 
-// Battery: the divider is enabled by ADC_CTRL (GPIO37), LOW on V3.0/V3.1 and HIGH on V3.2.
-// Try LOW first (the original boards); if the reading is ~0 V the divider stayed off, so try
-// the other level and remember the one that worked. Between readings the pin is released
-// (input) so the divider is off and draws nothing from the battery.
-static int32_t  gBatMv         = -1;           // < 0: no plausible reading
-static int8_t   gBatOnLevel    = -1;           // ADC_CTRL level that switches the divider on; -1 unknown
-static uint8_t  gBatLevel      = LOW;          // level under test
-static uint8_t  gBatTries      = 0;
-static bool     gBatBusy       = false;        // divider switched on, waiting to settle
-static bool     gBatDue        = false;        // read as soon as possible
-static bool     gBatAdcReady   = false;
-static uint32_t gBatMs         = 0;            // divider switched on / last reading finished
-static uint32_t gBatReadMs     = 0;            // last plausible reading
-static bool     gBatHaveRead   = false;
-
 static TaskHandle_t gScrWakeTask = nullptr;    // loop()'s task: the PRG interrupt wakes it
-
-// ---- Battery ---------------------------------------------------------------------------
-static void batteryRelease() {
-  pinMode(HV3_VBAT_CTRL_PIN, INPUT);
-  gBatBusy = false;
-}
-
-static void batterySwitchOn(uint8_t level, uint32_t now) {
-  if (!gBatAdcReady) {
-    analogSetPinAttenuation(HV3_VBAT_ADC_PIN, ADC_2_5db);  // 0..~1.25 V: a full cell is ~0.82 V at the pin
-    gBatAdcReady = true;
-  }
-  digitalWrite(HV3_VBAT_CTRL_PIN, level);
-  pinMode(HV3_VBAT_CTRL_PIN, OUTPUT);
-  digitalWrite(HV3_VBAT_CTRL_PIN, level);
-  gBatLevel = level;
-  gBatBusy = true;
-  gBatMs = now;
-}
-
-static void batteryPoll(uint32_t now, bool lit) {
-  if (!lit) {
-    if (gBatBusy) batteryRelease();
-    return;
-  }
-  if (!gBatBusy) {
-    if (gBatDue || now - gBatMs >= BATTERY_PERIOD_MS) {
-      gBatDue = false;
-      gBatTries = 0;
-      batterySwitchOn(gBatOnLevel >= 0 ? (uint8_t)gBatOnLevel : (uint8_t)LOW, now);
-    }
-    return;
-  }
-  if (now - gBatMs < BATTERY_SETTLE_MS) return;
-
-  uint32_t sum = 0;
-  for (uint8_t i = 0; i < BATTERY_SAMPLES; i++) sum += analogReadMilliVolts(HV3_VBAT_ADC_PIN);
-  batteryRelease();
-  gBatMs = now;
-  const int32_t mv = (int32_t)((float)sum / BATTERY_SAMPLES * BATTERY_DIVIDER + 0.5f);
-  if (mv >= BATTERY_DIVIDER_ON_MV) {
-    gBatOnLevel = (int8_t)gBatLevel;
-    gBatMv = (mv >= BATTERY_MIN_MV && mv <= BATTERY_MAX_MV) ? mv : -1;
-    gBatHaveRead = gBatMv >= 0;
-    gBatReadMs = now;
-  } else if (++gBatTries < 2) {
-    batterySwitchOn(gBatLevel == LOW ? HIGH : LOW, now);  // divider stayed off: other board revision
-  } else {
-    gBatMv = -1;  // nothing at either level (no battery fitted)
-  }
-}
 
 // ---- Panel power -----------------------------------------------------------------------
 // Off: also the boot state. Safe to call in any state.
@@ -159,7 +95,6 @@ static void screenPowerOff() {
   digitalWrite(HV3_VEXT_PIN, HIGH);
   gScrPower = SCREEN_OFF;
   gScrDisplayOn = false;
-  if (gBatBusy) batteryRelease();
 }
 
 static void screenPowerOn(uint32_t now) {
@@ -167,7 +102,6 @@ static void screenPowerOn(uint32_t now) {
   gScrPower = SCREEN_POWERING;
   gScrPowerMs = now;
   gScrPage = PAGE_STATUS;
-  gBatDue = true;
 }
 
 // Vext has settled: reset + SSD1306 init (u8g2 also restarts I2C on SDA 17 / SCL 18). The panel
@@ -203,7 +137,6 @@ static void screenBegin(uint32_t onMs, const char* name) {
   gScrOnMs = onMs;
   gScrName = name;
   screenPowerOff();
-  pinMode(HV3_VBAT_CTRL_PIN, INPUT);
   pinMode(HV3_PRG_PIN, INPUT_PULLUP);
   gBtnRaw = gBtnDown = (digitalRead(HV3_PRG_PIN) == LOW);  // a held button is not a press
   gBtnChangeMs = millis();
@@ -231,7 +164,12 @@ static void screenNotePacket(const uint8_t* bytes, size_t len, uint32_t cmdMs, b
   gScrLastWake = wake;
 }
 
-// loop(): PRG button, power sequencing, timeout, battery. Cheap while the screen is off.
+static void screenNextPage() {
+  gScrPage = (uint8_t)((gScrPage + 1) % PAGE_COUNT);
+  gScrFrameNow = true;
+}
+
+// loop(): PRG button, power sequencing, timeout. Cheap while the screen is off.
 static void screenPoll() {
   const uint32_t now = millis();
 
@@ -241,25 +179,43 @@ static void screenPoll() {
     gBtnChangeMs = now;
   } else if (raw != gBtnDown && now - gBtnChangeMs >= BUTTON_DEBOUNCE_MS) {
     gBtnDown = raw;
-    if (gBtnDown) {  // a press (acted on when it goes down)
-      gScrPressMs = now;
+    gScrPressMs = now;  // pressing or releasing keeps the screen lit
+    if (gBtnDown) {     // a press: acted on when it goes down, except on the DEVICE page
+      gBtnDownMs = now;
+      gBtnLongSteps = 0;
+      gBtnOnDevice = false;
       if (gScrPower == SCREEN_OFF) {
         screenPowerOn(now);
       } else if (gScrPower == SCREEN_ON) {
-        gScrPage = (uint8_t)((gScrPage + 1) % PAGE_COUNT);
-        gScrFrameNow = true;
+        if (gScrPage == PAGE_DEVICE) gBtnOnDevice = true;  // short or long: decided by the release
+        else screenNextPage();
       }  // still powering up: the press only extends the timeout
+    } else {
+      if (gBtnOnDevice && gBtnLongSteps == 0 && gScrPower == SCREEN_ON) screenNextPage();
+      gBtnOnDevice = false;
     }
   }
 
-  if (gScrPower != SCREEN_OFF && now - gScrPressMs >= gScrOnMs) {
+  // Held on the DEVICE page: the next battery capacity now, and again every BUTTON_LONG_MS.
+  if (gBtnDown && gBtnOnDevice && gScrPower == SCREEN_ON &&
+      now - gBtnDownMs >= BUTTON_LONG_MS * (uint32_t)(gBtnLongSteps + 1)) {
+    powerCycleCapacity(now);
+    if (gBtnLongSteps < 255) gBtnLongSteps++;
+    gScrPressMs = now;
+    gScrCapMarked = true;
+    gScrCapMarkMs = now;
+    gScrFrameNow = true;
+  }
+
+  if (gScrPower != SCREEN_OFF && !gBtnDown && now - gScrPressMs >= gScrOnMs) {
     screenPowerOff();
   } else if (gScrPower == SCREEN_POWERING && now - gScrPowerMs >= SCREEN_VEXT_SETTLE_MS) {
     screenInitPanel();
   }
-
-  batteryPoll(now, gScrPower != SCREEN_OFF);
 }
+
+// The panel is powered (lit or coming up): it draws current.
+static bool screenLit() { return gScrPower != SCREEN_OFF; }
 
 // loop(): true when the screen is lit and a frame is due (page change, or SCREEN_FRAME_MS).
 static bool screenFrameDue() {
@@ -272,24 +228,17 @@ static void scrDueAt(uint32_t& due, uint32_t at, uint32_t now) {
   if (ms < due) due = ms;
 }
 
-// loop(): ms until screenPoll() or a frame has work: PRG debounce, Vext settle, the next frame,
-// the screen timeout, a battery reading. 0xFFFFFFFF while the screen is dark and PRG is idle.
+// loop(): ms until screenPoll() or a frame has work: PRG debounce, a long press, Vext settle,
+// the next frame, the screen timeout. 0xFFFFFFFF while the screen is dark and PRG is idle.
 static uint32_t screenNextDueMs(uint32_t now) {
   uint32_t due = 0xFFFFFFFFu;
   if (gBtnRaw != gBtnDown) scrDueAt(due, gBtnChangeMs + BUTTON_DEBOUNCE_MS, now);
   if (gScrPower == SCREEN_OFF) return due;
-  scrDueAt(due, gScrPressMs + gScrOnMs, now);
+  if (gBtnDown && gBtnOnDevice) scrDueAt(due, gBtnDownMs + BUTTON_LONG_MS * (uint32_t)(gBtnLongSteps + 1), now);
+  if (!gBtnDown) scrDueAt(due, gScrPressMs + gScrOnMs, now);
   if (gScrPower == SCREEN_POWERING) scrDueAt(due, gScrPowerMs + SCREEN_VEXT_SETTLE_MS, now);
   if (gScrPower == SCREEN_ON) scrDueAt(due, gScrFrameNow ? now : gScrFrameMs + SCREEN_FRAME_MS, now);
-  if (gBatBusy) scrDueAt(due, gBatMs + BATTERY_SETTLE_MS, now);
-  else scrDueAt(due, gBatDue ? now : gBatMs + BATTERY_PERIOD_MS, now);
   return due;
-}
-
-// The last plausible battery reading in mV if it is recent, else -1 (STATUS "batMv").
-static int32_t screenBatteryMv() {
-  if (!gBatHaveRead || gBatMv < 0 || millis() - gBatReadMs > BATTERY_REPORT_MAX_AGE_MS) return -1;
-  return gBatMv;
 }
 
 static uint32_t screenRowHash(const uint8_t* p, size_t n) {
@@ -346,7 +295,15 @@ static void screenDraw(const ScreenInputs& in) {
   memcpy(m.lastBytes, gScrLastBytes, sizeof(m.lastBytes));
   m.lastCmdMs = gScrLastCmdMs;
   m.lastWake = gScrLastWake;
-  m.batteryMv = gBatMv;
+  m.batteryMv = powerBatteryMv();
+  m.batteryPct = (int16_t)powerBatteryPct();
+  m.batteryCapMah = powerCapacityMah();
+  m.batteryLeftMah = powerLeftMah();
+  m.runtimeMin = powerRuntimeMin();
+  m.charging = powerCharging();
+  m.usb = powerOnUsb();
+  if (gScrCapMarked && now - gScrCapMarkMs >= SCREEN_CAP_MARK_MS && !(gBtnDown && gBtnLongSteps > 0)) gScrCapMarked = false;
+  m.capMark = gScrCapMarked;
   m.uptimeS = (uint32_t)(nowUs / 1000000LL);
   m.bleName = gScrName;
   memcpy(m.bleAddr, gScrAddr, sizeof(m.bleAddr));

@@ -5,7 +5,8 @@
 // dot-matrix face (vfd_font_5x7.h), capitals only.
 //
 // Grid: 21 columns of 6 px. Row 0 is the header (page title + page dots) over a dotted rule;
-// below it six text lines, 9 px apart. Labels sit in columns 0-3, values start at column 4.
+// below it six text lines, 9 px apart. Labels sit in columns 0-3, values start at column 4
+// (17 columns).
 #pragma once
 
 #include <stdint.h>
@@ -44,8 +45,16 @@ struct ScreenModel {
   uint8_t     lastBytes[31];
   uint32_t    lastCmdMs;       // command stream length
   bool        lastWake;        // a wake-ping phase ran before the command
-  // DEVICE
+  // battery (STATUS + DEVICE)
   int32_t     batteryMv;       // < 0: no plausible reading
+  int16_t     batteryPct;      // < 0: unknown
+  uint16_t    batteryCapMah;   // rated capacity
+  int32_t     batteryLeftMah;  // < 0: unknown
+  int32_t     runtimeMin;      // < 0: unknown (no reading, charging, USB power)
+  bool        charging;
+  bool        usb;             // on the charger (USB power)
+  bool        capMark;         // the capacity is being changed (hold PRG): highlight it
+  // DEVICE
   uint32_t    uptimeS;
   const char* bleName;
   char        bleAddr[9];      // last three address bytes "dd:ee:ff"; "" when unknown
@@ -82,6 +91,18 @@ static void scrText(u8g2_t* g, int x, int y, const char* s) {
 
 static void scrLabel(u8g2_t* g, int line, const char* s) { scrText(g, 0, scrLineY(line), s); }
 static void scrValue(u8g2_t* g, int line, const char* s) { scrText(g, SCR_VALUE_X, scrLineY(line), s); }
+
+// A value drawn dark on a lit box (1 px margin), for the one being changed.
+static void scrValueInverse(u8g2_t* g, int line, const char* s) {
+  int cols = (int)strlen(s);
+  if (cols > SCR_VALUE_COLS) cols = SCR_VALUE_COLS;
+  if (cols == 0) return;
+  u8g2_DrawBox(g, (u8g2_uint_t)(SCR_VALUE_X - 1), (u8g2_uint_t)(scrLineY(line) - 1),
+               (u8g2_uint_t)(cols * VFD5X7_ADVANCE + 1), (u8g2_uint_t)(VFD5X7_ASCENT + 2));
+  u8g2_SetDrawColor(g, 0);
+  scrValue(g, line, s);
+  u8g2_SetDrawColor(g, 1);
+}
 
 // Title on the left, one dot per page on the right (the current one filled), dotted rule below.
 static void scrHeader(u8g2_t* g, const char* title, uint8_t page) {
@@ -139,14 +160,24 @@ static void scrProgramText(char* out, size_t n, uint8_t program, uint32_t interv
   }
 }
 
-// Rough state of charge of a single LiPo cell from its resting voltage (10 % steps, linear between).
-static int scrBatteryPercent(int32_t mv) {
-  static const int16_t kCurve[11] = {4190, 4050, 3990, 3890, 3800, 3720, 3630, 3530, 3420, 3300, 3100};
-  if (mv >= kCurve[0]) return 100;
-  for (int i = 1; i < 11; i++) {
-    if (mv >= kCurve[i]) return 100 - 10 * i + (int)(10 * (mv - kCurve[i]) / (kCurve[i - 1] - kCurve[i]));
-  }
-  return 0;
+// Expected runtime: "~9H 40M", "~40M" under an hour, "~99H+" from 99 hours.
+static void scrRuntime(char* out, size_t n, int32_t minutes) {
+  if (minutes < 0) minutes = 0;
+  if (minutes >= 99 * 60) snprintf(out, n, "~99H+");
+  else if (minutes >= 60) snprintf(out, n, "~%ldH %ldM", (long)(minutes / 60), (long)(minutes % 60));
+  else                    snprintf(out, n, "~%ldM", (long)minutes);
+}
+
+// STATUS line 6: "68% ~9H 40M", "68% CHARGING", "100% USB POWER", "--".
+static void scrBatteryStatus(char* out, size_t n, const ScreenModel& m) {
+  char run[12];
+  if (m.batteryPct < 0)       snprintf(out, n, "--");
+  else if (m.usb)             snprintf(out, n, "%d%% USB POWER", (int)m.batteryPct);
+  else if (m.charging)        snprintf(out, n, "%d%% CHARGING", (int)m.batteryPct);
+  else if (m.runtimeMin >= 0) {
+    scrRuntime(run, sizeof(run), m.runtimeMin);
+    snprintf(out, n, "%d%% %s", (int)m.batteryPct, run);
+  } else                      snprintf(out, n, "%d%%", (int)m.batteryPct);
 }
 
 // BLE  LINKED | WAITING FOR PHONE
@@ -154,6 +185,7 @@ static int scrBatteryPercent(int32_t mv) {
 //      KEEP AWAKE ON | TX LOOP 3S | WAND LOOP 2.5S | KEEP AWAKE OFF
 // PKT  12 SENT
 //      LAST BAND 4S AGO | LAST --
+// BAT  68% ~9H 40M | 68% CHARGING | 100% USB POWER | --
 static void scrPageStatus(u8g2_t* g, const ScreenModel& m) {
   char buf[32];
   scrHeader(g, "STATUS", PAGE_STATUS);
@@ -181,6 +213,9 @@ static void scrPageStatus(u8g2_t* g, const ScreenModel& m) {
     if (strlen(buf) > (size_t)SCR_VALUE_COLS) snprintf(buf, sizeof(buf), "LAST %s %s", scrKindName(m.lastKind), age);
     scrValue(g, 4, buf);
   }
+  scrLabel(g, 5, "BAT");
+  scrBatteryStatus(buf, sizeof(buf), m);
+  scrValue(g, 5, buf);
 }
 
 // BAND 23B WAKE+4000MS
@@ -203,32 +238,53 @@ static void scrPagePacket(u8g2_t* g, const ScreenModel& m) {
 }
 
 // BAT  3.92V 68% | --
+// CAP  272 OF 400MAH | -- OF 400MAH          (hold PRG here: the next capacity, highlighted)
+// RUN  ~9H 40M LEFT | CHARGING | USB POWER | --
 // UP   0D 02:14:09
-// BLE  MAGICMAKER-ESP32
-//      DD:EE:FF
-// FW   1.1 HELTEC V3
+// BLE  MM_ESP DD:EE:FF
+// FW   1.2 HELTEC V3
 static void scrPageDevice(u8g2_t* g, const ScreenModel& m) {
   char buf[32];
+  char run[12];
   scrHeader(g, "DEVICE", PAGE_DEVICE);
   scrLabel(g, 0, "BAT");
   if (m.batteryMv < 0) {
     scrValue(g, 0, "--");
   } else {
     snprintf(buf, sizeof(buf), "%ld.%02ldV %d%%", (long)(m.batteryMv / 1000), (long)((m.batteryMv % 1000) / 10),
-             scrBatteryPercent(m.batteryMv));
+             (int)(m.batteryPct < 0 ? 0 : m.batteryPct));
     scrValue(g, 0, buf);
   }
-  scrLabel(g, 1, "UP");
+  scrLabel(g, 1, "CAP");
+  if (m.batteryLeftMah < 0) snprintf(buf, sizeof(buf), "-- OF %uMAH", (unsigned)m.batteryCapMah);
+  else                      snprintf(buf, sizeof(buf), "%ld OF %uMAH", (long)m.batteryLeftMah, (unsigned)m.batteryCapMah);
+  if (m.capMark) scrValueInverse(g, 1, buf);
+  else           scrValue(g, 1, buf);
+  scrLabel(g, 2, "RUN");
+  if (m.batteryPct < 0) {
+    scrValue(g, 2, "--");
+  } else if (m.usb) {
+    scrValue(g, 2, "USB POWER");
+  } else if (m.charging) {
+    scrValue(g, 2, "CHARGING");
+  } else if (m.runtimeMin >= 0) {
+    scrRuntime(run, sizeof(run), m.runtimeMin);
+    snprintf(buf, sizeof(buf), "%s LEFT", run);
+    scrValue(g, 2, buf);
+  } else {
+    scrValue(g, 2, "--");
+  }
+  scrLabel(g, 3, "UP");
   const uint32_t s = m.uptimeS;
   snprintf(buf, sizeof(buf), "%luD %02lu:%02lu:%02lu", (unsigned long)(s / 86400), (unsigned long)(s / 3600 % 24),
            (unsigned long)(s / 60 % 60), (unsigned long)(s % 60));
-  scrValue(g, 1, buf);
-  scrLabel(g, 2, "BLE");
-  scrValue(g, 2, m.bleName ? m.bleName : "");
-  scrValue(g, 3, m.bleAddr[0] ? m.bleAddr : "--");
-  scrLabel(g, 4, "FW");
-  snprintf(buf, sizeof(buf), "%s %s", m.fwVersion ? m.fwVersion : "", m.boardLabel ? m.boardLabel : "");
+  scrValue(g, 3, buf);
+  scrLabel(g, 4, "BLE");
+  snprintf(buf, sizeof(buf), "%s %s", m.bleName ? m.bleName : "", m.bleAddr[0] ? m.bleAddr : "--");
   scrValue(g, 4, buf);
+  scrLabel(g, 5, "FW");
+  snprintf(buf, sizeof(buf), "%s %s", m.fwVersion ? m.fwVersion : "", m.boardLabel ? m.boardLabel : "");
+  scrValue(g, 5, buf);
 }
 
 // Clears the frame buffer and draws one page into it (nothing is sent to the panel here).

@@ -27,9 +27,11 @@
 // The build detects the board (board.h) and adds the onboard OLED, which stays dark and
 // unpowered until you press PRG (oled_ui.h). Every other board builds exactly as before.
 //
-// Power: 80 MHz CPU, the Disney beacon only on air while something is being sent, idle
-// advertising that slows down after 30 s, and loop() asleep until its next deadline (a command,
-// a phase end, an LED edge, the PRG button) instead of polling.
+// Power: 80 MHz CPU, the Disney beacon only on air while something is being sent (full power
+// only then), idle advertising that relaxes after 30 s, +3 dBm for idle advertising and the
+// link, and loop() asleep until its next deadline (a command, a phase end, an LED edge, the PRG
+// button) instead of polling. Heltec V3: the LoRa radio asleep, the screen unpowered unless PRG
+// is used, and the battery read once a minute for its % and expected runtime (power.h).
 
 #include <NimBLEDevice.h>
 #include <esp_timer.h>
@@ -63,25 +65,33 @@ static const uint32_t LOOP_DEFAULT_MS     = 3000;   // TX / wand loop interval u
 // Wire clamps (raw_burst 60..10000 ms, TX char 60..12000 ms, loops 500..60000 ms, ...) are the
 // relay contract and live in relay_proto.h.
 
-// Advertising intervals (units of 0.625 ms). Short during a burst for reliable waking; relaxed
-// while waiting for a phone, and slower still once nobody connected for a while.
+// Advertising intervals (units of 0.625 ms). Short during a burst for reliable waking; while
+// waiting for a phone, quicker for 30 s after boot or a disconnect (fast relink), then relaxed
+// (Apple's recommended 546.25 / 760 ms pair).
 static const uint16_t BEACON_ADV_MIN      = 0x20;   // 20 ms  (burst)
 static const uint16_t BEACON_ADV_MAX      = 0x30;   // 30 ms
 static const uint16_t IDLE_ADV_FAST_MIN   = 0x140;  // 200 ms (just booted / phone just left)
 static const uint16_t IDLE_ADV_FAST_MAX   = 0x280;  // 400 ms
-static const uint16_t IDLE_ADV_SLOW_MIN   = 0x664;  // 1022.5 ms (after IDLE_FAST_WINDOW_MS)
-static const uint16_t IDLE_ADV_SLOW_MAX   = 0x808;  // 1285 ms
+static const uint16_t IDLE_ADV_SLOW_MIN   = 0x36A;  // 546.25 ms (after IDLE_FAST_WINDOW_MS)
+static const uint16_t IDLE_ADV_SLOW_MAX   = 0x4C0;  // 760 ms
 static const uint32_t IDLE_FAST_WINDOW_MS = 30000;
+// TX power. Full power only where it matters, the Disney beacon (the app's TX power setting,
+// 0..3 = -12 / -6 / 0 / +9 dBm); less for advertising while waiting for a phone and for the
+// link to it (the phone is close by). Raise these to ESP_PWR_LVL_P9 if the link drops at range.
 static const esp_power_level_t BEACON_POWER[4] = {ESP_PWR_LVL_N12, ESP_PWR_LVL_N6, ESP_PWR_LVL_N0, ESP_PWR_LVL_P9};
+static const esp_power_level_t IDLE_ADV_POWER = ESP_PWR_LVL_P3;  // +3 dBm, waiting for a phone
+static const esp_power_level_t LINK_POWER     = ESP_PWR_LVL_P3;  // +3 dBm, the connection (BLE default power)
 
-// loop() sleeps until its next deadline, at most this long.
-static const uint32_t LOOP_MAX_SLEEP_MS   = 1000;
+// loop() sleeps until its next deadline (every one is tracked), at most this long.
+static const uint32_t LOOP_MAX_SLEEP_MS   = 5000;
 static const UBaseType_t CMD_QUEUE_DEPTH  = 8;
 
 #if MM_HELTEC_V3
 // Heltec V3 OLED: lit only while you use the PRG button; dark this long after the last press.
 static const uint32_t SCREEN_ON_MS        = 10000;
-// LiPo on the battery connector, rated capacity (STATUS "batMah", the screen's runtime).
+// LiPo on the battery connector, rated capacity (STATUS "batMah", the screen's runtime). A
+// capacity picked on the screen (hold PRG on the DEVICE page: 400 / 500 / 1000 / 1100 / 2000 /
+// 3000 / 5000 mAh) replaces it and is kept across reboots. Draw estimates: battery_model.h.
 static const uint16_t BATTERY_MAH         = 400;
 #endif
 
@@ -180,7 +190,7 @@ static void advApply(const AdvState& want) {
   if (want.kind == ADV_IDLE) {
     // Waiting for a phone: flags + the 128-bit service UUID (how the app finds a relay). The
     // name goes in the scan response: the UUID nearly fills the 31-byte primary advert.
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9, ESP_BLE_PWR_TYPE_ADV);
+    NimBLEDevice::setPower(IDLE_ADV_POWER, ESP_BLE_PWR_TYPE_ADV);
     ad.setFlags(0x06);
     ad.setCompleteServices(NimBLEUUID(SERVICE_UUID));
     scan.setName(DEVICE_NAME);
@@ -276,12 +286,13 @@ static void publishSnapshot() {
   RelaySnapshot s;
   gEngine.snapshot(s);
 #if MM_HELTEC_V3
-  const int32_t mv = screenBatteryMv();
+  const int32_t mv = powerBatteryMv();
   if (mv >= 0) {
     s.batMv = mv;
-    s.batPct = (int16_t)scrBatteryPercent(mv);
-    s.batMah = BATTERY_MAH;
-    s.runMin = -1;  // no runtime estimate yet
+    s.batPct = (int16_t)powerBatteryPct();
+    s.batMah = powerCapacityMah();
+    s.charging = powerCharging() || powerOnUsb();  // on USB power: no runtime either
+    s.runMin = powerRuntimeMin();
   }
 #endif
   portENTER_CRITICAL(&gSnapMux);
@@ -373,6 +384,8 @@ void setup() {
   gLoopTask = xTaskGetCurrentTaskHandle();  // Arduino runs setup() and loop() in loopTask
 #if MM_HELTEC_V3
   screenBegin(SCREEN_ON_MS, DEVICE_NAME); // first thing: the OLED's Vext rail off from boot
+  loraSleep();                            // the unused SX1262 out of standby (MM_LORA_SLEEP)
+  powerBegin(BATTERY_MAH);                // battery capacity (NVS, read only), first reading in 100 ms
 #endif
   pinMode(STATUS_LED, OUTPUT);
   digitalWrite(STATUS_LED, LOW);
@@ -391,7 +404,7 @@ void setup() {
   gCmdQueue = xQueueCreate(CMD_QUEUE_DEPTH, sizeof(ChipCmd));
 
   NimBLEDevice::init(DEVICE_NAME);
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9); // strongest TX so the band hears the beacon.
+  NimBLEDevice::setPower(LINK_POWER);     // default (the link); advertising power is set per advert
 
   gServer = NimBLEDevice::createServer();
   gServer->setCallbacks(new ServerCallbacks());
@@ -446,7 +459,8 @@ void loop() {
   ledService(now, linked);
 
 #if MM_HELTEC_V3
-  screenPoll(); // PRG button, screen power + timeout, battery (only while lit)
+  screenPoll(); // PRG button, screen power + timeout
+  powerPoll(millis(), screenLit(), gEngine.job.type != RELAY_JOB_NONE, linked > 0);  // battery, runtime model
   if (screenFrameDue()) {
     ScreenInputs in;
     memset(&in, 0, sizeof(in));
@@ -480,6 +494,8 @@ void loop() {
 #if MM_HELTEC_V3
   const uint32_t screenMs = screenNextDueMs(after);
   if (screenMs < waitMs) waitMs = screenMs;
+  const uint32_t powerMs = powerNextDueMs(after);
+  if (powerMs < waitMs) waitMs = powerMs;
 #endif
   if (waitMs < 1) waitMs = 1;
   ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(waitMs));
