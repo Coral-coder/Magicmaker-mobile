@@ -3,7 +3,8 @@ import CoreLocation
 import Foundation
 
 /// Keeps the latest location fix so each captured packet can be tagged with where it was heard.
-/// Port of the location code in Android's `MagicMakerForegroundService.kt`.
+/// Port of the location code in Android's `MagicMakerForegroundService.kt`. With "Keep running in
+/// background" on, the same updates also keep the app running while it is not on screen.
 @MainActor
 final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// The newest fix, or nil while there is none. As on Android it is used however old it is.
@@ -13,6 +14,15 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     private var status: CLAuthorizationStatus = .notDetermined
     private var wantsUpdates = false
     private var isUpdating = false
+    /// Location updates continue in the background, which keeps the app running.
+    private var keepAlive = false
+    private var inBackground = false
+    /// Background updates need the "location" background mode: setting
+    /// allowsBackgroundLocationUpdates without it raises an exception.
+    private static let locationBackgroundModeDeclared: Bool = {
+        let modes: [String] = (Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String]) ?? []
+        return modes.contains("location")
+    }()
 
     override init() {
         super.init()
@@ -50,6 +60,56 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
         status == .authorizedWhenInUse || status == .authorizedAlways
     }
 
+    /// Opt-in: location updates continue in the background, which keeps the app running. Coarse
+    /// there — nothing is heard to tag while the app is in the background.
+    func setBackgroundKeepAlive(_ on: Bool) {
+        let wanted: Bool = on && Self.locationBackgroundModeDeclared
+        if wanted == keepAlive { return }
+        keepAlive = wanted
+        manager.allowsBackgroundLocationUpdates = wanted
+        manager.showsBackgroundLocationIndicator = wanted
+        applyAccuracy()
+        if wanted {
+            // With "While Using" permission the updates must be started in the foreground.
+            if wantsUpdates && isAuthorized && !isUpdating && !inBackground {
+                beginUpdates()
+            }
+        } else if inBackground && isUpdating {
+            // Nothing to stay alive for: let iOS suspend the app.
+            manager.stopUpdatingLocation()
+            isUpdating = false
+        }
+    }
+
+    /// The app went to the background (true) or came back (false).
+    func setAppInBackground(_ background: Bool) {
+        inBackground = background
+        applyAccuracy()
+        if background {
+            if !keepAlive && isUpdating {
+                manager.stopUpdatingLocation()
+                isUpdating = false
+            }
+        } else if wantsUpdates && isAuthorized {
+            beginUpdates()
+        }
+    }
+
+    /// True while background location keeps the app running.
+    var isKeepingAppAlive: Bool { keepAlive && isUpdating }
+
+    /// Best accuracy for tagging packets in the foreground; city-level while only keeping the app
+    /// alive in the background, which costs far less battery.
+    private func applyAccuracy() {
+        if inBackground && keepAlive {
+            manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+            manager.distanceFilter = 1000
+        } else {
+            manager.desiredAccuracy = kCLLocationAccuracyBest
+            manager.distanceFilter = 3
+        }
+    }
+
     /// The location permission in a few words, for a status line.
     var authorizationDescription: String {
         switch status {
@@ -82,6 +142,9 @@ final class LocationTracker: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     private func apply(lat: Double, lng: Double, accuracy: Double) {
+        // A coarse background fix would replace the last precise one, which tags packets heard
+        // as soon as the app is back on screen.
+        if inBackground && latest != nil && accuracy > 100 { return }
         // Only the first fix is announced; later ones are read when a packet is tagged.
         if latest == nil {
             objectWillChange.send()

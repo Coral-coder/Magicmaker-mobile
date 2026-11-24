@@ -4,6 +4,7 @@ import com.magicmaker.android.core.MagicClassifier
 import com.magicmaker.android.data.MagicStore
 import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.service.ServiceState
+import com.magicmaker.android.sync.PacketSync
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -183,7 +184,7 @@ object VFDLogsScreen : VFDScreen {
         val warn: Boolean = isWarningStatus(s.status)
         val color: Int = if (warn) VFDInk.alarm else VFDInk.dim
         var y: Int = VFDW.statusLine(fb, L, c, top, w, "STATUS: " + s.status, color = color)
-        if (ctx.cached("logs.cloud", 0) { ctx.store.cloudSyncConfigured() }) {
+        if (ctx.cached("logs.cloud", PacketSync.tokenRevision) { ctx.store.cloudSyncConfigured() }) {
             y = cloudRow(ctx, c, y, w)
         }
         y = replayBanner(ctx, c, y + 1, w) - VFDW.gap

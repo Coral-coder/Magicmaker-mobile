@@ -5,7 +5,7 @@ import SwiftUI
 /// BASE COLOUR with the stored colour's hex on its label row and a true-colour swatch in every
 /// chip; CUSTOM opens the system colour picker in a sheet), TRANSMISSION SETTINGS (folds, under
 /// the standard screen's preference key: relay note, TX MODE switch, BROADCAST STRENGTH, the WAKE
-/// SLICE / COMMAND BURST / STARLIGHT WAND sliders), SCAN FILTER and ABOUT.
+/// SLICE / COMMAND BURST / STARLIGHT WAND sliders), SCAN FILTER, BACKGROUND and ABOUT.
 @MainActor
 enum VFDSettingsScreen: VFDScreen {
     static let title: String = "SETTINGS"
@@ -27,6 +27,7 @@ enum VFDSettingsScreen: VFDScreen {
         y = appearance(ctx, c, y, w)
         y = transmission(ctx, c, y, w)
         y = scanFilter(ctx, c, y, w)
+        y = background(ctx, c, y, w)
         y = about(ctx, c, y, w)
         return y
     }
@@ -118,7 +119,8 @@ private enum VFDSettingsCopy {
     /// settingsPowerNames: broadcast strength levels 0...3.
     static let powerNames: [String] = ["MIN", "LOW", "MED", "MAX"]
     static let linkedNote: String = "ANDROID RELAY LINKED — CHANGES ARE SENT TO IT TOO"
-    static let unlinkedNote: String = "TX MODE AND STRENGTH APPLY ON AN ANDROID RELAY"
+    static let esp32LinkedNote: String = "ESP32 LINKED — CHANGES ARE SENT TO IT TOO"
+    static let unlinkedNote: String = "TX MODE AND STRENGTH APPLY ON THE RELAY (ANDROID OR ESP32)"
     static let interleaveHint: String = "Alternates wake/command slices — lighter, good in-park. WAKE=slice, COMMAND=total window."
     static let sustainedHint: String = "Sustained wake stream, then command stream — strongest wake. WAKE=wake length, COMMAND=command length."
     static let strengthHint: String = "Lower = shorter range, fewer nearby bands react · default MAX"
@@ -145,8 +147,10 @@ extension VFDSettingsScreen {
             return y
         }
         let store: MagicStore = ctx.store
-        let linked: Bool = androidRelayLinked(ctx)
-        let note: String = linked ? VFDSettingsCopy.linkedNote : VFDSettingsCopy.unlinkedNote
+        var note: String = VFDSettingsCopy.unlinkedNote
+        if relayTakesSettings(ctx) {
+            note = ctx.vm.relayBackend == .esp32 ? VFDSettingsCopy.esp32LinkedNote : VFDSettingsCopy.linkedNote
+        }
         y = VFDW.textBlock(fb, L, c, y, w, note, color: VFDInk.dim)
 
         let interleave: Bool = store.getTxInterleave()
@@ -207,6 +211,24 @@ extension VFDSettingsScreen {
                             VFDSettingsScreen.scanFilterChanged(ctx, next)
                         })
         return hint(fb, c, y, w, VFDSettingsCopy.filterHint)
+    }
+
+    /// BACKGROUND: the KEEP RUNNING switch, its state line (ALARM while it needs Location) and the
+    /// note (SettingsBackgroundSection).
+    fileprivate static func background(_ ctx: VFDContext, _ c: Int, _ top: Int, _ w: Int) -> Int {
+        let fb: VFDFrameBuffer = ctx.fb
+        let L: VFDLayout = ctx.L
+        let vm: AppViewModel = ctx.vm
+        var y: Int = VFDW.section(fb, L, c, top, w, "BACKGROUND")
+        let on: Bool = vm.keepRunningInBackground
+        y = VFDW.toggle(fb, L, c, y, w, "KEEP RUNNING", on, name: "toggle:KEEP RUNNING",
+                        labelColor: on ? VFDInk.highlight : VFDInk.dim, action: {
+                            ctx.vm.setKeepRunningInBackground(!ctx.vm.keepRunningInBackground)
+                        })
+        let state: AppViewModel.BackgroundKeepAlive = vm.backgroundKeepAlive
+        let stateColor: UInt8 = state == .needsLocation ? VFDInk.alarm : VFDInk.dim
+        y = VFDW.textBlock(fb, L, c, y, w, state.text, color: stateColor)
+        return VFDW.textBlock(fb, L, c, y, w, AppViewModel.backgroundKeepAliveNote, color: VFDInk.dim)
     }
 
     /// ABOUT: MAGICMAKER v<version> (<build>).
@@ -389,14 +411,15 @@ extension VFDSettingsScreen {
 
     // MARK: actions (SettingsScreen)
 
-    /// An Android relay (BLE or WiFi) is linked and takes commands; the ESP32 takes only packets.
-    fileprivate static func androidRelayLinked(_ ctx: VFDContext) -> Bool {
-        return ctx.vm.relayBackend != .esp32 && ctx.vm.remoteLinkReady
+    /// A relay is linked and takes commands: an Android relay (BLE or WiFi) or the ESP32, which
+    /// keeps these settings in its RAM (the iPhone gives them again on every link).
+    fileprivate static func relayTakesSettings(_ ctx: VFDContext) -> Bool {
+        return ctx.vm.remoteLinkReady
     }
 
     fileprivate static func setInterleave(_ ctx: VFDContext, _ on: Bool) {
         ctx.store.saveTxInterleave(on)
-        if androidRelayLinked(ctx) {
+        if relayTakesSettings(ctx) {
             ctx.vm.sendRelaySetting("set_tx_interleave", ["enabled": on])
         } else {
             ctx.vm.noteRelaySettingPending("tx_interleave")
@@ -405,7 +428,7 @@ extension VFDSettingsScreen {
 
     fileprivate static func setTxPower(_ ctx: VFDContext, _ level: Int) {
         ctx.store.saveTxPowerLevel(level)
-        if androidRelayLinked(ctx) {
+        if relayTakesSettings(ctx) {
             ctx.vm.sendRelaySetting("set_tx_power", ["level": level])
         } else {
             ctx.vm.noteRelaySettingPending("tx_power")
@@ -414,7 +437,7 @@ extension VFDSettingsScreen {
 
     fileprivate static func commitPreamble(_ ctx: VFDContext, _ ms: Int) {
         ctx.store.saveWakeupPreambleMs(ms)
-        if androidRelayLinked(ctx) {
+        if relayTakesSettings(ctx) {
             ctx.vm.setAndroidWakeupPreamble(ms)
         } else {
             ctx.vm.noteRelaySettingPending("wakeup_preamble")
@@ -423,7 +446,7 @@ extension VFDSettingsScreen {
 
     fileprivate static func commitBurst(_ ctx: VFDContext, _ ms: Int) {
         ctx.store.saveCommandBurstMs(ms)
-        if androidRelayLinked(ctx) {
+        if relayTakesSettings(ctx) {
             ctx.vm.setAndroidCommandBurst(ms)
         } else {
             ctx.vm.noteRelaySettingPending("command_burst")
@@ -432,15 +455,16 @@ extension VFDSettingsScreen {
 
     fileprivate static func commitStarlight(_ ctx: VFDContext, _ ms: Int) {
         ctx.store.saveStarlightBurstMs(ms)
-        if androidRelayLinked(ctx) {
+        if relayTakesSettings(ctx) {
             ctx.vm.setAndroidStarlightBurst(ms)
         } else {
             ctx.vm.noteRelaySettingPending("starlight_burst")
         }
     }
 
+    /// The ESP32 does not scan, so only an Android relay is told.
     fileprivate static func scanFilterChanged(_ ctx: VFDContext, _ on: Bool) {
-        if androidRelayLinked(ctx) {
+        if ctx.vm.relayBackend != .esp32 && ctx.vm.remoteLinkReady {
             ctx.vm.sendRelaySetting("set_show_control_only", ["enabled": on])
         } else {
             ctx.vm.noteRelaySettingPending("show_control_only")

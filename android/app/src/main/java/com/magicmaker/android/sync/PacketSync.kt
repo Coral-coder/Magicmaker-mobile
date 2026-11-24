@@ -1,5 +1,6 @@
 package com.magicmaker.android.sync
 
+import android.content.Context
 import android.util.Base64
 import android.util.Log
 import com.magicmaker.android.BuildConfig
@@ -17,7 +18,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Offline-safe: the on-device library is the durable queue. Every sync reconciles
  * the full set, so failed (offline) syncs simply retry later with nothing lost.
  *
- * Dormant unless a write-scoped token is baked in (BuildConfig.BACKUP_TOKEN).
+ * Dormant until a write-scoped token is available: the one entered on this device in
+ * Settings -> CLOUD DICTIONARY (kept in its own app-private prefs file, never exported), or,
+ * for a local private build only, one baked in with -PmmBackupToken (BuildConfig.BACKUP_TOKEN).
+ * Public release builds bake in no token.
  */
 object PacketSync {
     private const val TAG = "PacketSync"
@@ -31,8 +35,43 @@ object PacketSync {
     private val running = AtomicBoolean(false)
     @Volatile private var lastSyncMs = 0L
 
-    fun configured(): Boolean =
-        BuildConfig.BACKUP_TOKEN.isNotBlank() && BuildConfig.BACKUP_REPO.isNotBlank()
+    /** App-private prefs file for the cloud token. Deliberately NOT "magicmaker" / "magicmaker_ui",
+     *  the two files MagicStore snapshots into the library file and EXPORT. */
+    const val TOKEN_PREFS: String = "magicmaker_secrets"
+    const val TOKEN_KEY: String = "cloud_dictionary_token"
+
+    /** Bumped whenever the entered token changes, so cached "is sync set up" checks refresh. */
+    @Volatile var tokenRevision: Int = 0
+        private set
+
+    private fun tokenPrefs(context: Context) =
+        context.applicationContext.getSharedPreferences(TOKEN_PREFS, Context.MODE_PRIVATE)
+
+    /** GitHub tokens are printable ASCII. Drop anything else a paste can bring (spaces, line
+     *  breaks, zero-width marks): such a character in the Authorization header makes the HTTP
+     *  stack throw an error that quotes the header, token included. */
+    private fun clean(token: String): String = token.filter { it in '!'..'~' }
+
+    /** The token entered on this device ("" when none). */
+    fun enteredToken(context: Context): String =
+        runCatching { clean(tokenPrefs(context).getString(TOKEN_KEY, "").orEmpty()) }.getOrDefault("")
+
+    /** Store (or, with a blank [token], remove) the token entered in Settings. */
+    fun saveToken(context: Context, token: String) {
+        val t = clean(token)
+        val e = tokenPrefs(context).edit()
+        if (t.isEmpty()) e.remove(TOKEN_KEY) else e.putString(TOKEN_KEY, t)
+        e.apply()
+        tokenRevision++
+        lastSyncMs = 0L
+    }
+
+    /** The entered token, else a build-time one (only non-blank in local private builds). */
+    private fun token(context: Context): String =
+        enteredToken(context).ifBlank { BuildConfig.BACKUP_TOKEN.trim() }
+
+    fun configured(context: Context): Boolean =
+        token(context).isNotBlank() && BuildConfig.BACKUP_REPO.isNotBlank()
 
     /**
      * Reconcile [local] with the remote CSV on a background thread.
@@ -40,30 +79,34 @@ object PacketSync {
      * reports progress. Throttled unless [force]; concurrent calls are ignored.
      */
     fun sync(
+        context: Context,
         local: List<Entry>,
         force: Boolean,
         onRemoteAdded: (List<Entry>) -> Unit,
         onStatus: (String) -> Unit,
     ) {
-        if (!configured()) return
+        val token = token(context)
+        if (token.isBlank() || BuildConfig.BACKUP_REPO.isBlank()) return
         if (!force && System.currentTimeMillis() - lastSyncMs < MIN_SYNC_INTERVAL_MS) return
         if (!running.compareAndSet(false, true)) return
         Thread {
             try {
                 lastSyncMs = System.currentTimeMillis()
-                runSync(local, onRemoteAdded, onStatus)
+                runSync(token, local, onRemoteAdded, onStatus)
             } catch (t: Throwable) {
-                Log.w(TAG, "sync failed", t)
-                onStatus("Sync failed: ${t.message ?: "error"}")
+                // The status line and logcat never show the token, even if an error quotes it.
+                val msg = (t.message ?: "error").replace(token, "***")
+                Log.w(TAG, "sync failed: ${t.javaClass.simpleName}: $msg")
+                onStatus("Sync failed: $msg")
             } finally {
                 running.set(false)
             }
         }.start()
     }
 
-    private fun runSync(local: List<Entry>, onRemoteAdded: (List<Entry>) -> Unit, onStatus: (String) -> Unit) {
+    private fun runSync(token: String, local: List<Entry>, onRemoteAdded: (List<Entry>) -> Unit,
+                        onStatus: (String) -> Unit) {
         val repo = BuildConfig.BACKUP_REPO
-        val token = BuildConfig.BACKUP_TOKEN
 
         var (remote, sha) = pull(repo, token)
         val newlyRemote = remote.filter { r -> local.none { it.hex == r.hex } }
@@ -107,6 +150,7 @@ object PacketSync {
                 parseCsv(text) to sha
             }
             404 -> { conn.errorStream?.close(); emptyList<Entry>() to null }
+            401 -> { conn.errorStream?.close(); throw RuntimeException("token rejected (401) - re-enter it in Settings") }
             else -> { conn.errorStream?.close(); throw RuntimeException("GET ${conn.responseCode}") }
         }
     }

@@ -377,7 +377,7 @@ extension VFDLinkScreen {
         }
     }
 
-    /// IPHONE, HINT, STATUS, EVENT, LIB SYNC, LIB, ANDROID, STORE, GATT.
+    /// IPHONE, HINT, STATUS, EVENT, LIB SYNC, LIB, ANDROID, STORE, GATT (or ESP32, RADIO, BATTERY).
     private static func statusRows(_ ctx: VFDContext, _ fb: VFDFrameBuffer, _ c: Int, _ top: Int, _ w: Int) -> Int {
         let vm: AppViewModel = ctx.vm
         let txStatus: String = ctx.tx.status
@@ -398,7 +398,7 @@ extension VFDLinkScreen {
             let wandCount: String = String(cat.wandColors.count)
             y = infoRow(fb, c, y, w, "LIB", txCount + " TX · " + wandCount + " WAND")
         }
-        // The ESP32 answers STATUS with a bare {"ok":true}, which is not an Android status.
+        // The ESP32's status is not an Android status; it gets its own rows below.
         if vm.relayBackend != .esp32, let s = vm.androidRemote {
             var text: String = s.status.uppercased()
             if s.status.isEmpty {
@@ -408,6 +408,14 @@ extension VFDLinkScreen {
             y = infoRow(fb, c, y, w, "STORE", "REV " + String(s.storeRevision))
             if s.relayLinked {
                 y = infoRow(fb, c, y, w, "GATT", "LINKED")
+            }
+        }
+        // The ESP32 (firmware 1.2+): the board, what it runs by itself, and its battery (Heltec V3).
+        if vm.relayBackend == .esp32, let s = vm.androidRemote, s.proto != nil {
+            y = infoRow(fb, c, y, w, "ESP32", s.esp32DeviceText)
+            y = infoRow(fb, c, y, w, "RADIO", s.esp32ProgramText)
+            if let battery = s.esp32BatteryText {
+                y = infoRow(fb, c, y, w, "BATTERY", battery)
             }
         }
         return y

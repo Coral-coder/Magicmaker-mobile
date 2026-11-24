@@ -287,6 +287,7 @@ fun SettingsTabScreen(app: MagicMakerApp, storeRev: Int = 0) {
         )
         SettingsAppearanceSection()
         TransmissionSettingsSection(app.store, storeRev = storeRev)
+        CloudTokenSettingsSection(app)
     }
 }
 

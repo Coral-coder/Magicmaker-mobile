@@ -65,22 +65,24 @@ enum VFDWandScreen: VFDScreen {
         return VFDWandLibraryCache.starlight(store)
     }
 
-    /// WandScreen.starlightColors.
+    /// WandScreen's Starlight list: one entry per colour, its most recently learned code
+    /// (StarlightColors.wandColors).
     fileprivate static func starlightColors(_ learned: [MagicPacket]) -> [MagicPacket] {
-        var seen = Set<Int>()
-        var out: [MagicPacket] = []
-        for packet in learned {
-            if VFDWandScreen.isNewWandHex(packet.hex) { continue }
-            let index: Int = MagicClassifier.starlightColorIndex(packet.hex) & 0x1F
-            if seen.insert(index).inserted {
-                out.append(packet)
-            }
-        }
-        return out
+        return StarlightColors.wandColors(learned)
     }
 
-    fileprivate static func isNewWandHex(_ hex: String) -> Bool {
-        return hex.uppercased().contains("CF0B00C020224EAC7807866")
+    /// WandScreen.sameColorEntry: the Starlight list's entry of the colour learned code `id` is
+    /// listed as (the loop, or an earlier pick, may be on an older code of that colour).
+    fileprivate static func sameColorEntry(_ store: MagicStore, _ library: [MagicPacket], _ id: Int64,
+                                           newWand: Bool) -> MagicPacket? {
+        if newWand { return nil }
+        guard let packet = store.findLearnedStarlight(id: id) else { return nil }
+        if StarlightColors.isNewWandHex(packet.hex) { return nil }
+        let key: String = StarlightColors.wandColorKey(hex: packet.hex)
+        for entry in library where StarlightColors.wandColorKey(hex: entry.hex) == key {
+            return entry
+        }
+        return nil
     }
 
     /// WandScreen.intervalSec: follows tx.starlightIntervalMs, or the last committed slider
@@ -108,7 +110,7 @@ enum VFDWandScreen: VFDScreen {
         }
         let candidate: Int64 = wanted
         if candidate >= 0 && !library.contains(where: { (p: MagicPacket) -> Bool in p.id == candidate }) {
-            wanted = firstId
+            wanted = VFDWandScreen.sameColorEntry(ctx.store, library, candidate, newWand: newWand)?.id ?? firstId
         }
         return wanted
     }
@@ -142,9 +144,11 @@ enum VFDWandScreen: VFDScreen {
         if picked && ui.int("pickCount") == count {
             idx = ui.int("pickIdx")
         }
+        // The entry of the heard colour (one per colour name: maybe another index of that name).
+        let heardKey: String = StarlightColors.wandColorKey(index: heard)
         var i: Int = 0
         for packet in entries {
-            if MagicClassifier.starlightColorIndex(packet.hex) == heard {
+            if StarlightColors.wandColorKey(hex: packet.hex) == heardKey {
                 idx = i
                 break
             }
@@ -737,32 +741,26 @@ enum VFDWandScreen: VFDScreen {
         ctx.menu(title: "WAND COLOR", items: items, selected: selected)
     }
 
-    /// Every learned Starlight packet the list shows as this colour.
+    /// Every learned Starlight code the list shows as this colour.
     fileprivate static func colorGroup(_ store: MagicStore, _ packet: MagicPacket) -> [MagicPacket] {
-        let index: Int = MagicClassifier.starlightColorIndex(packet.hex) & 0x1F
-        var out: [MagicPacket] = []
-        for learned in store.learnedStarlightPackets() {
-            if VFDWandScreen.isNewWandHex(learned.hex) { continue }
-            if (MagicClassifier.starlightColorIndex(learned.hex) & 0x1F) == index {
-                out.append(learned)
-            }
-        }
-        return out
+        let key: String = StarlightColors.wandColorKey(hex: packet.hex)
+        return StarlightColors.wandColorGroup(store.learnedStarlightPackets(), key: key)
     }
 
+    /// WandScreen.askDeleteColor: asks first, naming the colour and how many learned codes go.
     fileprivate static func askDeleteColor(_ ctx: VFDContext, _ packet: MagicPacket) {
-        let group: [MagicPacket] = VFDWandScreen.colorGroup(ctx.store, packet)
-        let count: Int = max(group.count, 1)
-        let label: String = count > 1 ? "\(packet.label) · \(count) learned codes" : packet.label
-        let message: String = label.uppercased() + "\n" + packet.hex
+        let key: String = StarlightColors.wandColorKey(hex: packet.hex)
+        let count: Int = max(VFDWandScreen.colorGroup(ctx.store, packet).count, 1)
+        let message: String = StarlightColors.wandDeleteLabel(key: key, count: count).uppercased()
         ctx.confirm(title: "Delete wand color?", message: message, confirmLabel: "DELETE", destructive: true,
                     action: {
                         VFDWandScreen.deleteColor(ctx, packet)
                     })
     }
 
-    /// Deletes the colour (every learned code the list shows as it). When the loop was sending
-    /// one of them it moves on to the next learned colour, or stops when none is left.
+    /// Deletes the colour (every learned code the list shows as it; the rest of the library
+    /// stays). When the loop was sending one of them it moves on to the list's first colour, or
+    /// stops when none is left.
     fileprivate static func deleteColor(_ ctx: VFDContext, _ packet: MagicPacket) {
         let store: MagicStore = ctx.store
         let tx: TxEngine = ctx.tx
@@ -778,7 +776,7 @@ enum VFDWandScreen: VFDScreen {
         }
         let loopId: Int64 = tx.starlightLoopPacketId
         if !tx.starlightLoopEnabled || !ids.contains(loopId) { return }
-        if let next = store.learnedStarlightPackets().first {
+        if let next = StarlightColors.wandColors(store.learnedStarlightPackets()).first {
             tx.setStarlightLoop(enabled: true, packetId: next.id, intervalMs: nil)
         } else {
             tx.setStarlightLoop(enabled: false, packetId: -1, intervalMs: nil)

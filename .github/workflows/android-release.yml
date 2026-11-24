@@ -1,16 +1,19 @@
 name: Android Release & OTA
 
 # Builds an APK in the cloud and publishes it to a GitHub Release so you can
-# download + sideload it manually. Stays fully private (private repo + private
-# release assets).
+# download + sideload it manually, and so the app's updater finds it.
+#
+# The repo is PUBLIC, so Release assets are public: the APK must hold no secrets.
+# It bakes in no token. The app's updater reads public Releases without one, and
+# the cloud-dictionary token is entered on the phone (Settings -> CLOUD DICTIONARY).
+# See docs/GOING_PUBLIC.md.
 #
 # Zero-setup mode: with no secrets configured, this builds a debug-signed APK —
 # installable manually, but NOT OTA-upgradable (needs the stable keystore).
 #
 # The same workflow upgrades automatically when you add secrets:
 #   - KEYSTORE_BASE64 (+ password/alias)  -> builds a SIGNED release APK (needed for OTA)
-#   - UPDATE_TOKEN (fine-grained read-only PAT) -> baked in so the app can self-update
-#     from this repo's GitHub Releases.
+#     The keystore only signs the APK; it is never part of it.
 #
 # Trigger by pushing a version tag:  git tag v1.0.1 && git push origin v1.0.1
 # Or run it manually (Actions tab) and enter a version like v1.0.1 — it will
@@ -81,6 +84,23 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Create the release tag before the build
+        # The Release step tags github.sha at the END of the ~8-minute build. If main gains a
+        # .github/workflows change meanwhile, GitHub refuses GITHUB_TOKEN (it can't have the
+        # "workflows" permission) a new tag on the older commit: most likely why v1.3.15 failed
+        # with 403 "Resource not accessible by integration". Tagging now, seconds after the push,
+        # closes that window. A tag pushed with GITHUB_TOKEN starts no other workflow run.
+        if: ${{ steps.ver.outputs.publish == 'true' && !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          TAG: ${{ steps.ver.outputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
+            echo "Tag $TAG already exists."
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+
       - name: Decide build type (signed release vs debug)
         id: plan
         env:
@@ -106,19 +126,18 @@ jobs:
           MM_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           MM_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           MM_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          UPDATE_TOKEN: ${{ secrets.UPDATE_TOKEN }}
-          BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
+        # No -PmmUpdateToken / -PmmBackupToken: the APK is a public download, so it carries no
+        # token (both properties stay optional for local private builds).
         run: |
           ./gradlew ${{ steps.plan.outputs.task }} --no-daemon \
             -PmmVersionCode=${{ github.run_number }} \
-            -PmmVersionName="${{ steps.ver.outputs.version }}" \
-            -PmmUpdateToken="$UPDATE_TOKEN" \
-            -PmmBackupToken="$BACKUP_TOKEN"
+            -PmmVersionName="${{ steps.ver.outputs.version }}"
 
       - name: Upload APK as workflow artifact
-        # Non-fatal: this is just a convenience copy. The real deliverable is the GitHub
-        # Release asset published below, which must not be blocked when the artifact storage
-        # quota is hit. Keep retention short so we stop filling the quota.
+        # Only when this run publishes no Release (no version to publish): then this is the one
+        # place the APK lands. A published run already has the public Release asset, so a second
+        # copy would only fill artifact storage. The APK holds no secrets either way.
+        if: ${{ steps.ver.outputs.publish != 'true' }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:

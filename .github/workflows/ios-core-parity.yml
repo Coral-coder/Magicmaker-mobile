@@ -83,6 +83,7 @@ jobs:
             ios/MagicMaker/Core/HexUtils.swift \
             ios/MagicMaker/Core/LabPacketBuilder.swift \
             ios/MagicMaker/Core/LabPacketTools.swift \
+            ios/MagicMaker/Core/LabSegmentEditor.swift \
             ios/MagicMaker/Core/LivePacketSection.swift \
             ios/MagicMaker/Core/LogAnalysis.swift \
             ios/MagicMaker/Core/MagicClassifier.swift \

@@ -16,24 +16,26 @@ import java.net.URL
 /**
  * Over-the-air updates straight from this repo's GitHub Releases — no Firebase.
  *
- * The APK embeds a fine-grained, read-only Personal Access Token (BuildConfig.UPDATE_TOKEN,
- * injected at build time, never committed) so it can read the private repo's latest
- * release, download the signed APK asset, and launch the installer.
+ * The repo is public, so the updater reads the latest release and downloads its APK asset
+ * WITHOUT a token (unauthenticated GitHub API). A token is still used when one is baked in
+ * (BuildConfig.UPDATE_TOKEN, only from -PmmUpdateToken on a local build, e.g. if the repo is
+ * private again); if GitHub rejects it (401: revoked or expired) the check retries without it.
  *
  * Requires the release builds to be signed with a STABLE key, or Android will reject
- * the update (signature mismatch). No-ops when no token is baked in (local/debug builds).
+ * the update (signature mismatch). No-ops when no update repo is configured.
  */
 object AppUpdater {
     private const val TAG = "AppUpdater"
     private const val API = "https://api.github.com"
 
-    private data class Release(val tag: String, val assetUrl: String, val assetName: String)
+    /** [token]: what the release lookup authenticated with ("" = anonymous); the download uses it too. */
+    private data class Release(val tag: String, val assetUrl: String, val assetName: String, val token: String)
 
     fun checkForUpdate(activity: Activity) {
-        val token = BuildConfig.UPDATE_TOKEN
+        val token = BuildConfig.UPDATE_TOKEN.trim()
         val repo = BuildConfig.UPDATE_REPO
-        if (token.isBlank() || repo.isBlank()) {
-            Log.i(TAG, "OTA not configured (no update token baked in).")
+        if (repo.isBlank()) {
+            Log.i(TAG, "OTA not configured (no update repo).")
             return
         }
         Thread {
@@ -42,46 +44,60 @@ object AppUpdater {
             } ?: return@Thread
             // Tags are monotonic, so a different tag than the one we were built from = newer.
             if (rel.tag.isBlank() || rel.tag == BuildConfig.VERSION_NAME || rel.assetUrl.isBlank()) return@Thread
-            activity.runOnUiThread { if (!activity.isFinishing) promptInstall(activity, rel, token) }
+            activity.runOnUiThread { if (!activity.isFinishing) promptInstall(activity, rel) }
         }.start()
     }
 
     private fun fetchLatest(repo: String, token: String): Release? {
-        val conn = (URL("$API/repos/$repo/releases/latest").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            setRequestProperty("Authorization", "Bearer $token")
-            setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
-            connectTimeout = 15000
-            readTimeout = 15000
+        val latestUrl = "$API/repos/$repo/releases/latest"
+        var auth = token
+        var conn = apiGet(latestUrl, auth)
+        // A revoked or expired token gets 401 even on a public repo: ask again without it.
+        if (auth.isNotBlank() && runCatching { conn.responseCode }.getOrDefault(-1) == 401) {
+            runCatching { conn.errorStream?.close() }
+            conn.disconnect()
+            Log.w(TAG, "Update token rejected (401); checking without it.")
+            auth = ""
+            conn = apiGet(latestUrl, auth)
         }
         val body = conn.successStreamOrNull()?.use { it.bufferedReader().readText() } ?: return null
         val json = JSONObject(body)
         val tag = json.optString("tag_name")
         val assets = json.optJSONArray("assets")
-        var url = ""
+        var assetUrl = ""
         var name = ""
         if (assets != null) {
             for (i in 0 until assets.length()) {
                 val a = assets.getJSONObject(i)
                 if (a.optString("name").endsWith(".apk", ignoreCase = true)) {
-                    url = a.optString("url")
+                    assetUrl = a.optString("url")
                     name = a.optString("name")
                     break
                 }
             }
         }
-        return Release(tag, url, name)
+        return Release(tag, assetUrl, name, auth)
     }
 
-    private fun promptInstall(activity: Activity, rel: Release, token: String) {
+    /** GET on the GitHub API; the Authorization header only when there is a token. */
+    private fun apiGet(url: String, token: String): HttpURLConnection =
+        (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            if (token.isNotBlank()) setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+            connectTimeout = 15000
+            readTimeout = 15000
+        }
+
+    private fun promptInstall(activity: Activity, rel: Release) {
         AlertDialog.Builder(activity)
             .setTitle("Update available")
             .setMessage("${rel.tag} is available (installed: ${BuildConfig.VERSION_NAME}). Download and install?")
             .setPositiveButton("Update") { _, _ ->
                 Toast.makeText(activity, "Downloading ${rel.tag}…", Toast.LENGTH_SHORT).show()
                 Thread {
-                    val apk = runCatching { downloadAsset(activity, rel, token) }.getOrElse {
+                    val apk = runCatching { downloadAsset(activity, rel) }.getOrElse {
                         Log.w(TAG, "OTA download failed", it); null
                     }
                     activity.runOnUiThread {
@@ -94,13 +110,14 @@ object AppUpdater {
             .show()
     }
 
-    private fun downloadAsset(activity: Activity, rel: Release, token: String): File {
+    private fun downloadAsset(activity: Activity, rel: Release): File {
         // The asset API URL with octet-stream returns a 302 to a signed CDN URL; the
         // redirect must be followed WITHOUT the GitHub auth header (the CDN rejects it).
+        // Public repo: no token, the same URL works anonymously.
         var conn = (URL(rel.assetUrl).openConnection() as HttpURLConnection).apply {
             instanceFollowRedirects = false
             requestMethod = "GET"
-            setRequestProperty("Authorization", "Bearer $token")
+            if (rel.token.isNotBlank()) setRequestProperty("Authorization", "Bearer ${rel.token}")
             setRequestProperty("Accept", "application/octet-stream")
             connectTimeout = 15000
             readTimeout = 60000

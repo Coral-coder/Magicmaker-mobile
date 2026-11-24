@@ -246,6 +246,9 @@ class MagicStore(context: Context) {
         for ((k, v) in p.all) {
             // Per-launch crash-guard mark of the VFD theme: device state, never exported.
             if (k == "vfd_launch_pending") continue
+            // The cloud dictionary token lives in its own prefs file (PacketSync.TOKEN_PREFS); never
+            // let it reach the library file or an EXPORT even if it ever lands in these files.
+            if (k == PacketSync.TOKEN_KEY) continue
             out[k] = when (v) {
                 is Boolean -> PrefEntry("b", v.toString())
                 is Int -> PrefEntry("i", v.toString())
@@ -631,12 +634,13 @@ class MagicStore(context: Context) {
 
     // ---- Cloud packet dictionary (shared packets.csv on a dedicated GitHub repo) ----
 
-    fun cloudSyncConfigured(): Boolean = PacketSync.configured()
+    fun cloudSyncConfigured(): Boolean = PacketSync.configured(appContext)
 
     /** Reconcile the on-device known packets with the shared cloud dictionary. */
     fun cloudSync(force: Boolean) {
-        if (!PacketSync.configured()) return
+        if (!PacketSync.configured(appContext)) return
         PacketSync.sync(
+            context = appContext,
             local = cloudKnownEntries(),
             force = force,
             onRemoteAdded = { importCloudEntries(it) },

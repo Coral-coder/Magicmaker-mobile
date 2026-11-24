@@ -23,6 +23,9 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
     private(set) var stateDescription: String = "Bluetooth unavailable"
     let relayGatt = AndroidRelayGattClient()
     var disneyScanRequested: (() -> Bool)?
+    /// The app is in the background, where a scan with no service filter delivers nothing: the
+    /// scan then looks for the relay service, so a relay link that drops can come back.
+    var inBackground = false
 
     override init() {
         super.init()
@@ -116,8 +119,8 @@ final class BleCentral: NSObject, CBCentralManagerDelegate, RelayGattScanning {
         stopRelayDiscovery()
         guard !isScanning else { return }
         central.scanForPeripherals(
-            withServices: nil,
-            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+            withServices: inBackground ? [AndroidRelayGattClient.serviceUUID] : nil,
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: !inBackground]
         )
         isScanning = true
         pausedDisneyScanForRelay = false

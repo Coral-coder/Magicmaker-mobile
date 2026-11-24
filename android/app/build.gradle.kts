@@ -17,16 +17,17 @@ android {
         versionCode = (project.findProperty("mmVersionCode") as String?)?.toInt() ?: 1
         versionName = (project.findProperty("mmVersionName") as String?) ?: "1.0.0"
 
-        // OTA: GitHub-Releases updater. Token is injected at build time (CI secret or
-        // local gradle property) and embedded in BuildConfig — never committed. Empty
-        // token => updater is dormant (local/debug builds).
+        // OTA: GitHub-Releases updater. The repo is public, so the updater needs no token and
+        // CI passes none (a release APK is a public download: it must hold no secrets). Optional
+        // -PmmUpdateToken only for a local build against a private repo; never committed.
         val updateToken = (project.findProperty("mmUpdateToken") as String?) ?: ""
         val updateRepo = (project.findProperty("mmUpdateRepo") as String?) ?: "Coral-coder/Magicmaker-mobile"
         buildConfigField("String", "UPDATE_TOKEN", "\"$updateToken\"")
         buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
 
-        // Cloud packet dictionary: write-scoped token + dedicated repo for the shared
-        // packets.csv. Injected at build time, never committed. Empty token => dormant.
+        // Cloud packet dictionary: dedicated repo for the shared packets.csv. The write-scoped
+        // token is entered on the phone (Settings -> CLOUD DICTIONARY); CI passes none.
+        // Optional -PmmBackupToken only for a local private build; never committed.
         val backupToken = (project.findProperty("mmBackupToken") as String?) ?: ""
         val backupRepo = (project.findProperty("mmBackupRepo") as String?) ?: "Coral-coder/magicmaker-backups"
         buildConfigField("String", "BACKUP_TOKEN", "\"$backupToken\"")

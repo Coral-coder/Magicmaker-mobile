@@ -287,7 +287,8 @@ final class AndroidRelayGattClient: NSObject {
     }
 
     /// `peripheralName` is what CoreBluetooth already calls the advertiser (an earlier scan
-    /// response, or its GAP name); it only keeps the Android fallback off a known ESP32.
+    /// response, or its GAP name); it keeps the Android fallback off a known ESP32, and lets the
+    /// ESP32 be found from its service UUID alone.
     func isRelayAdvertisement(_ advertisementData: [String: Any], peripheralName: String? = nil) -> Bool {
         let backend: RelayBackend = RelayBackend.load()
         guard backend.usesBleRelayLink else { return false }
@@ -299,8 +300,15 @@ final class AndroidRelayGattClient: NSObject {
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         if let name, !name.isEmpty { return false }
 
-        // Neither tag nor name seen yet: ESP32 mode waits for the (reliable) scan-response name so
-        // it never grabs the Android relay by the shared service UUID. Android mode keeps its
+        if backend == .esp32 {
+            // CoreBluetooth keeps the GAP name from an earlier link; with the relay service listed that is
+            // enough (a background scan may not get the scan response).
+            guard let peripheralName, Self.isEsp32Name(peripheralName) else { return false }
+            return Self.advertisesRelayService(advertisementData)
+        }
+
+        // Neither tag nor name seen yet: ESP32 mode (above) needs an ESP32 name so it never grabs
+        // the Android relay by the shared service UUID. Android mode keeps its
         // legacy service-UUID discovery, but never for an advertiser known by an ESP32 name.
         guard backend == .androidBle else { return false }
         if let peripheralName, Self.isEsp32Name(peripheralName) { return false }

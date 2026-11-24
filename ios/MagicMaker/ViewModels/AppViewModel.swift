@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SwiftUI
+import UIKit
 
 @MainActor
 final class AppViewModel: ObservableObject {
@@ -52,14 +53,11 @@ final class AppViewModel: ObservableObject {
             Task { @MainActor in
                 // A new link may be to an updated relay.
                 self?.relayLacksRawBurst = false
+                // The ESP32 keeps its settings in RAM only: they are checked again on every link.
+                self?.esp32SettingsPushed = false
                 self?.refreshAndroidCatalog()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self?.refreshAndroidRemote()
-                }
-                // The ESP32 drops keep-awake when the link goes and never reports it, so a
-                // re-link sends it again.
-                if let self, self.relayBackend == .esp32, self.keepAwakeActive {
-                    self.setKeepAwake(true, hex: self.keepAwakeHex)
                 }
             }
         }
@@ -86,6 +84,34 @@ final class AppViewModel: ObservableObject {
     /// The ping the relay streams while keep-awake is on.
     private var keepAwakeHex: String = PacketBuilder.wakeupPing
     private var lastRelayWandColorIndex: Int?
+    /// The linked ESP32's STATUS is a bare {"ok":true}: firmware before 1.2, no chip-side loops.
+    @Published private(set) var esp32FirmwareOutdated = false
+    private var esp32StatusMisses = 0
+    private var esp32SettingsPushed = false
+    /// Keep-awake and loop changes made while the ESP32 was not linked; sent in order when it links.
+    private var pendingEsp32Commands: [(action: String, params: [String: Any])] = []
+
+    /// Opt-in "Keep running in background" (SETTINGS). Device-only: capitalised key, kept out of library exports.
+    private static let keepRunningInBackgroundKey = "MMKeepRunningInBackground"
+    @Published private(set) var keepRunningInBackground: Bool = UserDefaults.standard.bool(forKey: "MMKeepRunningInBackground")
+    @Published private(set) var backgroundKeepAlive: BackgroundKeepAlive = .off
+    private var lifecycleObservers: [NSObjectProtocol] = []
+
+    /// What "Keep running in background" is doing right now (SETTINGS → BACKGROUND).
+    enum BackgroundKeepAlive: Equatable {
+        case off, needsLocation, idle, running
+
+        var text: String {
+            switch self {
+            case .off: return "OFF — iOS suspends MagicMaker soon after you leave it."
+            case .needsLocation: return "NEEDS LOCATION — allow Location “While Using” for MagicMaker in iOS Settings."
+            case .idle: return "ON — nothing is running right now, so iOS may suspend the app."
+            case .running: return "ON — MagicMaker keeps running in the background (blue location indicator)."
+            }
+        }
+    }
+
+    static let backgroundKeepAliveNote: String = "Uses background location to keep MagicMaker running while you use other apps or lock the phone — only while scanning, logging, a loop, show or replay, keep-awake or a relay link is active. Kept running: the relay link, transmits, loops, the random show, replays and the open capture log. iPhone limit: iOS does not pass band or wand packets to apps in the background, so this iPhone hears and records nothing new, and auto-responses don't fire, until you come back to MagicMaker. An Android relay keeps scanning on its own; the ESP32 runs keep-awake and its loops by itself. Uses extra battery."
 
     init() {
         let store = MagicStore()
@@ -112,8 +138,8 @@ final class AppViewModel: ObservableObject {
                 completion(false)
                 return
             }
-            // The ESP32 swaps any duration under 300 ms for its 4 s default.
-            let onAirMs: Int = self.relayBackend == .esp32 ? max(durationMs, 300) : durationMs
+            // The ESP32 clamps a TX write to 60...12000 ms (0 means its default for the packet).
+            let onAirMs: Int = self.relayBackend == .esp32 ? max(durationMs, 60) : durationMs
             self.ble.send(hex: hex, durationMs: onAirMs, onComplete: completion)
         }
         tx.radioBurst = { [weak self] hex, durationMs, completion in
@@ -129,6 +155,12 @@ final class AppViewModel: ObservableObject {
         tx.scanWanted = { [weak self] in
             self?.scan.scanActive ?? false
         }
+        tx.relayRunsLoops = { [weak self] in
+            self?.relayBackend == .esp32
+        }
+        tx.relayLoopChanged = { [weak self] loop, enabled, hex, label, intervalMs in
+            self?.relayLoopChanged(loop, enabled: enabled, hex: hex, label: label, intervalMs: intervalMs)
+        }
         scan.onAutoResponses = { [weak self] hexes, label in
             self?.tx.transmitSequence(hexes, label: label)
         }
@@ -140,11 +172,11 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    /// A replay step through the Android relay: the packet alone for exactly durationMs, no wake.
-    /// The ESP32 firmware acknowledges every command without acting on it, and an older Android
-    /// relay refuses raw_burst; both get the step as an ordinary send instead.
+    /// A replay step through the relay: the packet alone for exactly durationMs, no wake. An older
+    /// Android relay refuses raw_burst, and ESP32 firmware before 1.2 acknowledges it without
+    /// sending; both get the step as an ordinary send instead.
     private func sendRawBurst(hex: String, durationMs: Int, completion: @escaping (Bool) -> Void) {
-        if relayBackend == .esp32 || relayLacksRawBurst {
+        if relayLacksRawBurst || (relayBackend == .esp32 && esp32FirmwareOutdated) {
             tx.radioSend(hex, durationMs, completion)
             return
         }
@@ -173,6 +205,7 @@ final class AppViewModel: ObservableObject {
     private func scanWantedChanged(_ wanted: Bool) {
         syncBleListenModes()
         tx.refreshIdleTimer()
+        updateBackgroundKeepAlive()
     }
 
     /// The wand view follows the last colour heard or sent.
@@ -311,6 +344,69 @@ final class AppViewModel: ObservableObject {
         if scan.scanActive {
             reconnectRelay()
         }
+        observeAppLifecycle()
+        updateBackgroundKeepAlive()
+    }
+
+    // MARK: - Keep running in background
+
+    func setKeepRunningInBackground(_ on: Bool) {
+        if keepRunningInBackground != on { keepRunningInBackground = on }
+        UserDefaults.standard.set(on, forKey: Self.keepRunningInBackgroundKey)
+        // Asks for the permission when it was never asked; a refusal shows NEEDS LOCATION.
+        if on && !location.isAuthorized { location.start() }
+        updateBackgroundKeepAlive()
+    }
+
+    /// Something is running that the app should stay alive for in the background.
+    private var backgroundWorkActive: Bool {
+        scan.scanActive || scan.recordSessionActive || tx.txLoopEnabled || tx.starlightLoopEnabled
+            || tx.randomShowEnabled || tx.replayActive || keepAwakeActive || remoteLinkReady
+    }
+
+    /// Background location runs only while the setting is on and there is work; otherwise iOS may
+    /// suspend the app as usual. Idempotent: the 2 s relay poll calls it too.
+    func updateBackgroundKeepAlive() {
+        let work: Bool = backgroundWorkActive
+        location.setBackgroundKeepAlive(keepRunningInBackground && work)
+        let next: BackgroundKeepAlive
+        if !keepRunningInBackground {
+            next = .off
+        } else if !location.isAuthorized {
+            next = .needsLocation
+        } else if !work {
+            next = .idle
+        } else {
+            next = .running
+        }
+        if backgroundKeepAlive != next { backgroundKeepAlive = next }
+    }
+
+    private func observeAppLifecycle() {
+        if !lifecycleObservers.isEmpty { return }
+        let center: NotificationCenter = NotificationCenter.default
+        let toBackground: NSObjectProtocol = center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.appLifecycleChanged(background: true) }
+        }
+        let toForeground: NSObjectProtocol = center.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.appLifecycleChanged(background: false) }
+        }
+        lifecycleObservers = [toBackground, toForeground]
+    }
+
+    /// Decided with the work running right now before the tracker hears about the move, so
+    /// updates that should keep the app alive are never stopped on the way to the background.
+    private func appLifecycleChanged(background: Bool) {
+        updateBackgroundKeepAlive()
+        location.setAppInBackground(background)
     }
 
     /// The scan filter switch belongs to the scan engine. A choice made with the older iPhone
@@ -325,6 +421,7 @@ final class AppViewModel: ObservableObject {
     var remoteLinkHint: String {
         switch relayBackend {
         case .esp32:
+            if esp32FirmwareOutdated { return "Reflash the ESP32 — its firmware has no chip-side loops." }
             if relayGattReady { return "" }
             if ble.bleCentral.relayGatt.isLinkInProgress { return "Finishing ESP32 link…" }
             return "Power on the ESP32 — tap Retry BLE."
@@ -428,25 +525,41 @@ final class AppViewModel: ObservableObject {
 
     func setRelayBackend(_ backend: RelayBackend) {
         // Read before saving: afterwards both hold the new value.
-        let changed: Bool = backend != RelayBackend.load()
+        let previous: RelayBackend = RelayBackend.load()
+        let changed: Bool = backend != previous
+        // The ESP32 keeps running a keep-awake stream or loop by itself after the switch.
+        let esp32LeftRunning: Bool = changed && previous == .esp32
+            && (keepAwakeActive || tx.txLoopEnabled || tx.starlightLoopEnabled)
         relayBackend = backend
         RelayBackend.save(backend)
         if changed {
             androidRemote = nil
             relaySettingsPushed = false
             relayLacksRawBurst = false
+            pendingEsp32Commands = []
+            esp32SettingsPushed = false
+            esp32FirmwareOutdated = false
+            esp32StatusMisses = 0
+            if keepAwakeActive { keepAwakeActive = false }
             // A link to the other relay would keep taking every send and command: drop it so
             // discovery starts over for the selected backend.
             if let manager = ble.bleCentral.activateIfNeeded() {
                 ble.bleCentral.relayGatt.resetForRetry(central: manager)
             }
+            // The ESP32 runs the TX and wand loops itself; every other relay takes them from
+            // this iPhone's timers.
+            if previous == .esp32 { tx.clearRelayLoops() }
+            if backend == .esp32 { tx.handOverLoopsToRelay() }
         }
         if !backend.usesWifiRelay {
             androidLivePackets = []
         }
         ble.reconnectRelay()
         refreshRelayStatus()
-        statusMessage = "Relay: \(backend.label)"
+        statusMessage = esp32LeftRunning
+            ? "Relay: \(backend.label) — the ESP32 keeps running its keep-awake or loop until it relinks or is power-cycled"
+            : "Relay: \(backend.label)"
+        updateBackgroundKeepAlive()
     }
 
     func saveAndroidRelayIP(_ ip: String) {
@@ -507,7 +620,14 @@ final class AppViewModel: ObservableObject {
                     self?.androidRemote = nil
                 }
                 // Only a link that is really down resets this: a skipped GATT poll also gives nil.
-                if self?.remoteLinkReady != true { self?.relaySettingsPushed = false }
+                if self?.remoteLinkReady != true {
+                    self?.relaySettingsPushed = false
+                    self?.esp32SettingsPushed = false
+                }
+                if let self, self.relayBackend == .esp32 {
+                    self.esp32StatusRead(status)
+                    return
+                }
                 guard let status else { return }
                 self?.pushRelaySettingsIfNeeded()
                 self?.reconcileKeepAwake(status.keepAwake)
@@ -520,7 +640,8 @@ final class AppViewModel: ObservableObject {
                 }
             }
         }
-        if skipGattPoll { return }
+        // The ESP32 does not scan, so it has no live feed.
+        if skipGattPoll || relayBackend == .esp32 { return }
         remote.fetchLivePackets(central: ble.bleCentral) { [weak self] packets in
             Task { @MainActor in
                 self?.androidLivePackets = packets
@@ -565,6 +686,133 @@ final class AppViewModel: ObservableObject {
                 setAndroidStarlightBurst(store.getStarlightBurstMs())
             default:
                 break
+            }
+        }
+    }
+
+    // MARK: - ESP32 chip-side programs
+
+    /// One ESP32 status poll: a real status (firmware 1.2+) is reconciled; three polls in a row
+    /// without one on a live link mean older firmware, which answers STATUS with a bare {"ok":true}.
+    private func esp32StatusRead(_ status: AndroidRemoteStatus?) {
+        if let status {
+            esp32StatusMisses = 0
+            if esp32FirmwareOutdated { esp32FirmwareOutdated = false }
+            reconcileEsp32(status)
+            return
+        }
+        // Counted on a finished link only (STATUS found), so a link still being set up is no miss.
+        guard relayCommandReady else {
+            esp32StatusMisses = 0
+            return
+        }
+        esp32StatusMisses += 1
+        if esp32StatusMisses >= 3 && !esp32FirmwareOutdated {
+            esp32FirmwareOutdated = true
+            statusMessage = "ESP32 firmware is outdated — reflash it (firmware/esp32-transmitter)"
+        }
+    }
+
+    /// The iPhone is the authority for the ESP32's settings (held in its RAM only), and the chip
+    /// for what it runs: settings that differ are pushed once per link, changes made while it was
+    /// away go out next, and otherwise the switches follow what the chip reports.
+    private func reconcileEsp32(_ s: AndroidRemoteStatus) {
+        if !esp32SettingsPushed {
+            esp32SettingsPushed = true
+            let preambleMs: Int = store.getWakeupPreambleMs()
+            if s.wakeupPreambleMs != preambleMs { setAndroidWakeupPreamble(preambleMs) }
+            let burstMs: Int = store.getCommandBurstMs()
+            if s.commandBurstMs != burstMs { setAndroidCommandBurst(burstMs) }
+            let starlightMs: Int = store.getStarlightBurstMs()
+            if s.starlightBurstMs != starlightMs { setAndroidStarlightBurst(starlightMs) }
+            let level: Int = store.getTxPowerLevel()
+            if let reported = s.txPowerLevel, reported != level {
+                sendRelaySetting("set_tx_power", ["level": level])
+            }
+            let interleave: Bool = store.getTxInterleave()
+            if let reported = s.txInterleave, reported != interleave {
+                sendRelaySetting("set_tx_interleave", ["enabled": interleave])
+            }
+        }
+        if !pendingEsp32Commands.isEmpty {
+            let pending = pendingEsp32Commands
+            pendingEsp32Commands = []
+            keepAwakeChangedAt = Date()
+            for item in pending {
+                sendEsp32Program(item.action, item.params)
+            }
+            // This status predates them; the next one shows the result.
+            return
+        }
+        // A status read around the time of a change may predate it.
+        if Date().timeIntervalSince(keepAwakeChangedAt) < 4 { return }
+        let awake: Bool = s.keepAwake ?? false
+        if keepAwakeActive != awake { keepAwakeActive = awake }
+        if awake, let hex = s.keepAwakeHex, !hex.isEmpty {
+            keepAwakeHex = HexUtils.canonicalHex(hex)
+        }
+        tx.adoptRelayLoops(
+            txOn: s.txLoopEnabled,
+            txHex: s.txLoopHex,
+            txLabel: s.txLoopLabel,
+            txIntervalMs: Int(clamping: s.txLoopIntervalMs),
+            wandOn: s.starlightLoopEnabled,
+            wandHex: s.starlightLoopHex,
+            wandLabel: s.starlightLoopLabel,
+            wandIntervalMs: Int(clamping: s.starlightIntervalMs)
+        )
+    }
+
+    /// The TX engine changed a loop the ESP32 runs: the chip is told (now, or when it links).
+    private func relayLoopChanged(_ loop: TxEngine.RelayLoop, enabled: Bool, hex: String?, label: String, intervalMs: Int) {
+        let action: String
+        switch loop {
+        case .tx: action = "set_tx_loop"
+        case .wand: action = "set_starlight_loop"
+        }
+        var params: [String: Any] = ["enabled": enabled]
+        if enabled {
+            guard let hex else { return }
+            params["hex"] = HexUtils.canonicalHex(hex)
+            params["intervalMs"] = intervalMs
+            if !label.isEmpty { params["label"] = label }
+            // The chip runs one program at a time: a loop ends its keep-awake stream.
+            if keepAwakeActive { keepAwakeActive = false }
+        }
+        keepAwakeChangedAt = Date()
+        sendEsp32Program(action, params)
+    }
+
+    /// set_tx_loop / set_starlight_loop for the ESP32: the packet itself and its label, no `packetId`.
+    private func esp32LoopParams(enabled: Bool, intervalMs: Int?, hex: String?, label: String?) -> [String: Any] {
+        var params: [String: Any] = ["enabled": enabled]
+        if let hex, !hex.isEmpty { params["hex"] = HexUtils.canonicalHex(hex) }
+        if let label, !label.isEmpty { params["label"] = label }
+        if let intervalMs { params["intervalMs"] = intervalMs }
+        return params
+    }
+
+    /// Sends a keep-awake or loop command to the ESP32. While it is not linked the newest command
+    /// of each kind waits, and they go out in order on the next link.
+    private func sendEsp32Program(_ action: String, _ params: [String: Any]) {
+        guard remoteLinkReady else {
+            pendingEsp32Commands.removeAll { $0.action == action }
+            pendingEsp32Commands.append((action: action, params: params))
+            statusMessage = "ESP32 not linked — sent when it links"
+            return
+        }
+        let name: String
+        switch action {
+        case "keep_awake": name = "keep-awake"
+        case "set_tx_loop": name = "TX loop"
+        case "set_starlight_loop": name = "wand loop"
+        default: name = action
+        }
+        let on: Bool = params["enabled"] as? Bool ?? false
+        remote.sendCommand(action, params: params, central: ble.bleCentral) { [weak self] ok in
+            Task { @MainActor in
+                self?.statusMessage = ok ? "ESP32 \(name) \(on ? "ON" : "OFF")" : "ESP32 \(action) failed"
+                self?.refreshAndroidRemote()
             }
         }
     }
@@ -704,14 +952,19 @@ final class AppViewModel: ObservableObject {
     }
 
     func mbleTapAndroid(tokenHex: String, durationMs: Int = 5000) {
+        let via: String = relayBackend == .esp32 ? "ESP32" : "Android"
         remote.sendCommand("mble_tap", params: ["token": tokenHex, "durationMs": durationMs], central: ble.bleCentral) { [weak self] ok in
             Task { @MainActor in
-                self?.statusMessage = ok ? "MBLE tap ADV via Android" : "MBLE tap failed"
+                self?.statusMessage = ok ? "MBLE tap ADV via \(via)" : "MBLE tap failed"
             }
         }
     }
 
     func setAndroidScan(_ enabled: Bool) {
+        guard relayBackend != .esp32 else {
+            statusMessage = "The ESP32 does not scan"
+            return
+        }
         remote.sendCommand("set_scan", params: ["enabled": enabled], central: ble.bleCentral) { [weak self] ok in
             Task { @MainActor in
                 self?.statusMessage = ok ? "Android scan \(enabled ? "ON" : "OFF")" : "Scan command failed"
@@ -738,6 +991,13 @@ final class AppViewModel: ObservableObject {
         let pingHex = HexUtils.canonicalHex(hex)
         // The relay keeps its earlier ping when it is given one too short to be a packet.
         if pingHex.count >= 8 { keepAwakeHex = pingHex }
+        updateBackgroundKeepAlive()
+        if relayBackend == .esp32 {
+            // The ESP32 streams by itself, through phone disconnects; a refused command is put
+            // right by the next status read.
+            sendEsp32Program("keep_awake", ["enabled": enabled, "hex": pingHex])
+            return
+        }
         remote.sendCommand("keep_awake", params: ["enabled": enabled, "hex": pingHex], central: ble.bleCentral) { [weak self] ok in
             Task { @MainActor in
                 if !ok { self?.keepAwakeActive = !enabled }
@@ -777,7 +1037,9 @@ final class AppViewModel: ObservableObject {
             setAndroidStarlightLoop(
                 enabled: true,
                 packetId: preset.id,
-                intervalMs: intervalMs ?? Int(androidRemote?.starlightIntervalMs ?? 3000)
+                intervalMs: intervalMs ?? Int(androidRemote?.starlightIntervalMs ?? 3000),
+                hex: preset.hex,
+                label: preset.label
             )
             return
         }
@@ -812,7 +1074,18 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func setAndroidStarlightLoop(enabled: Bool, packetId: Int64? = nil, intervalMs: Int? = nil) {
+    /// `hex` / `label` are for the ESP32, which has no library: it gets the packet, never a `packetId`.
+    func setAndroidStarlightLoop(
+        enabled: Bool,
+        packetId: Int64? = nil,
+        intervalMs: Int? = nil,
+        hex: String? = nil,
+        label: String? = nil
+    ) {
+        if relayBackend == .esp32 {
+            sendEsp32Program("set_starlight_loop", esp32LoopParams(enabled: enabled, intervalMs: intervalMs, hex: hex, label: label))
+            return
+        }
         var params: [String: Any] = ["enabled": enabled]
         if let packetId { params["packetId"] = packetId }
         if let intervalMs { params["intervalMs"] = intervalMs }
@@ -825,7 +1098,17 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func setAndroidTxLoop(enabled: Bool, packetId: Int64? = nil, intervalMs: Int? = nil) {
+    func setAndroidTxLoop(
+        enabled: Bool,
+        packetId: Int64? = nil,
+        intervalMs: Int? = nil,
+        hex: String? = nil,
+        label: String? = nil
+    ) {
+        if relayBackend == .esp32 {
+            sendEsp32Program("set_tx_loop", esp32LoopParams(enabled: enabled, intervalMs: intervalMs, hex: hex, label: label))
+            return
+        }
         var params: [String: Any] = ["enabled": enabled]
         if let packetId { params["packetId"] = packetId }
         if let intervalMs { params["intervalMs"] = intervalMs }
@@ -963,6 +1246,10 @@ final class AppViewModel: ObservableObject {
     }
 
     func setAndroidAuto(_ enabled: Bool) {
+        guard relayBackend != .esp32 else {
+            statusMessage = "The ESP32 does not scan"
+            return
+        }
         remote.sendCommand("set_auto", params: ["enabled": enabled], central: ble.bleCentral) { [weak self] ok in
             Task { @MainActor in
                 self?.statusMessage = ok ? "Android auto \(enabled ? "ON" : "OFF")" : "Android auto command failed"
@@ -972,6 +1259,10 @@ final class AppViewModel: ObservableObject {
     }
 
     func setAndroidRecording(_ enabled: Bool) {
+        guard relayBackend != .esp32 else {
+            statusMessage = "The ESP32 does not scan"
+            return
+        }
         remote.sendCommand("set_recording", params: ["enabled": enabled], central: ble.bleCentral) { [weak self] ok in
             Task { @MainActor in
                 self?.statusMessage = ok ? "Android log \(enabled ? "REC" : "OFF")" : "Android log command failed"

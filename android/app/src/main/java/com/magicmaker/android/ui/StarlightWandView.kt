@@ -75,6 +75,8 @@ fun StarlightWandView(
     onTransmit: (MagicPacket) -> Unit,
     modifier: Modifier = Modifier,
     sendEnabled: Boolean = true,
+    /** With it the dropdown also offers to delete the colour it shows (the caller confirms). */
+    onDelete: ((MagicPacket) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val pulse1 = remember { Animatable(0f) }
@@ -96,9 +98,10 @@ fun StarlightWandView(
         val heard = displayColorIndex and 0x1F
         glowColorIndex = heard
         if (colors.isEmpty()) return@LaunchedEffect
-        val heardIdx = colors.indexOfFirst {
-            MagicClassifier.starlightColorIndex(it.hex) == heard
-        }
+        // The entry of the heard colour: the list has one per colour name, which may be another
+        // index of that name than the one heard.
+        val heardKey = StarlightColors.wandColorKey(heard)
+        val heardIdx = colors.indexOfFirst { StarlightColors.wandColorKey(it.hex) == heardKey }
         if (heardIdx >= 0) selectedIndex = heardIdx
     }
 
@@ -227,6 +230,23 @@ fun StarlightWandView(
                                     selectedIndex = idx
                                     glowColorIndex = MagicClassifier.starlightColorIndex(packet.hex)
                                     expanded = false
+                                },
+                            )
+                        }
+                        val deleteTarget: MagicPacket? = selected
+                        if (onDelete != null && deleteTarget != null) {
+                            HorizontalDivider(color = AppColors.PanelLine, thickness = 0.5.dp)
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "DELETE " + StarlightColors.wandColorKey(deleteTarget.hex).uppercase(),
+                                        style = techLabel(),
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                },
+                                onClick = {
+                                    expanded = false
+                                    onDelete(deleteTarget)
                                 },
                             )
                         }

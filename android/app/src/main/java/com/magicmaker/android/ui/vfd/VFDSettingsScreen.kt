@@ -3,7 +3,11 @@ package com.magicmaker.android.ui.vfd
 import com.magicmaker.android.BuildConfig
 import com.magicmaker.android.core.TransmitTiming
 import com.magicmaker.android.data.MagicStore
+import com.magicmaker.android.service.ServiceState
+import com.magicmaker.android.sync.PacketSync
+import com.magicmaker.android.ui.CLOUD_TOKEN_EXPLANATION
 import com.magicmaker.android.ui.UiPrefs
+import com.magicmaker.android.ui.cloudTokenStateText
 import kotlin.math.roundToInt
 
 /**
@@ -13,7 +17,8 @@ import kotlin.math.roundToInt
  * chip; CUSTOM opens the colour picker), TRANSMISSION SETTINGS (folds under the standard screen's
  * preference: TX MODE switch, BROADCAST STRENGTH, the WAKE SLICE / COMMAND BURST / STARLIGHT WAND
  * sliders, each with its hint), SCAN FILTER (the store's show-control filter, the same switch as
- * the SCAN tab's SHOW-CTRL / ALL RAW chip) and ABOUT (the installed version).
+ * the SCAN tab's SHOW-CTRL / ALL RAW chip), CLOUD DICTIONARY (Android only: the cloud token,
+ * entered on the phone) and ABOUT (the installed version).
  * Port of ios/MagicMaker/VFD/VFDSettingsScreen.swift. Android itself transmits, so the iPhone's
  * relay note (changes sent to a linked Android relay) has no counterpart here.
  */
@@ -35,6 +40,7 @@ object VFDSettingsScreen : VFDScreen {
         y = appearance(ctx, c, y, w)
         y = transmission(ctx, c, y, w)
         y = scanFilter(ctx, c, y, w)
+        y = cloud(ctx, c, y, w)
         y = about(ctx, c, y, w)
         return y
     }
@@ -195,6 +201,46 @@ object VFDSettingsScreen : VFDScreen {
                             ctx.store.saveShowControlOnly(!ctx.store.getShowControlOnly())
                         })
         return hint(fb, c, y, w, filterHint)
+    }
+
+    /** CLOUD DICTIONARY (Android only, the iPhone has no cloud sync): the token state, SET TOKEN (a
+     *  prompt; the token is stored by PacketSync in its own prefs file, never shown or exported) and
+     *  CLEAR, then the explanation. The standard screen's CloudTokenSettingsSection. */
+    private fun cloud(ctx: VFDContext, c: Int, top: Int, w: Int): Int {
+        val fb: VFDFrameBuffer = ctx.fb
+        val L: VFDLayout = ctx.L
+        var y: Int = VFDW.section(fb, L, c, top, w, "CLOUD DICTIONARY")
+        val set: Boolean = ctx.cached("settings.cloudTokenSet", PacketSync.tokenRevision) {
+            PacketSync.enteredToken(ctx.context).isNotBlank()
+        }
+        fb.textFit(c, y, cloudTokenStateText(set), w, VFDSize.small, if (set) VFDInk.highlight else VFDInk.dim)
+        y += VFDW.line
+        y = VFDW.buttons(fb, L, c, y, w, listOf("SET TOKEN", "CLEAR"), primary = if (set) null else 0,
+                         enabled = listOf(true, set), onSelect = { index ->
+                             if (index == 0) promptToken(ctx) else clearToken(ctx)
+                         })
+        return hint(fb, c, y, w, CLOUD_TOKEN_EXPLANATION)
+    }
+
+    /** "Cloud dictionary token" prompt (URL keyboard: no auto-capital or autocorrect). Blank = no change. */
+    private fun promptToken(ctx: VFDContext) {
+        ctx.prompt("CLOUD DICTIONARY TOKEN", "GitHub token for ${BuildConfig.BACKUP_REPO}. Stays on this phone.",
+                   keyboard = VFDKeyboard.url) { typed ->
+            if (typed.isNotBlank()) {
+                PacketSync.saveToken(ctx.context, typed)
+                ctx.store.cloudSync(force = true)
+                ctx.redraw()
+            }
+        }
+    }
+
+    private fun clearToken(ctx: VFDContext) {
+        ctx.confirm("CLEAR CLOUD TOKEN", "Cloud sync stops on this phone until a token is entered again.",
+                    confirmLabel = "CLEAR", destructive = true) {
+            PacketSync.saveToken(ctx.context, "")
+            ServiceState.setCloudSyncStatus("")
+            ctx.redraw()
+        }
     }
 
     /** ABOUT: MAGICMAKER v<version> (<build>). */

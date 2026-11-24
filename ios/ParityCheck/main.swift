@@ -576,9 +576,163 @@ func checkPacket(_ index: Int, _ value: Any) {
     check("slotColors", hex, rec["slotColors"], jInts(LabPacketBuilder.slotColors(hex)))
     check("withColors", hex, rec["withColors"], J.str(LabPacketBuilder.withColors(hex, recolour)))
 
+    checkSegmentEditor(hex)
+
     for key in rec.keys {
         if !knownPacketKeys.contains(key) { unknownPacketKeys.insert(key) }
     }
+}
+
+// MARK: - Lab segment editor
+// iOS-only (Android has no segment editor), so these compare the editor with itself and with the
+// worked examples in its spec rather than with vectors.json.
+
+func manualText(_ result: LabSegmentEditor.ManualResult) -> String {
+    switch result {
+    case .applied(let h): return "applied " + h
+    case .invalid(let why): return "invalid " + why
+    }
+}
+
+/// (a) every located segment's hex is what sits at its offset; (b) typing a fixed-size block's own
+/// bytes back gives the same packet; (c) tail B3 is `withVibration(h, 3)` when the tail is the last
+/// byte; (d) the builder state rebuilds the packet exactly.
+func checkSegmentEditor(_ hex: String) {
+    let canonical: String = HexUtils.canonicalHex(hex)
+    let chars: [Character] = Array(canonical)
+    let segments: [DisneyTlv.Segment] = DisneyTlv.anatomy(hex)
+    let offsets: [Int?] = LabSegmentEditor.locate(hex)
+    check("segmentEditor.locateCount", hex, "\(segments.count)", J.str("\(offsets.count)"))
+    let exact: Bool = DisneyTlv.parse(hex)?.exact == true
+    let lastByte: Int = canonical.count / 2 - 1
+    var i: Int = 0
+    while i < segments.count && i < offsets.count {
+        let seg: DisneyTlv.Segment = segments[i]
+        let subject: String = hex + " #\(i)"
+        if let o = offsets[i] {
+            let from: Int = o * 2
+            let to: Int = from + seg.hex.count
+            var here: String = "<out of range>"
+            if from >= 0 && to <= chars.count { here = String(chars[from..<to]) }
+            check("segmentEditor.locate", subject, seg.hex, J.str(here))
+        }
+        if let edit = LabSegmentEditor.segment(hex, index: i, extended: false, savedSerial: StarlightSerial.defaultSerial) {
+            let rule: LabSegmentEditor.ManualRule = edit.manual
+            if exact && rule.allowed && rule.minBytes == rule.maxBytes {
+                let from: Int = rule.offset * 2
+                let to: Int = from + rule.maxBytes * 2
+                if from >= 0 && to <= chars.count {
+                    let typed: String = String(chars[from..<to])
+                    let result: String = manualText(LabSegmentEditor.applyingManual(hex, segment: edit, typed: typed))
+                    check("segmentEditor.manualIdentity", subject, "applied " + canonical, J.str(result))
+                }
+            }
+            if seg.kind == .tail, let o = offsets[i], o == lastByte {
+                var got: String = "<no B3 option>"
+                for f in edit.fields where f.kind == .tail {
+                    for option in f.options where option.bytes == [0xB3] {
+                        got = LabSegmentEditor.applying(hex, field: f, option: option) ?? "<nil>"
+                    }
+                }
+                check("segmentEditor.tailB3", hex, LabPacketTools.withVibration(canonical, 3), J.str(got))
+            }
+        }
+        i += 1
+    }
+    if let d = LabSegmentEditor.builderState(hex, extended: true) {
+        let colors: [Int] = d.colors.isEmpty ? LabPacketBuilder.defaultColors(d.type) : d.colors
+        let rebuilt: String = LabPacketBuilder.build(
+            type: d.type, colors: colors, vibEnabled: d.vibEnabled, vibPattern: d.vibPattern,
+            rawHex: d.rawHex, framing: d.framing, showIndex: d.showIndex
+        )
+        check("segmentEditor.builderState", hex, canonical, J.str(rebuilt))
+    }
+}
+
+/// Picks the option of `kind` whose bytes are `bytes` on anatomy block `index`, and applies it.
+func segmentEdit(_ hex: String, _ index: Int, _ kind: LabSegmentEditor.FieldKind, _ bytes: [UInt8]) -> String {
+    guard let edit = LabSegmentEditor.segment(hex, index: index, extended: false, savedSerial: StarlightSerial.defaultSerial) else {
+        return "<no segment>"
+    }
+    for f in edit.fields where f.kind == kind {
+        for option in f.options where option.bytes == bytes {
+            return LabSegmentEditor.applying(hex, field: f, option: option) ?? "<nil>"
+        }
+    }
+    return "<no option>"
+}
+
+/// Switches the effect record at anatomy block `index` to the shape with body length `len`.
+func segmentShape(_ hex: String, _ index: Int, _ len: Int) -> String {
+    guard let edit = LabSegmentEditor.segment(hex, index: index, extended: false, savedSerial: StarlightSerial.defaultSerial) else {
+        return "<no segment>"
+    }
+    for f in edit.fields where f.kind == .shape {
+        for option in f.options where option.bytes.count > 1 && Int(option.bytes[1]) == len {
+            return LabSegmentEditor.applying(hex, field: f, option: option) ?? "<nil>"
+        }
+    }
+    return "<no option>"
+}
+
+func segmentAction(_ hex: String, _ index: Int, _ prefix: String) -> String {
+    guard let edit = LabSegmentEditor.segment(hex, index: index, extended: false, savedSerial: StarlightSerial.defaultSerial) else {
+        return "<no segment>"
+    }
+    for a in edit.actions where a.label.hasPrefix(prefix) {
+        return a.hex
+    }
+    return "<no action>"
+}
+
+func builderTypeName(_ hex: String, extended: Bool) -> String {
+    return LabSegmentEditor.builderState(hex, extended: extended)?.type.rawValue ?? "nil"
+}
+
+func checkSegmentExamples() {
+    func example(_ name: String, _ expected: String, _ actual: String) {
+        check("segmentEditor.example", name, expected, J.str(actual))
+    }
+    let single: String = "8301E905002E0EF5B0"
+    example("single tail B3", "8301E905002E0EF5B3", segmentEdit(single, 4, .tail, [0xB3]))
+    example("single tail B3 builder", "preset", builderTypeName("8301E905002E0EF5B3", extended: false))
+    example("single timing 06", "8301E90500060EF5B0", segmentEdit(single, 2, .timing, [0x06]))
+    example("single timing 06 builder", "preset", builderTypeName("8301E90500060EF5B0", extended: false))
+    example("single timing 8F", "8301E905008F0EF5B0", segmentEdit(single, 2, .timing, [0x8F]))
+    example("single colour 19", "8301E905002E0EF9B0", segmentEdit(single, 3, .color, [0xF9]))
+    example("single zone mask 3", "8301E905002E0E75B0", segmentEdit(single, 3, .colorFlag, [0x75]))
+    example("single zone mask 3 builder", "raw", builderTypeName("8301E905002E0E75B0", extended: false))
+    example("single add channel", "8301E100E905002E0EF5B0", segmentAction(single, 0, "Add channel marker"))
+    example("single add wake ping", "8301CC03000100E905002E0EF5B0", segmentAction(single, 0, "Add wake ping"))
+    example("single shape E906", "8301E90600220F9582B0", segmentShape(single, 1, 0x06))
+    example("single shape E906 builder", "dual", builderTypeName("8301E90600220F9582B0", extended: false))
+    example("single shape E906 keeps buzz", "8301E90600220F9582B3", segmentShape("8301E905002E0EF5B3", 1, 0x06))
+
+    let lightning: String = "8301CC03000100E100E90C000F0F5D465BF00532374895"
+    example("lightning remove ping", "8301E100E90C000F0F5D465BF00532374895", segmentAction(lightning, 1, "Remove this ping"))
+    example("lightning remove ping builder", "raw", builderTypeName("8301E100E90C000F0F5D465BF00532374895", extended: false))
+    example("lightning channel E2", "8301CC03000100E200E90C000F0F5D465BF00532374895", segmentEdit(lightning, 2, .channel, [0xE2, 0x00]))
+    example("lightning colour 2", "8301CC03000100E100E90C000F0F5D555BF00532374895", segmentEdit(lightning, 6, .color, [0x55]))
+    example("lightning colour 2 builder", "show", builderTypeName("8301CC03000100E100E90C000F0F5D555BF00532374895", extended: false))
+    example("lightning shape E905", "8301CC03000100E100E905002E0EFDB0", segmentShape(lightning, 3, 0x05))
+    example("lightning shape E905 builder", "preset", builderTypeName("8301CC03000100E100E905002E0EFDB0", extended: false))
+
+    let rgbPacket: String = "8301E100E908000ED2557E2800B0"
+    var red: String = "<no Red field>"
+    if let edit = LabSegmentEditor.segment(rgbPacket, index: 4, extended: true, savedSerial: StarlightSerial.defaultSerial) {
+        for f in edit.fields where f.kind == .rgbChannel && f.title == "Red" {
+            red = LabSegmentEditor.replacing(rgbPacket, offset: f.offset, count: 1, with: [UInt8(32 << 1)], lengthByteOffset: nil) ?? "<nil>"
+        }
+    }
+    example("rgb red 32", "8301E100E908000ED255402800B0", red)
+    example("rgb red 32 builder (Extended)", "rgb", builderTypeName("8301E100E908000ED255402800B0", extended: true))
+    example("rgb red 32 builder (Standard)", "raw", builderTypeName("8301E100E908000ED255402800B0", extended: false))
+
+    let wand: String = "8301CF9B00C42922EFD819F22A621D"
+    example("wand colour 15", "8301CF9B00C42922EFD819F22A6215", segmentEdit(wand, 1, .wandColor, [0x15]))
+    example("wand marker 0B", "8301CF0B00C42922EFD819F22A621D", segmentEdit(wand, 1, .wandMarker, [0x0B]))
+    example("dual centre 15", "8301E90600220F9582B0", segmentEdit("8301E90600220F8F82B0", 3, .color, [0x95]))
+    example("malformed drop trailing byte", "8301CC03000000", segmentAction("8301CC030000007F", 2, "Drop the trailing byte 7F"))
 }
 
 // MARK: - Builders
@@ -1136,6 +1290,7 @@ for key in unknownPacketKeys.sorted() {
     checks += 1
     fail("packets." + key, "-", "<present in vectors.json>", "<not checked by ios/ParityCheck/main.swift>")
 }
+checkSegmentExamples()
 
 let builderRecords: [Any] = asList(root.get("packetBuilder"))
 if builderRecords.isEmpty {

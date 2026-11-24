@@ -1435,18 +1435,28 @@ internal fun WandTab(
         if (showNewWand) {
             app.store.newWandPackets()
         } else {
-            // Starlight: drop any New Wand codes and collapse serial-only duplicates so each
-            // color appears once instead of many near-identical variations.
-            app.store.learnedStarlightPackets()
-                .filterNot { isNewWandHex(it.hex) }
-                .distinctBy { MagicClassifier.starlightColorIndex(it.hex) and 0x1F }
+            // Starlight: one entry per colour, its most recently learned code, and no New Wand
+            // codes (StarlightColors.wandColors, the rule the iPhone uses too).
+            StarlightColors.wandColors(app.store.learnedStarlightPackets())
         }
     }
+
+    /** Starlight: the list's entry of the colour learned code [id] is listed as (the loop, or an
+     *  earlier pick, may be on an older code of a colour the list shows by its newest code);
+     *  [id] itself when the list has it or it is no learned Starlight code. */
+    fun listEntryId(id: Long): Long {
+        if (id < 0 || showNewWand || learned.any { it.id == id }) return id
+        val packet: MagicPacket = app.store.findLearnedStarlight(id) ?: return id
+        if (StarlightColors.isNewWandHex(packet.hex)) return id
+        val key: String = StarlightColors.wandColorKey(packet.hex)
+        return learned.firstOrNull { StarlightColors.wandColorKey(it.hex) == key }?.id ?: id
+    }
+
     var loopOn by remember(starlightLoopEnabled) { mutableStateOf(starlightLoopEnabled) }
     var selectedId by remember(starlightLoopPacketId, learned.size) {
         mutableLongStateOf(
             when {
-                starlightLoopPacketId >= 0 -> starlightLoopPacketId
+                starlightLoopPacketId >= 0 -> listEntryId(starlightLoopPacketId)
                 learned.isNotEmpty() -> learned.first().id
                 else -> -1L
             },
@@ -1454,6 +1464,7 @@ internal fun WandTab(
     }
     var intervalSec by remember { mutableFloatStateOf(starlightIntervalMs / 1000f) }
     var clearLibConfirm by remember { mutableStateOf(false) }
+    var deleteColorTarget by remember { mutableStateOf<MagicPacket?>(null) }
     val selected = learned.firstOrNull { it.id == selectedId }
 
     LaunchedEffect(starlightIntervalMs) {
@@ -1462,7 +1473,29 @@ internal fun WandTab(
 
     LaunchedEffect(learned) {
         if (selectedId >= 0 && learned.none { it.id == selectedId }) {
-            selectedId = learned.firstOrNull()?.id ?: -1L
+            val sameColor: Long = listEntryId(selectedId)
+            selectedId = if (learned.any { it.id == sameColor }) sameColor else learned.firstOrNull()?.id ?: -1L
+        }
+    }
+
+    /** Deletes the colour: every learned code the list shows as it (the rest of the library
+     *  stays). A wand loop sending one of them moves on to the list's first colour, or stops when
+     *  none is left — as the iPhone does. */
+    fun deleteColor(packet: MagicPacket) {
+        val key: String = StarlightColors.wandColorKey(packet.hex)
+        val ids: MutableSet<Long> = StarlightColors.wandColorGroup(app.store.learnedStarlightPackets(), key)
+            .map { it.id }
+            .toMutableSet()
+        ids.add(packet.id)
+        for (id in ids) app.store.deleteLearnedColor(id)
+        if ((starlightLoopEnabled || loopOn) && starlightLoopPacketId in ids) {
+            val next: MagicPacket? = StarlightColors.wandColors(app.store.learnedStarlightPackets()).firstOrNull()
+            if (next != null) {
+                MagicMakerForegroundService.setStarlightLoop(ctx, enabled = true, packetId = next.id)
+            } else {
+                loopOn = false
+                MagicMakerForegroundService.setStarlightLoop(ctx, enabled = false, packetId = -1L)
+            }
         }
     }
 
@@ -1500,6 +1533,7 @@ internal fun WandTab(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
+                onDelete = { deleteColorTarget = it },
             )
         }
         Column(Modifier.padding(AppDimens.pad), verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
@@ -1603,6 +1637,21 @@ internal fun WandTab(
         )
     }
 
+    // One colour row: names how many learned codes go with it before deleting any.
+    deleteColorTarget?.let { target ->
+        val key: String = StarlightColors.wandColorKey(target.hex)
+        val count: Int = maxOf(StarlightColors.wandColorGroup(app.store.learnedStarlightPackets(), key).size, 1)
+        ConfirmDeleteDialog(
+            title = "Delete wand color?",
+            label = StarlightColors.wandDeleteLabel(key, count),
+            onDismiss = { deleteColorTarget = null },
+            onConfirm = {
+                deleteColor(target)
+                deleteColorTarget = null
+            },
+        )
+    }
+
     renameTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },
@@ -1676,12 +1725,11 @@ internal fun WandTab(
     }
 }
 
-// New Wand codes share this signature — used to keep them out of the Starlight list.
-private const val NEW_WAND_SIGNATURE = "CF0B00C020224EAC7807866"
-
 // Default for the programmable wand quick button: the New Wand "Off" code (tail 6F1D).
 internal const val DEFAULT_WAND_QUICK_HEX = "8301CF0B00C020224EAC7807866F1D"
-internal fun isNewWandHex(hex: String) = hex.uppercase().contains(NEW_WAND_SIGNATURE)
+// New Wand codes share a signature (StarlightColors.NEW_WAND_SIGNATURE) — used to keep them out
+// of the Starlight list.
+internal fun isNewWandHex(hex: String) = StarlightColors.isNewWandHex(hex)
 
 internal fun loadNewWandNames(prefs: SharedPreferences): Map<String, String> {
     val raw = prefs.getString("newwand_names", null) ?: return emptyMap()

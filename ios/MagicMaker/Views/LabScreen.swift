@@ -81,6 +81,7 @@ struct LabScreen: View {
                 extended: extended,
                 loadedHex: hex,
                 loadTick: builderLoadTick,
+                savedSerial: store.getStarlightSerial(),
                 onHexChanged: { built in previewHex = built },
                 onHexBuilt: { built in useBuiltHex(built) }
             )

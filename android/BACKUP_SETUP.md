@@ -11,7 +11,8 @@ columns: hex,function,category,colors
 - On every app open it **pulls** the current list and adds any packets it doesn't have.
 - When it detects a packet whose **function is known** and the exact hex isn't on the
   list yet, it **adds** it and pushes (throttled to ~once/minute).
-- A **SYNC NOW** button (Logs tab) forces an immediate reconcile.
+- A **SYNC NOW** button (Logs tab) forces an immediate reconcile. It shows once a token
+  is set (step 3).
 - Offline-safe: your on-device library is the durable queue — failed syncs just retry
   next time you're online (parks have no Wi-Fi, so it lands when you reconnect).
 
@@ -29,18 +30,15 @@ GitHub → Settings → Developer settings → **Fine-grained tokens** → Gener
 - Permissions → **Contents: Read and write**
 - Copy the `github_pat_…`.
 
-> ⚠️ This token is embedded in the APK and can **write** to the backup repo. Keep it
-> scoped to *only* that repo. Worst case is a vandalized backup (history recoverable),
-> never your code.
+> This token can **write** to the backup repo. Keep it scoped to *only* that repo.
 
-### 3. Add the secret
-Repo → Settings → Secrets and variables → Actions → **New repository secret**:
+### 3. Enter it on the phone
+The app repo is public, so release APKs carry **no** token. Enter it once per phone:
+**Settings → CLOUD DICTIONARY → Cloud dictionary token** → paste → **SAVE**
+(VFD theme: **SET TOKEN**). It is kept in the app's private storage, in its own prefs
+file, and is never written to the library file or an EXPORT. **CLEAR** turns sync off.
 
-| Secret | Value |
-|--------|-------|
-| `BACKUP_TOKEN` | the write-scoped `github_pat_…` |
-
-### 4. Release
-Bump `.github/RELEASE_VERSION` (or push a `v*` tag) — the build bakes the token in and
-the feature goes live. Without `BACKUP_TOKEN`, the feature stays dormant (the SYNC row
-is hidden).
+Without a token the feature stays dormant (the CLOUD / SYNC NOW row is hidden).
+A local private build can still bake one in with `-PmmBackupToken=…` (never committed);
+a token entered on the phone wins over it. The old `BACKUP_TOKEN` Actions secret is no
+longer used — see `docs/GOING_PUBLIC.md`.

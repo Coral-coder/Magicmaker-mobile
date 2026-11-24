@@ -96,6 +96,17 @@ final class TxEngine: ObservableObject {
     /// the screen is kept awake while it is on.
     var scanWanted: () -> Bool = { true }
 
+    /// Which loop a relay runs for this engine.
+    enum RelayLoop { case tx, wand }
+    /// True when the selected relay runs the TX and wand loops itself (the ESP32): this engine then
+    /// keeps their switches, packets and intervals for the UI and never times their bursts.
+    var relayRunsLoops: () -> Bool = { false }
+    /// Hands a loop change to that relay; `hex` is nil when no packet is picked.
+    var relayLoopChanged: ((_ loop: RelayLoop, _ enabled: Bool, _ hex: String?, _ label: String, _ intervalMs: Int) -> Void)?
+    /// Label the relay reported for a loop packet this iPhone does not have.
+    private var relayTxLabel: String? = nil
+    private var relayWandLabel: String? = nil
+
     @Published private(set) var status: String = "Idle"
     @Published private(set) var lastTransmitHex: String = ""
     /// The label given with the last single packet handed to `transmit`.
@@ -239,8 +250,10 @@ final class TxEngine: ObservableObject {
             status = "Scanning"
         }
         refreshIdleTimer()
-        let wandLoop = TxEngine.boolPref("starlight_loop_enabled", fallback: false)
-        let txLoop = TxEngine.boolPref("tx_loop_enabled", fallback: false)
+        // A relay that runs the loops itself reports them with its status; they are not started here.
+        let relayLoops: Bool = relayRunsLoops()
+        let wandLoop = !relayLoops && TxEngine.boolPref("starlight_loop_enabled", fallback: false)
+        let txLoop = !relayLoops && TxEngine.boolPref("tx_loop_enabled", fallback: false)
         let randomShow = TxEngine.boolPref("random_show_enabled", fallback: false)
         if !wandLoop && !txLoop && !randomShow { return }
         // Only one of them runs at a time.
@@ -359,12 +372,29 @@ final class TxEngine: ObservableObject {
     func setTxLoop(enabled: Bool, packetId: Int64?, intervalMs: Int?) {
         if let packetId, txLoopPacketId != packetId {
             txLoopPacketId = packetId
+            relayTxLabel = nil
         }
         if let intervalMs {
             let clamped = TxEngine.clampInterval(intervalMs)
             if txLoopIntervalMs != clamped { txLoopIntervalMs = clamped }
         }
-        if enabled {
+        if relayRunsLoops() {
+            // The relay times the bursts: hand it the packet and interval, start no timer here.
+            if enabled {
+                guard let hex = txLoopHex() else {
+                    status = "TX loop: pick a library row"
+                    savePrefs()
+                    refreshLoopLabels()
+                    return
+                }
+                stopStarlightLoop()
+                stopRandomShow()
+                if !txLoopEnabled { txLoopEnabled = true }
+                relayLoopChanged?(.tx, true, hex, currentTxLoopLabel(), txLoopIntervalMs)
+            } else {
+                stopTxLoop()
+            }
+        } else if enabled {
             stopStarlightLoop()
             stopRandomShow()
             startTxLoop()
@@ -383,8 +413,8 @@ final class TxEngine: ObservableObject {
     }
 
     private func currentTxLoopLabel() -> String {
-        if txLoopPacketId < 0 { return "none" }
-        return store.findTransmitPacket(id: txLoopPacketId)?.label ?? "unknown"
+        if txLoopPacketId < 0 { return relayTxLabel ?? "none" }
+        return store.findTransmitPacket(id: txLoopPacketId)?.label ?? relayTxLabel ?? "unknown"
     }
 
     private func startTxLoop() {
@@ -397,11 +427,16 @@ final class TxEngine: ObservableObject {
     }
 
     private func stopTxLoop() {
+        let wasOn: Bool = txLoopEnabled
         if txLoopEnabled { txLoopEnabled = false }
         txClock.generation += 1
         txClock.jobPending = false
         purgeQueued(.txLoop)
         stopTxLoopSchedule()
+        // The show, stop-all and the other loop end the relay's loop too.
+        if wasOn && relayRunsLoops() {
+            relayLoopChanged?(.tx, false, nil, "", txLoopIntervalMs)
+        }
     }
 
     private func stopTxLoopSchedule() {
@@ -463,12 +498,29 @@ final class TxEngine: ObservableObject {
     func setStarlightLoop(enabled: Bool, packetId: Int64?, intervalMs: Int?) {
         if let packetId, starlightLoopPacketId != packetId {
             starlightLoopPacketId = packetId
+            relayWandLabel = nil
         }
         if let intervalMs {
             let clamped = TxEngine.clampInterval(intervalMs)
             if starlightIntervalMs != clamped { starlightIntervalMs = clamped }
         }
-        if enabled {
+        if relayRunsLoops() {
+            // The relay times the bursts: hand it the colour and interval, start no timer here.
+            if enabled {
+                guard let hex = starlightLoopHex() else {
+                    status = "Wand: pick a learned color"
+                    savePrefs()
+                    refreshLoopLabels()
+                    return
+                }
+                stopTxLoop()
+                stopRandomShow()
+                if !starlightLoopEnabled { starlightLoopEnabled = true }
+                relayLoopChanged?(.wand, true, hex, currentStarlightLoopLabel(), starlightIntervalMs)
+            } else {
+                stopStarlightLoop()
+            }
+        } else if enabled {
             stopTxLoop()
             stopRandomShow()
             startStarlightLoop()
@@ -487,8 +539,8 @@ final class TxEngine: ObservableObject {
     }
 
     private func currentStarlightLoopLabel() -> String {
-        if starlightLoopPacketId < 0 { return "none" }
-        return store.findLearnedStarlight(id: starlightLoopPacketId)?.label ?? "unknown"
+        if starlightLoopPacketId < 0 { return relayWandLabel ?? "none" }
+        return store.findLearnedStarlight(id: starlightLoopPacketId)?.label ?? relayWandLabel ?? "unknown"
     }
 
     private func startStarlightLoop() {
@@ -501,11 +553,15 @@ final class TxEngine: ObservableObject {
     }
 
     private func stopStarlightLoop() {
+        let wasOn: Bool = starlightLoopEnabled
         if starlightLoopEnabled { starlightLoopEnabled = false }
         starlightClock.generation += 1
         starlightClock.jobPending = false
         purgeQueued(.wandLoop)
         stopStarlightLoopSchedule()
+        if wasOn && relayRunsLoops() {
+            relayLoopChanged?(.wand, false, nil, "", starlightIntervalMs)
+        }
     }
 
     private func stopStarlightLoopSchedule() {
@@ -564,6 +620,126 @@ final class TxEngine: ObservableObject {
         if txLoopLabel != txLabel { txLoopLabel = txLabel }
         let wandLabel = currentStarlightLoopLabel()
         if starlightLoopLabel != wandLabel { starlightLoopLabel = wandLabel }
+    }
+
+    // MARK: - Loops run by the relay
+
+    /// The relay's own report of its loops (ESP32 status): the switches, packets and intervals
+    /// follow it, so they are right after a relaunch or a change made from another phone. Sends
+    /// nothing.
+    func adoptRelayLoops(
+        txOn: Bool, txHex: String?, txLabel: String, txIntervalMs: Int,
+        wandOn: Bool, wandHex: String?, wandLabel: String, wandIntervalMs: Int
+    ) {
+        guard relayRunsLoops() else { return }
+        let before: String = relayLoopStateKey()
+        if txOn {
+            let clamped: Int = TxEngine.clampInterval(txIntervalMs)
+            if txLoopIntervalMs != clamped { txLoopIntervalMs = clamped }
+            if let txHex, !txHex.isEmpty {
+                adoptRelayTxPacket(HexUtils.canonicalHex(txHex), label: txLabel)
+            }
+        }
+        if txLoopEnabled != txOn { txLoopEnabled = txOn }
+        if wandOn {
+            let clamped: Int = TxEngine.clampInterval(wandIntervalMs)
+            if starlightIntervalMs != clamped { starlightIntervalMs = clamped }
+            if let wandHex, !wandHex.isEmpty {
+                adoptRelayWandPacket(HexUtils.canonicalHex(wandHex), label: wandLabel)
+            }
+        }
+        if starlightLoopEnabled != wandOn { starlightLoopEnabled = wandOn }
+        // Every status poll reports the same state; only a change is saved.
+        if relayLoopStateKey() == before { return }
+        savePrefs()
+        refreshLoopLabels()
+        refreshIdleTimer()
+    }
+
+    /// Everything adoptRelayLoops can change, to tell whether it changed anything.
+    private func relayLoopStateKey() -> String {
+        let tx: String = "\(txLoopEnabled)|\(txLoopPacketId)|\(txLoopIntervalMs)|\(relayTxLabel ?? "")"
+        let wand: String = "\(starlightLoopEnabled)|\(starlightLoopPacketId)|\(starlightIntervalMs)|\(relayWandLabel ?? "")"
+        return tx + "#" + wand
+    }
+
+    /// The library row with the relay's loop packet, or none (id -1) with the relay's label.
+    private func adoptRelayTxPacket(_ canonical: String, label: String) {
+        if txLoopHex() == canonical {
+            relayTxLabel = nil
+            return
+        }
+        let match: MagicPacket? = store.allTransmitPackets().first(where: { (packet: MagicPacket) -> Bool in
+            HexUtils.canonicalHex(packet.hex) == canonical
+        })
+        if let match {
+            if txLoopPacketId != match.id { txLoopPacketId = match.id }
+            relayTxLabel = nil
+        } else {
+            if txLoopPacketId != -1 { txLoopPacketId = -1 }
+            relayTxLabel = label.isEmpty ? "ESP32 loop" : label
+        }
+    }
+
+    /// The learned (or New Wand) colour with the relay's loop packet, or none with its label.
+    private func adoptRelayWandPacket(_ canonical: String, label: String) {
+        if starlightLoopHex() == canonical {
+            relayWandLabel = nil
+            return
+        }
+        let colours: [MagicPacket] = store.learnedStarlightPackets() + store.newWandPackets()
+        let match: MagicPacket? = colours.first(where: { (packet: MagicPacket) -> Bool in
+            HexUtils.canonicalHex(packet.hex) == canonical
+        })
+        if let match {
+            if starlightLoopPacketId != match.id { starlightLoopPacketId = match.id }
+            relayWandLabel = nil
+        } else {
+            if starlightLoopPacketId != -1 { starlightLoopPacketId = -1 }
+            relayWandLabel = label.isEmpty ? "ESP32 loop" : label
+        }
+    }
+
+    /// The selected relay now runs the loops (switched to the ESP32): a loop running on this
+    /// iPhone stops its own timer and is handed over, or switches off when it has no packet.
+    func handOverLoopsToRelay() {
+        if txLoopEnabled {
+            txClock.generation += 1
+            txClock.jobPending = false
+            purgeQueued(.txLoop)
+            stopTxLoopSchedule()
+            if let hex = txLoopHex() {
+                relayLoopChanged?(.tx, true, hex, currentTxLoopLabel(), txLoopIntervalMs)
+            } else {
+                txLoopEnabled = false
+            }
+        }
+        if starlightLoopEnabled {
+            starlightClock.generation += 1
+            starlightClock.jobPending = false
+            purgeQueued(.wandLoop)
+            stopStarlightLoopSchedule()
+            if let hex = starlightLoopHex() {
+                relayLoopChanged?(.wand, true, hex, currentStarlightLoopLabel(), starlightIntervalMs)
+            } else {
+                starlightLoopEnabled = false
+            }
+        }
+        savePrefs()
+        refreshLoopLabels()
+        refreshIdleTimer()
+    }
+
+    /// The selected relay no longer runs the loops (switched away from the ESP32): the switches
+    /// go off here. Sends nothing; the ESP32 keeps whatever it runs until it is told or powered off.
+    func clearRelayLoops() {
+        if txLoopEnabled { txLoopEnabled = false }
+        if starlightLoopEnabled { starlightLoopEnabled = false }
+        relayTxLabel = nil
+        relayWandLabel = nil
+        savePrefs()
+        refreshLoopLabels()
+        refreshIdleTimer()
     }
 
     // MARK: - Random light show
@@ -978,9 +1154,11 @@ final class TxEngine: ObservableObject {
 
     /// The loops, the show and a replay are timers in this app, and the scan only hears adverts
     /// in the foreground, so the screen is kept from locking while scanning or while one of them
-    /// runs, and the earlier setting is put back afterwards. Call again when the scan switch changes.
+    /// runs, and the earlier setting is put back afterwards. Loops the relay runs itself need no
+    /// screen. Call again when the scan switch changes.
     func refreshIdleTimer() {
-        let wanted = txLoopEnabled || starlightLoopEnabled || randomShowEnabled || replayActive || scanWanted()
+        let phoneLoops: Bool = !relayRunsLoops() && (txLoopEnabled || starlightLoopEnabled)
+        let wanted = phoneLoops || randomShowEnabled || replayActive || scanWanted()
         if wanted == idleTimerHeld { return }
         idleTimerHeld = wanted
         if wanted {

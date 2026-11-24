@@ -4,13 +4,6 @@ import SwiftUI
 // the programmable quick button and the wand loop. Port of Android `WandTab`, `NewWandList`
 // and the New Wand name helpers in `MagicMakerScreens.kt`.
 
-/// New Wand codes share this signature; it keeps them out of the Starlight list.
-private let wandNewWandSignature = "CF0B00C020224EAC7807866"
-
-private func wandIsNewWandHex(_ hex: String) -> Bool {
-    hex.uppercased().contains(wandNewWandSignature)
-}
-
 // MARK: - New Wand list
 
 /// One New Wand code: its last 2 bytes on the left, its custom name or colour on the right.
@@ -398,26 +391,12 @@ struct WandScreen: View {
         if showNewWand {
             next = store.newWandPackets()
         } else {
-            next = WandScreen.starlightColors(store.learnedStarlightPackets())
+            // Starlight: one entry per colour, its most recently learned code; no New Wand codes.
+            next = StarlightColors.wandColors(store.learnedStarlightPackets())
         }
         let lengthChanged: Bool = next.count != library.count
         library = next
         reconcileSelection(resetToLoop: resetToLoop || lengthChanged || !loaded)
-    }
-
-    /// Starlight: no New Wand codes, and one entry per colour, so serial-only variations of
-    /// the same colour do not fill the list.
-    private static func starlightColors(_ learned: [MagicPacket]) -> [MagicPacket] {
-        var seen = Set<Int>()
-        var out: [MagicPacket] = []
-        for packet in learned {
-            if wandIsNewWandHex(packet.hex) { continue }
-            let index: Int = MagicClassifier.starlightColorIndex(packet.hex) & 0x1F
-            if seen.insert(index).inserted {
-                out.append(packet)
-            }
-        }
-        return out
     }
 
     private func reconcileSelection(resetToLoop: Bool) {
@@ -432,11 +411,21 @@ struct WandScreen: View {
         }
         let candidate: Int64 = wanted
         if candidate >= 0 && !library.contains(where: { $0.id == candidate }) {
-            wanted = library.first?.id ?? -1
+            wanted = sameColorEntry(candidate)?.id ?? library.first?.id ?? -1
         }
         if selectedId != wanted {
             selectedId = wanted
         }
+    }
+
+    /// Starlight: the list's entry of the colour learned code `id` is listed as — the loop (or an
+    /// earlier pick) may be on an older code of a colour the list shows by its newest code.
+    private func sameColorEntry(_ id: Int64) -> MagicPacket? {
+        if showNewWand { return nil }
+        guard let packet = store.findLearnedStarlight(id: id) else { return nil }
+        if StarlightColors.isNewWandHex(packet.hex) { return nil }
+        let key: String = StarlightColors.wandColorKey(hex: packet.hex)
+        return library.first(where: { StarlightColors.wandColorKey(hex: $0.hex) == key })
     }
 
     // MARK: Sending
@@ -511,35 +500,28 @@ struct WandScreen: View {
         }
     }
 
-    /// Every learned Starlight packet the list shows as this colour.
+    /// Every learned Starlight code the list shows as this colour.
     private func colorGroup(_ packet: MagicPacket) -> [MagicPacket] {
-        let index: Int = MagicClassifier.starlightColorIndex(packet.hex) & 0x1F
-        var out: [MagicPacket] = []
-        for learned in store.learnedStarlightPackets() {
-            if wandIsNewWandHex(learned.hex) { continue }
-            if (MagicClassifier.starlightColorIndex(learned.hex) & 0x1F) == index {
-                out.append(learned)
-            }
-        }
-        return out
+        let key: String = StarlightColors.wandColorKey(hex: packet.hex)
+        return StarlightColors.wandColorGroup(store.learnedStarlightPackets(), key: key)
     }
 
+    /// Asks first, naming the colour and how many learned codes go with it.
     private func askDeleteColor(_ packet: MagicPacket) {
-        let group: [MagicPacket] = colorGroup(packet)
-        let count: Int = max(group.count, 1)
-        let label: String = count > 1 ? "\(packet.label) · \(count) learned codes" : packet.label
+        let key: String = StarlightColors.wandColorKey(hex: packet.hex)
+        var count: Int = colorGroup(packet).count
+        if count < 1 { count = 1 }
         deleteRequest = DeleteRequest(
             title: "Delete wand color?",
-            label: label,
-            hex: packet.hex
+            label: StarlightColors.wandDeleteLabel(key: key, count: count)
         ) {
             deleteColor(packet)
         }
     }
 
-    /// Deletes the colour (every learned code the list shows as it). When the loop was sending
-    /// one of them it moves on to the next learned colour, or stops when none is left, as
-    /// Android's service does.
+    /// Deletes the colour (every learned code the list shows as it; the rest of the library
+    /// stays). When the loop was sending one of them it moves on to the list's first colour, or
+    /// stops when none is left.
     private func deleteColor(_ packet: MagicPacket) {
         var ids: [Int64] = []
         for learned in colorGroup(packet) {
@@ -553,7 +535,7 @@ struct WandScreen: View {
         }
         let loopId: Int64 = tx.starlightLoopPacketId
         if !tx.starlightLoopEnabled || !ids.contains(loopId) { return }
-        if let next = store.learnedStarlightPackets().first {
+        if let next = StarlightColors.wandColors(store.learnedStarlightPackets()).first {
             tx.setStarlightLoop(enabled: true, packetId: next.id, intervalMs: nil)
         } else {
             tx.setStarlightLoop(enabled: false, packetId: -1, intervalMs: nil)

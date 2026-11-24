@@ -172,6 +172,7 @@ private struct LinkRelayPanel: View {
             LinkInfoRow("EVENT", vm.statusMessage)
             catalogRows
             androidRows
+            esp32Rows
         }
     }
 
@@ -185,7 +186,7 @@ private struct LinkRelayPanel: View {
         }
     }
 
-    /// The ESP32 answers STATUS with a bare `{"ok":true}`, which is not an Android status.
+    /// The ESP32's status is not an Android status; it gets its own rows below.
     @ViewBuilder
     private var androidRows: some View {
         if vm.relayBackend != .esp32, let s = vm.androidRemote {
@@ -193,6 +194,19 @@ private struct LinkRelayPanel: View {
             LinkInfoRow("STORE", "REV \(s.storeRevision)")
             if s.relayLinked {
                 LinkInfoRow("GATT", "LINKED")
+            }
+        }
+    }
+
+    /// The ESP32 (firmware 1.2+): the board, what it runs by itself, and its battery (Heltec V3).
+    /// Older firmware sends no status; the HINT row says to reflash it.
+    @ViewBuilder
+    private var esp32Rows: some View {
+        if vm.relayBackend == .esp32, let s = vm.androidRemote, s.proto != nil {
+            LinkInfoRow("ESP32", s.esp32DeviceText)
+            LinkInfoRow("RADIO", s.esp32ProgramText)
+            if let battery = s.esp32BatteryText {
+                LinkInfoRow("BATTERY", battery)
             }
         }
     }

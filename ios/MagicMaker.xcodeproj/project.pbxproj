@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E44A266C036A56361A611FB3 /* LabSegmentEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FCEAB34E4925955FAED6040 /* LabSegmentEditorSheet.swift */; };
+		60446815DDD8F7BEBA00CEA8 /* LabSegmentEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853A046B970EA56F35FC969E /* LabSegmentEditor.swift */; };
 		4B287684E7BD9826D90D0DF5 /* VFDWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 173EF2B7EC427BE8752B80FF /* VFDWidgets.swift */; };
 		39CE5C30DBD413C7BBFDB9BF /* VFDWandScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB45CDB7E17141645CC418 /* VFDWandScreen.swift */; };
 		9D3E38C9A205D22DB5237E64 /* VFDTxScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 671BFCC7A3652D02E5C373B1 /* VFDTxScreen.swift */; };
@@ -80,6 +82,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		9FCEAB34E4925955FAED6040 /* LabSegmentEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabSegmentEditorSheet.swift; sourceTree = "<group>"; };
+		853A046B970EA56F35FC969E /* LabSegmentEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabSegmentEditor.swift; sourceTree = "<group>"; };
 		173EF2B7EC427BE8752B80FF /* VFDWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDWidgets.swift; sourceTree = "<group>"; };
 		2EDB45CDB7E17141645CC418 /* VFDWandScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDWandScreen.swift; sourceTree = "<group>"; };
 		671BFCC7A3652D02E5C373B1 /* VFDTxScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDTxScreen.swift; sourceTree = "<group>"; };
@@ -190,6 +194,7 @@
 		9BDA14E78FD22C6E6275609C /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				853A046B970EA56F35FC969E /* LabSegmentEditor.swift */,
 				3EF965165682BF3E7A56E44D /* MapMath.swift */,
 				899C5DB75C5AE4881E523D65 /* LogAnalysis.swift */,
 				3E2B7DE3B3BCF81E0210229C /* TransmitTiming.swift */,
@@ -273,6 +278,7 @@
 		D60F6761176E2BF5F64C2883 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				9FCEAB34E4925955FAED6040 /* LabSegmentEditorSheet.swift */,
 				CE8BBC1022B0D23830E9274C /* SettingsScreen.swift */,
 				410B46EC039DE11D66AC19EA /* LabScreen.swift */,
 				3B086B5B28749044C160BF7B /* DiagScreen.swift */,
@@ -365,6 +371,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E44A266C036A56361A611FB3 /* LabSegmentEditorSheet.swift in Sources */,
+				60446815DDD8F7BEBA00CEA8 /* LabSegmentEditor.swift in Sources */,
 				4B287684E7BD9826D90D0DF5 /* VFDWidgets.swift in Sources */,
 				39CE5C30DBD413C7BBFDB9BF /* VFDWandScreen.swift in Sources */,
 				9D3E38C9A205D22DB5237E64 /* VFDTxScreen.swift in Sources */,

@@ -316,11 +316,14 @@ struct StarlightWandView: View {
         glowColorIndex = MagicClassifier.starlightColorIndex(entries[idx].hex)
     }
 
+    /// The glow takes the heard colour; the picker its entry of that colour (the list has one per
+    /// colour name, which may be another index of that name than the one heard).
     private func syncHeardColor(_ index: Int) {
         let heard = index & 0x1F
         glowColorIndex = heard
         guard !entries.isEmpty else { return }
-        if let idx = entries.firstIndex(where: { MagicClassifier.starlightColorIndex($0.hex) == heard }) {
+        let key: String = StarlightColors.wandColorKey(index: heard)
+        if let idx = entries.firstIndex(where: { StarlightColors.wandColorKey(hex: $0.hex) == key }) {
             selectedIndex = idx
         }
     }

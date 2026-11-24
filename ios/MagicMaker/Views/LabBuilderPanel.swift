@@ -16,6 +16,8 @@ struct LabBuilderPanel: View {
     let loadedHex: String
     /// Above zero once a packet has been sent to the Lab; each change decodes `loadedHex` again.
     let loadTick: Int
+    /// The wand serial saved in Settings, offered when a wand code's serial is edited.
+    let savedSerial: String
     /// The builder's live packet, for the band preview.
     let onHexChanged: (String) -> Void
     /// Puts a packet in the hex field.
@@ -40,6 +42,7 @@ struct LabBuilderPanel: View {
         extended: Bool = false,
         loadedHex: String,
         loadTick: Int = 0,
+        savedSerial: String = StarlightSerial.defaultSerial,
         onHexChanged: @escaping (String) -> Void = { _ in },
         onHexBuilt: @escaping (String) -> Void
     ) {
@@ -47,6 +50,7 @@ struct LabBuilderPanel: View {
         self.extended = extended
         self.loadedHex = loadedHex
         self.loadTick = loadTick
+        self.savedSerial = savedSerial
         self.onHexChanged = onHexChanged
         self.onHexBuilt = onHexBuilt
     }
@@ -78,7 +82,13 @@ struct LabBuilderPanel: View {
             typeFields
             framingSection
             if !current.isEmpty {
-                LabPacketAnatomyView(hex: current)
+                LabPacketAnatomyView(
+                    hex: current,
+                    extended: extended,
+                    savedSerial: savedSerial,
+                    builderType: selectedType,
+                    onEdit: { edited, title in applySegmentEdit(edited, title) }
+                )
             }
             actionRow(current)
         }
@@ -550,22 +560,48 @@ struct LabBuilderPanel: View {
         heldHex = builtHex
     }
 
-    /// A packet was sent to the Lab: decode it into the fields for editing.
+    /// A packet was sent to the Lab: decode it into the fields for editing. A packet the builder
+    /// cannot rebuild exactly loads as Raw Hex, so the builder (and its anatomy) shows the very
+    /// bytes that were loaded.
     private func decodeLoaded() {
-        guard let decoded = LabPacketBuilder.decode(loadedHex) else { return }
+        guard let decoded = LabSegmentEditor.builderState(loadedHex, extended: extended) else { return }
         applyDecoded(decoded)
-        loadMsg = "Loaded \(decoded.type.label) from received packet"
+        ledMask = 7
+        loadMsg = LabBuilderPanel.loadMessage(decoded, from: "received packet")
         holdBuiltHex()
     }
 
     private func loadFromHexField() {
-        guard let decoded = LabPacketBuilder.decode(loadedHex) else {
+        guard let decoded = LabSegmentEditor.builderState(loadedHex, extended: extended) else {
             loadMsg = "Hex field is empty"
             return
         }
         applyDecoded(decoded)
-        loadMsg = "Loaded \(decoded.type.label) from hex field"
+        ledMask = 7
+        loadMsg = LabBuilderPanel.loadMessage(decoded, from: "hex field")
         holdBuiltHex()
+    }
+
+    private static func loadMessage(_ decoded: LabPacketBuilder.Decoded, from source: String) -> String {
+        if decoded.type == .raw {
+            return "Loaded Raw Hex from " + source + " (kept byte-for-byte)"
+        }
+        return "Loaded \(decoded.type.label) from " + source
+    }
+
+    /// The anatomy editor changed one block. The builder takes the edited packet as its own
+    /// state (switching to Raw Hex when no builder type makes those exact bytes), and the usual
+    /// change path puts it in the preview and the hex field.
+    private func applySegmentEdit(_ edited: String, _ title: String) {
+        guard let decoded = LabSegmentEditor.builderState(edited, extended: extended) else { return }
+        let before: LabPacketBuilder.LabPacketType = selectedType
+        applyDecoded(decoded)
+        ledMask = 7
+        if decoded.type == before {
+            loadMsg = "Edited \(title)"
+        } else {
+            loadMsg = "Edited \(title) — builder now \(decoded.type.label) (keeps every byte)"
+        }
     }
 
     /// Leaving Extended drops back to a Standard type rather than keep building an experiment.
@@ -771,20 +807,36 @@ struct LabPacketSummary {
 // MARK: - Packet anatomy
 
 /// The packet as labelled byte groups (Android `PacketAnatomy`). Tap a block to read its
-/// explanation; colour blocks also show a swatch of the palette colour they encode.
+/// explanation and edit it (`LabSegmentEditorSheet`); colour blocks also show a swatch of the
+/// palette colour they encode. An applied edit goes back through `onEdit(packet, block title)`.
 private struct LabPacketAnatomyView: View {
     let hex: String
+    let extended: Bool
+    let savedSerial: String
+    let builderType: LabPacketBuilder.LabPacketType
+    let onEdit: (String, String) -> Void
 
     @State private var selected: Int? = nil
+    @State private var editing: LabSegmentEditTarget? = nil
 
-    init(hex: String) {
+    init(
+        hex: String,
+        extended: Bool,
+        savedSerial: String,
+        builderType: LabPacketBuilder.LabPacketType,
+        onEdit: @escaping (String, String) -> Void
+    ) {
         self.hex = hex
+        self.extended = extended
+        self.savedSerial = savedSerial
+        self.builderType = builderType
+        self.onEdit = onEdit
     }
 
     var body: some View {
         let segments: [DisneyTlv.Segment] = DisneyTlv.anatomy(hex)
         VStack(alignment: .leading, spacing: 4) {
-            Text("PACKET ANATOMY — TAP A BLOCK")
+            Text("PACKET ANATOMY — TAP A BLOCK TO EDIT")
                 .font(MMTheme.techLabel(9))
                 .foregroundStyle(MMTheme.cyanDim)
             segmentChips(segments)
@@ -796,6 +848,35 @@ private struct LabPacketAnatomyView: View {
         .onChange(of: hex) { _, _ in
             selected = nil
         }
+        .sheet(item: $editing) { target in
+            editorSheet(target)
+        }
+    }
+
+    private func editorSheet(_ target: LabSegmentEditTarget) -> some View {
+        let title: String = target.segment.segment.title
+        return LabSegmentEditorSheet(
+            target: target,
+            extended: extended,
+            onApply: { (edited: String) -> Void in
+                editing = nil
+                onEdit(edited, title)
+            },
+            onCancel: {
+                editing = nil
+            }
+        )
+    }
+
+    /// Selects the block (its explanation shows under the chips) and opens its editor on the
+    /// packet as it is right now.
+    private func open(_ index: Int) {
+        selected = index
+        let base: String = HexUtils.canonicalHex(hex)
+        guard let segment = LabSegmentEditor.segment(base, index: index, extended: extended, savedSerial: savedSerial) else {
+            return
+        }
+        editing = LabSegmentEditTarget(id: "\(index):" + base, baseHex: base, segment: segment, builderType: builderType)
     }
 
     private func segmentChips(_ segments: [DisneyTlv.Segment]) -> some View {
@@ -834,7 +915,7 @@ private struct LabPacketAnatomyView: View {
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(tone.opacity(isSelected ? 1.0 : 0.45), lineWidth: 1))
         .contentShape(Rectangle())
         .onTapGesture {
-            selected = isSelected ? nil : index
+            open(index)
         }
     }
 

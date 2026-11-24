@@ -34,6 +34,20 @@ struct AndroidRemoteStatus: Equatable {
     var commandBurstMs = 2000
     var starlightBurstMs = 500
     var storeRevision = 0
+    // The ESP32 transmitter (firmware 1.2+) only; nil from Android.
+    var proto: Int? = nil
+    var firmware: String? = nil
+    var board: String? = nil
+    var uptimeS: Int? = nil
+    var packetsSent: Int? = nil
+    var batteryMv: Int? = nil
+    var batteryPercent: Int? = nil
+    var batteryCapacityMah: Int? = nil
+    var runtimeMinutes: Int? = nil
+    var charging = false
+    var keepAwakeHex: String? = nil
+    var txLoopHex: String? = nil
+    var starlightLoopHex: String? = nil
 
     static func parse(_ json: [String: Any]) -> AndroidRemoteStatus {
         var s = AndroidRemoteStatus()
@@ -68,7 +82,87 @@ struct AndroidRemoteStatus: Equatable {
         s.commandBurstMs = json["commandBurstMs"] as? Int ?? 2000
         s.starlightBurstMs = json["starlightBurstMs"] as? Int ?? 500
         s.storeRevision = json["storeRevision"] as? Int ?? 0
+        s.proto = json["proto"] as? Int
+        s.firmware = json["fw"] as? String
+        s.board = json["board"] as? String
+        s.uptimeS = json["uptimeS"] as? Int
+        s.packetsSent = json["sent"] as? Int
+        s.batteryMv = json["batMv"] as? Int
+        s.batteryPercent = json["batPct"] as? Int
+        s.batteryCapacityMah = json["batMah"] as? Int
+        s.runtimeMinutes = json["runMin"] as? Int
+        s.charging = json["charging"] as? Bool ?? false
+        s.keepAwakeHex = json["keepAwakeHex"] as? String
+        s.txLoopHex = json["txLoopHex"] as? String
+        s.starlightLoopHex = json["starlightLoopHex"] as? String
         return s
+    }
+}
+
+// MARK: - ESP32 status text (LINK tab)
+
+extension AndroidRemoteStatus {
+    /// "~9H 40M", "~40M" under an hour, "~99H+" from 99 hours (as the ESP32's own screen shows it).
+    static func runtimeText(minutes: Int) -> String {
+        let total: Int = max(0, minutes)
+        if total >= 99 * 60 { return "~99H+" }
+        if total < 60 { return "~\(total)M" }
+        return "~\(total / 60)H \(total % 60)M"
+    }
+
+    /// "3S" for whole seconds, otherwise one decimal ("2.5S").
+    static func secondsText(ms: Int64) -> String {
+        if ms % 1000 == 0 { return "\(ms / 1000)S" }
+        return String(format: "%.1fS", Double(ms) / 1000.0)
+    }
+
+    /// "4.18V".
+    private static func voltsText(mv: Int) -> String {
+        String(format: "%.2fV", Double(mv) / 1000.0)
+    }
+
+    /// What the ESP32 runs by itself: KEEP AWAKE, TX LOOP · 3S, WAND LOOP · 2.5S or IDLE.
+    var esp32ProgramText: String {
+        if keepAwake == true { return "KEEP AWAKE" }
+        if txLoopEnabled { return "TX LOOP · " + Self.secondsText(ms: txLoopIntervalMs) }
+        if starlightLoopEnabled { return "WAND LOOP · " + Self.secondsText(ms: starlightIntervalMs) }
+        return "IDLE"
+    }
+
+    /// "68% · 272/400 MAH · ~9H 40M LEFT" (missing parts left out), "CHARGING · 4.18V", or nil
+    /// when the board reports no battery (the classic ESP32).
+    var esp32BatteryText: String? {
+        guard batteryMv != nil || batteryPercent != nil else { return nil }
+        if charging {
+            guard let mv = batteryMv else { return "CHARGING" }
+            return "CHARGING · " + Self.voltsText(mv: mv)
+        }
+        var parts: [String] = []
+        if let pct = batteryPercent {
+            parts.append("\(pct)%")
+            if let capacity = batteryCapacityMah, capacity > 0 {
+                parts.append("\(capacity * min(max(pct, 0), 100) / 100)/\(capacity) MAH")
+            }
+        }
+        if let minutes = runtimeMinutes, minutes >= 0 {
+            parts.append(Self.runtimeText(minutes: minutes) + " LEFT")
+        }
+        if parts.isEmpty, let mv = batteryMv {
+            parts.append(Self.voltsText(mv: mv))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// "FW 1.2 · HELTEC V3 · UP 2H 14M".
+    var esp32DeviceText: String {
+        var parts: [String] = []
+        if let firmware, !firmware.isEmpty { parts.append("FW " + firmware) }
+        if let board, !board.isEmpty { parts.append(board) }
+        if let uptimeS, uptimeS >= 0 {
+            let minutes: Int = uptimeS / 60
+            parts.append(minutes < 60 ? "UP \(minutes)M" : "UP \(minutes / 60)H \(minutes % 60)M")
+        }
+        return parts.isEmpty ? "ESP32" : parts.joined(separator: " · ")
     }
 }
 

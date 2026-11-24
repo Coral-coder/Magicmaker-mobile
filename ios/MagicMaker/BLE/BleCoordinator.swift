@@ -245,11 +245,14 @@ final class BleCoordinator: NSObject, BleCentralDelegate {
     var bleCentral: BleCentral { central }
 
     @objc private func screenLocked() {
+        // Set first: the restarted scan picks its filter from it.
+        central.inBackground = true
         guard shouldListenForDisney else { return }
         central.restartScan()
     }
 
     @objc private func screenUnlocked() {
+        central.inBackground = false
         guard shouldListenForDisney else { return }
         central.restartScan()
     }

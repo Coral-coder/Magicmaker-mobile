@@ -26,7 +26,8 @@ import kotlin.math.sin
  *   colour (starlightGlowColor) of the colour last heard or picked, the send pulse (two dotted
  *   rings growing for 0.42 s FastOutSlowIn, the second 0.18 s later, as runTransmitPulse); a tap
  *   on the wand steps to the next colour; the picker row (glow swatch, colour name, middle-cut
- *   code, the colour menu: one glow swatch row per colour, opened at the colour shown) and SEND;
+ *   code, the colour menu: one glow swatch row per colour, opened at the colour shown, then
+ *   DELETE for that colour behind a confirmation naming how many learned codes go) and SEND;
  *   the empty text without a library.
  * - NEW WAND (NewWandList): the generated codes in their own scroll region, a true-colour dot
  *   before each name; tap sends, hold renames.
@@ -96,14 +97,23 @@ object VFDWandScreen : VFDScreen {
 
     // MARK: - State (read only)
 
-    /** WandTab.learned for Starlight: the learned colours without New Wand codes, one per colour. */
+    /** WandTab.learned for Starlight: one entry per colour, its most recently learned code, no New
+     *  Wand codes (StarlightColors.wandColors). */
     private fun starlight(ctx: VFDContext): WandList =
         ctx.cached("wand.starlight", ctx.state.storeRevision) {
-            val list: List<MagicPacket> = ctx.store.learnedStarlightPackets()
-                .filterNot { isNewWandHex(it.hex) }
-                .distinctBy { paletteIndex(it.hex)?.and(0x1F) ?: -1 }
+            val list: List<MagicPacket> = StarlightColors.wandColors(ctx.store.learnedStarlightPackets())
             WandList(list, list.hashCode())
         }
+
+    /** WandTab.listEntryId: the Starlight list's entry of the colour learned code [id] is listed as
+     *  (the loop, or an earlier pick, may be on an older code of that colour), or null. */
+    private fun sameColorEntry(ctx: VFDContext, library: List<MagicPacket>, id: Long, newWand: Boolean): MagicPacket? {
+        if (newWand || id < 0) return null
+        val packet: MagicPacket = ctx.store.findLearnedStarlight(id) ?: return null
+        if (StarlightColors.isNewWandHex(packet.hex)) return null
+        val key: String = StarlightColors.wandColorKey(packet.hex)
+        return library.firstOrNull { StarlightColors.wandColorKey(it.hex) == key }
+    }
 
     /** MagicClassifier.starlightColorIndex of a library code, or null when it cannot be read: an
      *  empty or non-hex code (a hand-edited library file) throws NumberFormatException there. */
@@ -167,7 +177,7 @@ object VFDWandScreen : VFDScreen {
             wanted = ui.string("sel").toLongOrNull() ?: wanted
         }
         if (wanted >= 0 && library.none { it.id == wanted }) {
-            wanted = firstId
+            wanted = sameColorEntry(ctx, library, wanted, newWand)?.id ?: firstId
         }
         return wanted
     }
@@ -189,7 +199,9 @@ object VFDWandScreen : VFDScreen {
                 idx = if (ui.has("pickIdx") && ui.int("pickEpoch") == prev.epoch) ui.int("pickIdx") else prev.index
             }
             val heard: Int = heardRaw and 0x1F
-            val heardIdx: Int = entries.indexOfFirst { paletteIndex(it.hex) == heard }
+            // The entry of the heard colour (one per colour name: maybe another index of that name).
+            val heardKey: String = StarlightColors.wandColorKey(heard)
+            val heardIdx: Int = entries.indexOfFirst { StarlightColors.wandColorKey(it.hex) == heardKey }
             if (heardIdx >= 0) idx = heardIdx
             idx = if (count > 0) VFDMath.clamp(idx, 0, count - 1) else 0
             epochSeq += 1
@@ -770,7 +782,50 @@ object VFDWandScreen : VFDScreen {
             })
         }
         val selected: Int? = if (current.index in list.packets.indices) current.index else null
+        // Then DELETE for the colour shown (with its swatch), as the iPhone menu.
+        if (selected != null) {
+            val shown: MagicPacket = list.packets[selected]
+            val shownIndex: Int = paletteIndex(shown.hex) ?: 0
+            val shownName: String = StarlightColors.wandColorKey(shown.hex).uppercase()
+            items.add(VFDMenuItem("DELETE $shownName", destructive = true,
+                                  rgb = VFDColors.starlightGlow(shownIndex)) {
+                askDeleteColor(ctx, ui, shown)
+            })
+        }
         ctx.menu("WAND COLOR", items, selected = selected)
+    }
+
+    /** WandTab's colour delete: asks first, naming the colour and how many learned codes go. */
+    private fun askDeleteColor(ctx: VFDContext, ui: VFDUIState, packet: MagicPacket) {
+        val key: String = StarlightColors.wandColorKey(packet.hex)
+        val count: Int = maxOf(StarlightColors.wandColorGroup(ctx.store.learnedStarlightPackets(), key).size, 1)
+        val message: String = StarlightColors.wandDeleteLabel(key, count).uppercase()
+        ctx.confirm("Delete wand color?", message, confirmLabel = "DELETE", destructive = true) {
+            deleteColor(ctx, ui, packet)
+        }
+    }
+
+    /** WandTab.deleteColor: every learned code the list shows as this colour (the rest of the
+     *  library stays). A wand loop sending one of them moves on to the list's first colour, or
+     *  stops when none is left. */
+    private fun deleteColor(ctx: VFDContext, ui: VFDUIState, packet: MagicPacket) {
+        val key: String = StarlightColors.wandColorKey(packet.hex)
+        val ids: MutableSet<Long> = StarlightColors.wandColorGroup(ctx.store.learnedStarlightPackets(), key)
+            .map { it.id }
+            .toMutableSet()
+        ids.add(packet.id)
+        for (id in ids) ctx.store.deleteLearnedColor(id)
+        val loopId: Long = ctx.state.starlightLoopPacketId
+        if ((ctx.state.starlightLoopEnabled || loopOn(ctx, ui)) && loopId in ids) {
+            val next: MagicPacket? = StarlightColors.wandColors(ctx.store.learnedStarlightPackets()).firstOrNull()
+            if (next != null) {
+                MagicMakerForegroundService.setStarlightLoop(ctx.context, enabled = true, packetId = next.id)
+            } else {
+                ui.setInt("loopEpoch", loopEpoch(ctx))
+                ui.setBool("loopOn", false)
+                MagicMakerForegroundService.setStarlightLoop(ctx.context, enabled = false, packetId = -1L)
+            }
+        }
     }
 
     /** CLR LIB: "Clear wand library?" — clearLearnedStarlight(), the selection dropped and a

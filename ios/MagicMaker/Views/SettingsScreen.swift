@@ -2,8 +2,8 @@ import SwiftUI
 
 // SETTINGS tab: global transmission tuning, the scan filter and the app version. Port of
 // Android `SettingsTabScreen` and `TransmissionSettingsSection` in `LabPacketBuilderPanel.kt`.
-// The values live in this phone's preferences; while an Android relay is linked each change is
-// also sent to it, since TX mode and broadcast strength act on the relay's own radio.
+// The values live in this phone's preferences; while a relay (Android or ESP32) is linked each
+// change is also sent to it, since TX mode and broadcast strength act on the relay's own radio.
 
 /// Broadcast strength levels 0...3, as Android labels them.
 private let settingsPowerNames: [String] = ["MIN", "LOW", "MED", "MAX"]
@@ -62,6 +62,8 @@ struct SettingsScreen: View {
                     .padding(.top, 8)
                 transmissionSection
                 SettingsScanFilterSection(onChange: { on in scanFilterChanged(on) })
+                    .padding(.top, 8)
+                SettingsBackgroundSection()
                     .padding(.top, 8)
                 aboutLine
                     .padding(.top, 8)
@@ -138,12 +140,17 @@ struct SettingsScreen: View {
         }
     }
 
-    /// Where the values take effect: TX mode and strength only mean something on an Android relay.
+    /// Where the values take effect: TX mode and strength act on the relay's own radio.
     private var relayNote: some View {
-        let linked: Bool = androidRelayLinked
-        let text: String = linked
-            ? "ANDROID RELAY LINKED — CHANGES ARE SENT TO IT TOO"
-            : "TX MODE AND STRENGTH APPLY ON AN ANDROID RELAY"
+        let linked: Bool = relayTakesSettings
+        let text: String
+        if !linked {
+            text = "TX MODE AND STRENGTH APPLY ON THE RELAY (ANDROID OR ESP32)"
+        } else if vm.relayBackend == .esp32 {
+            text = "ESP32 LINKED — CHANGES ARE SENT TO IT TOO"
+        } else {
+            text = "ANDROID RELAY LINKED — CHANGES ARE SENT TO IT TOO"
+        }
         return Text(text)
             .font(MMTheme.techLabel(9))
             .foregroundStyle(linked ? MMTheme.cyanDim : MMTheme.textDim)
@@ -276,9 +283,10 @@ struct SettingsScreen: View {
 
     // MARK: Actions
 
-    /// An Android relay (BLE or WiFi) is linked and takes commands; the ESP32 takes only packets.
-    private var androidRelayLinked: Bool {
-        vm.relayBackend != .esp32 && vm.remoteLinkReady
+    /// A relay is linked and takes commands: an Android relay (BLE or WiFi) or the ESP32, which
+    /// keeps these settings in its RAM (the iPhone gives them again on every link).
+    private var relayTakesSettings: Bool {
+        vm.remoteLinkReady
     }
 
     private func reloadFromStore() {
@@ -298,7 +306,7 @@ struct SettingsScreen: View {
     private func setInterleave(_ on: Bool) {
         interleave = on
         store.saveTxInterleave(on)
-        if androidRelayLinked {
+        if relayTakesSettings {
             vm.sendRelaySetting("set_tx_interleave", ["enabled": on])
         } else {
             vm.noteRelaySettingPending("tx_interleave")
@@ -308,7 +316,7 @@ struct SettingsScreen: View {
     private func setTxPower(_ level: Int) {
         txPower = level
         store.saveTxPowerLevel(level)
-        if androidRelayLinked {
+        if relayTakesSettings {
             vm.sendRelaySetting("set_tx_power", ["level": level])
         } else {
             vm.noteRelaySettingPending("tx_power")
@@ -319,7 +327,7 @@ struct SettingsScreen: View {
         let ms: Int = settingsMilliseconds(value)
         preambleMs = Double(ms)
         store.saveWakeupPreambleMs(ms)
-        if androidRelayLinked {
+        if relayTakesSettings {
             vm.setAndroidWakeupPreamble(ms)
         } else {
             vm.noteRelaySettingPending("wakeup_preamble")
@@ -330,7 +338,7 @@ struct SettingsScreen: View {
         let ms: Int = settingsMilliseconds(value)
         burstMs = Double(ms)
         store.saveCommandBurstMs(ms)
-        if androidRelayLinked {
+        if relayTakesSettings {
             vm.setAndroidCommandBurst(ms)
         } else {
             vm.noteRelaySettingPending("command_burst")
@@ -341,7 +349,7 @@ struct SettingsScreen: View {
         let ms: Int = settingsMilliseconds(value)
         starlightMs = Double(ms)
         store.saveStarlightBurstMs(ms)
-        if androidRelayLinked {
+        if relayTakesSettings {
             vm.setAndroidStarlightBurst(ms)
         } else {
             vm.noteRelaySettingPending("starlight_burst")
@@ -349,9 +357,9 @@ struct SettingsScreen: View {
     }
 
     /// The scan filter is the iPhone's own; a linked Android relay is told too, as its relay
-    /// command handler expects from this tab.
+    /// command handler expects from this tab. The ESP32 does not scan.
     private func scanFilterChanged(_ on: Bool) {
-        if androidRelayLinked {
+        if vm.relayBackend != .esp32 && vm.remoteLinkReady {
             vm.sendRelaySetting("set_show_control_only", ["enabled": on])
         } else {
             vm.noteRelaySettingPending("show_control_only")
@@ -496,6 +504,59 @@ private struct SettingsScanFilterSection: View {
                 scan.showControlOnly = on
                 onChange(on)
             }
+        )
+    }
+}
+
+// MARK: - Background
+
+/// Opt-in "Keep running in background": background location keeps the app (relay link, loops,
+/// replays, the open log) running while it is not on screen. The state line and the note say
+/// honestly what that does and does not do.
+private struct SettingsBackgroundSection: View {
+    @EnvironmentObject var vm: AppViewModel
+
+    init() {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("BACKGROUND")
+                .font(MMTheme.techHeader())
+                .foregroundStyle(MMTheme.cyan)
+            toggleRow
+            Text(vm.backgroundKeepAlive.text)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(stateColor)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(AppViewModel.backgroundKeepAliveNote)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(MMTheme.textDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var toggleRow: some View {
+        let on: Bool = vm.keepRunningInBackground
+        return HStack(spacing: 6) {
+            Text("KEEP RUNNING IN BACKGROUND")
+                .font(MMTheme.techLabel())
+                .foregroundStyle(on ? MMTheme.cyan : MMTheme.textDim)
+            Spacer(minLength: 4)
+            Toggle("", isOn: keepRunningBinding)
+                .labelsHidden()
+                .tint(MMTheme.cyan)
+                .accessibilityLabel("Keep running in background")
+        }
+    }
+
+    private var stateColor: Color {
+        vm.backgroundKeepAlive == .needsLocation ? MMTheme.amber : MMTheme.textDim
+    }
+
+    private var keepRunningBinding: Binding<Bool> {
+        Binding(
+            get: { vm.keepRunningInBackground },
+            set: { on in vm.setKeepRunningInBackground(on) }
         )
     }
 }
