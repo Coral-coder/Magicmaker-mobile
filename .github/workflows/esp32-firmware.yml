@@ -7,6 +7,13 @@ name: ESP32 Firmware
 #   magicmaker-heltec-v3.bin  Heltec WiFi LoRa 32 V3  (ESP32-S3, 8MB, bootloader at 0x0)
 # flash.ps1 / flash.sh detect which board is plugged in and flash the matching image -
 # no local Arduino toolchain needed.
+# Also published: the app-only images the iPhone sends over Bluetooth (OTA, firmware 1.2+)
+#   magicmaker-esp32-app.bin, magicmaker-heltec-v3-app.bin   (= the merged image from 0x10000)
+# plus firmware.json (version from the image's "MMFW:<version>:<board>" marker, sizes, MD5s;
+# tools/firmware_manifest.py) and MagicMaker-Flasher-Windows.zip (flash.bat + images).
+# On main the images are committed back too: merged -> next to the flashers and into the web
+# flasher (web/flasher/, deployed by pages.yml), app images -> ios/MagicMaker/Firmware/ so the
+# next iPhone build carries them.
 
 on:
   workflow_dispatch:
@@ -16,6 +23,7 @@ on:
       - "firmware/esp32-transmitter/**.ino"
       - "firmware/esp32-transmitter/**.h"
       - "firmware/esp32-transmitter/**.cpp"
+      - "tools/firmware_manifest.py"
       - ".github/workflows/esp32-firmware.yml"
 
 permissions:
@@ -82,6 +90,7 @@ jobs:
           python3 -m esptool --chip esp32 merge_bin -o magicmaker-esp32.bin \
             --flash_mode dio --flash_freq 40m --flash_size 4MB \
             0x1000 "$BOOT" 0x8000 "$PART" 0xe000 "$BOOT0" 0x10000 "$APP"
+          cp "$APP" magicmaker-esp32-app.bin    # what an OTA update sends
 
           # Heltec WiFi LoRa 32 V3 (ESP32-S3FN8): 8MB flash, bootloader at 0x0.
           APP=$(ls build-heltec-v3/*.ino.bin | head -1)
@@ -91,8 +100,9 @@ jobs:
           python3 -m esptool --chip esp32s3 merge_bin -o magicmaker-heltec-v3.bin \
             --flash_mode dio --flash_freq 80m --flash_size 8MB \
             0x0 "$BOOT" 0x8000 "$PART" 0xe000 "$BOOT0" 0x10000 "$APP"
+          cp "$APP" magicmaker-heltec-v3-app.bin
 
-          ls -la magicmaker-esp32.bin magicmaker-heltec-v3.bin
+          ls -la magicmaker-esp32.bin magicmaker-heltec-v3.bin magicmaker-esp32-app.bin magicmaker-heltec-v3-app.bin
 
       # The flashers check the same thing before writing: a merged image must carry the
       # bootloader header (magic 0xE9 + chip id) where that chip's ROM looks for it, and the
@@ -116,39 +126,101 @@ jobs:
           sys.exit(0 if ok else 1)
           EOF
 
+      # Checks each app image (chip, one MMFW marker naming its board, equal to the merged
+      # image from 0x10000, same version on both boards) and writes firmware.json (release
+      # manifest) + manifest.json (ESP Web Tools manifest for web/flasher/).
+      - name: Check the app images, write firmware.json + web flasher manifest
+        id: manifest
+        run: |
+          VERSION=$(python3 tools/firmware_manifest.py --dir . --out manifests)
+          echo "firmware version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          cp manifests/firmware.json firmware.json
+          cat manifests/firmware.json manifests/manifest.json
+
+      - name: Package the one-click Windows flasher
+        env:
+          VERSION: ${{ steps.manifest.outputs.version }}
+        run: |
+          rm -rf MagicMaker-Flasher MagicMaker-Flasher-Windows.zip
+          mkdir MagicMaker-Flasher
+          cp firmware/esp32-transmitter/flash.bat firmware/esp32-transmitter/flash.ps1 \
+             magicmaker-esp32.bin magicmaker-heltec-v3.bin MagicMaker-Flasher/
+          cat > MagicMaker-Flasher/README.txt <<EOF
+          MagicMaker ESP32 transmitter ${VERSION} - one-click flasher (Windows)
+
+          1. Plug the board in with a USB data cable.
+          2. Double-click flash.bat.
+
+          It detects a Heltec WiFi LoRa 32 V3 (ESP32-S3) or a classic ESP32 and flashes the
+          matching image. The first run downloads esptool (internet needed once).
+          Can't connect? Heltec V3: hold PRG, tap RST, release PRG, double-click flash.bat
+          again, and tap RST when it is done. Classic ESP32: hold BOOT while it connects.
+          No COM port? Install the Silicon Labs CP210x (or WCH CH340) USB driver.
+
+          After flashing the board advertises as MM_ESP; pick the ESP32 transmitter backend in
+          the MagicMaker app. Heltec screen: dark until you press PRG.
+
+          No Windows PC? Flash from Chrome or Edge:
+            https://coral-coder.github.io/Magicmaker-mobile/flasher/
+          Firmware 1.2 and newer also update over Bluetooth from the iPhone app: press PRG
+          (Heltec) or BOOT (DevKit) on the board, then start the update in the app within 2 min.
+          EOF
+          python3 -m zipfile -c MagicMaker-Flasher-Windows.zip MagicMaker-Flasher/
+          python3 -m zipfile -l MagicMaker-Flasher-Windows.zip
+
       - name: Publish firmware release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: esp32-firmware
-          name: ESP32 firmware (latest)
+          name: ESP32 firmware ${{ steps.manifest.outputs.version }} (latest)
           body: |
-            Prebuilt MagicMaker ESP32 transmitter firmware: one merged image per board, each flashed at offset 0x0.
+            Prebuilt MagicMaker ESP32 transmitter firmware ${{ steps.manifest.outputs.version }}: one merged image per board, each flashed at offset 0x0.
             - `magicmaker-esp32.bin`: classic ESP32 (DevKit / WROOM / WROVER, 4MB flash).
             - `magicmaker-heltec-v3.bin`: Heltec WiFi LoRa 32 V3 / V3.1 / V3.2 (ESP32-S3, 8MB flash). The OLED stays dark to save power; press PRG to light it.
 
-            Flash with `./flash.ps1` (Windows) or `./flash.sh` (macOS/Linux) from firmware/esp32-transmitter/.
+            Easiest: the web flasher, https://coral-coder.github.io/Magicmaker-mobile/flasher/ (Chrome or Edge; it picks the image for the chip it finds).
+            Windows, one click: download `MagicMaker-Flasher-Windows.zip`, unzip, double-click `flash.bat`.
+            Or `./flash.ps1` (Windows) / `./flash.sh` (macOS/Linux) from firmware/esp32-transmitter/.
             They detect which board is plugged in and flash the matching .bin committed next to them
             (force one with `-Board esp32` / `-Board heltec-v3`, or `--board` for flash.sh).
+
+            Over-the-air (firmware 1.2+ already on the board): the iPhone app sends the app-only image
+            (`magicmaker-esp32-app.bin` / `magicmaker-heltec-v3-app.bin`, the merged image from 0x10000)
+            over Bluetooth after PRG/BOOT is pressed on the board. `firmware.json` lists the version, sizes and MD5s.
           files: |
             magicmaker-esp32.bin
             magicmaker-heltec-v3.bin
+            magicmaker-esp32-app.bin
+            magicmaker-heltec-v3-app.bin
+            firmware.json
+            MagicMaker-Flasher-Windows.zip
           fail_on_unmatched_files: true
 
-      # Also commit the built .bins into the repo so a plain `git pull` delivers the firmware
-      # and the flashers can flash it with no download (the repo is private). A .bin path
-      # doesn't match this workflow's .ino/.h/.cpp/workflow triggers, so this push won't loop.
+      # Also commit the built images into the repo so a plain `git pull` delivers the firmware
+      # and the flashers can flash it with no download: merged images next to the flashers and
+      # (with both manifests) into the web flasher, app images into the iPhone app's bundle.
+      # None of these .bin/.json paths matches this workflow's .ino/.h/.cpp/script/workflow
+      # triggers, and [skip ci] + the GITHUB_TOKEN push start no workflow, so this won't loop.
+      # pages.yml redeploys the flasher when this run finishes (workflow_run).
       - name: Commit prebuilt bins into the repo
         if: github.ref == 'refs/heads/main'   # a manual run on another branch only publishes
         run: |
           cp magicmaker-esp32.bin magicmaker-heltec-v3.bin firmware/esp32-transmitter/
+          mkdir -p web/flasher ios/MagicMaker/Firmware
+          cp magicmaker-esp32.bin magicmaker-heltec-v3.bin manifests/firmware.json manifests/manifest.json web/flasher/
+          cp magicmaker-esp32-app.bin magicmaker-heltec-v3-app.bin ios/MagicMaker/Firmware/
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add firmware/esp32-transmitter/magicmaker-esp32.bin firmware/esp32-transmitter/magicmaker-heltec-v3.bin
+          git add firmware/esp32-transmitter/magicmaker-esp32.bin firmware/esp32-transmitter/magicmaker-heltec-v3.bin \
+            web/flasher/magicmaker-esp32.bin web/flasher/magicmaker-heltec-v3.bin \
+            web/flasher/firmware.json web/flasher/manifest.json \
+            ios/MagicMaker/Firmware/magicmaker-esp32-app.bin ios/MagicMaker/Firmware/magicmaker-heltec-v3-app.bin
           if git diff --cached --quiet; then
             echo "prebuilt bins unchanged"
             exit 0
           fi
-          git commit -m "ci: update prebuilt ESP32 firmware (classic + Heltec V3) [skip ci]"
+          git commit -m "ci: update prebuilt ESP32 firmware ${{ steps.manifest.outputs.version }} (classic + Heltec V3) [skip ci]"
           # main may have moved while we built (other pushes): replay the bin commit on top.
           for attempt in 1 2 3; do
             if git push origin HEAD:main; then exit 0; fi

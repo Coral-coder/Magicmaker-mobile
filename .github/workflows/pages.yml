@@ -1,0 +1,71 @@
+name: Pages
+
+# Publishes web/ to GitHub Pages: the ESP32 web flasher lives at
+#   https://coral-coder.github.io/Magicmaker-mobile/flasher/
+# One-time setup: Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+#
+# The ESP32 Firmware workflow commits fresh images into web/flasher/ with [skip ci] (and a
+# GITHUB_TOKEN push starts no workflow anyway), so that case is covered by workflow_run:
+# this deploys once that workflow has finished on main.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "firmware/esp32-transmitter/*.bin"
+      - ".github/workflows/pages.yml"
+  workflow_run:
+    workflows: ["ESP32 Firmware"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a queued one is replaced by a newer one, a running one finishes.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # On workflow_run this checks out the newest main, i.e. including the images the
+      # firmware run just committed.
+      - uses: actions/checkout@v4
+
+      - name: Check the flasher files
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          d = "web/flasher"
+          ok = True
+          m = json.load(open(os.path.join(d, "manifest.json")))
+          for b in m["builds"]:
+              for p in b["parts"]:
+                  f = os.path.join(d, p["path"].split("?")[0])
+                  good = os.path.isfile(f) and os.path.getsize(f) > 100 * 1024
+                  print(f"{b['chipFamily']}: {f} {'OK' if good else 'MISSING'}")
+                  ok = ok and good
+          fw = json.load(open(os.path.join(d, "firmware.json")))
+          print("firmware", fw["version"])
+          sys.exit(0 if ok else 1)
+          EOF
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - id: deployment
+        uses: actions/deploy-pages@v5

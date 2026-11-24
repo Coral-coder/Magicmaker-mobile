@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
 
 // ---- Estimated draw per state (mA): SEEDS, tune them with a USB power meter --------------
 // How: power the board from a USB meter with the battery unplugged, screen dark, no phone
@@ -31,14 +32,14 @@ static const float DRAW_SCREEN_MA = 8.0f;   // + the OLED lit
 // ---- Model constants -----------------------------------------------------------------------
 static const uint32_t DRAW_AVG_TAU_MS        = 900000;  // the modelled draw is averaged over ~15 minutes
 static const uint32_t DRAW_MAX_STEP_MS       = 60000;
-static const float    BAT_FILTER_ALPHA       = 0.25f;   // reading filter: filt += alpha * (mV - filt)
+static const float    BAT_FILTER_TAU_S       = 180.0f;  // reading filter time constant (the same lag lit or dark)
 static const uint8_t  BAT_HISTORY            = 64;      // filtered readings kept, one per ~minute
 static const uint32_t BAT_HISTORY_STEP_S     = 55;
 static const uint32_t BAT_CHARGE_WINDOW_S    = 300;     // charging: compared with a reading >= 5 min old ...
 static const float    BAT_CHARGE_RISE_MV     = 15.0f;   // ... the voltage rose this much
 static const float    BAT_CHARGE_END_DROP_MV = 10.0f;   // charging ended: this far below the peak while charging
 static const float    BAT_USB_MV             = 4250.0f; // above this the cell is on the charger (USB power)
-static const uint32_t BAT_RELAX_S            = 600;     // after charging the voltage settles: not measured for 10 min
+static const uint32_t BAT_RELAX_S            = 600;     // after boot / charging: not measured for 10 min (filter, cell settle)
 static const uint32_t BAT_MEAS_MIN_S         = 1200;    // measured drain: over at least 20 minutes ...
 static const float    BAT_MEAS_MIN_DROP_PCT  = 2.0f;    // ... and at least this much charge used
 static const float    BAT_SLOPE_SMOOTH       = 0.3f;    // successive measured slopes, smoothed
@@ -65,6 +66,7 @@ struct BatteryModel {
   uint16_t capMah;
   // readings
   bool     have;          // a plausible reading is current
+  uint32_t lastT;         // its uptime, s
   float    filtMv;
   float    pct;
   Entry    ring[BAT_HISTORY];
@@ -136,10 +138,17 @@ struct BatteryModel {
 
   // A plausible reading (battery mV) at uptime tS.
   void addReading(uint32_t tS, int32_t mv) {
-    const bool first = !have;
-    if (first) filtMv = (float)mv;
-    else filtMv += BAT_FILTER_ALPHA * ((float)mv - filtMv);
+    // Time-based low-pass: readings come every 5 s (lit) or 60 s (dark), the lag stays ~3 min.
+    if (!have) {
+      filtMv = (float)mv;
+      if (measureFromS < tS + BAT_RELAX_S) measureFromS = tS + BAT_RELAX_S;  // let the filter (and cell) settle
+    } else {
+      const uint32_t dt = tS - lastT;
+      const float k = 1.0f - expf(-(float)dt / BAT_FILTER_TAU_S);
+      filtMv += k * ((float)mv - filtMv);
+    }
     have = true;
+    lastT = tS;
     pct = batteryPercentFromMv(filtMv);
 
     // Charging: the voltage rose against a reading at least 5 minutes old. It ends when the

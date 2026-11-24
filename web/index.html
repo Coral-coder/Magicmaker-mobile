@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MagicMaker</title>
+  <meta http-equiv="refresh" content="0; url=flasher/">
+  <link rel="canonical" href="flasher/">
+  <meta name="color-scheme" content="light dark">
+  <style>
+    :root { --bg: #f7f5f0; --text: #1d1b17; --accent: #a35f00; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --bg: #15130f; --text: #f1ede4; --accent: #ffb347; }
+    }
+    :root[data-theme="dark"] { --bg: #15130f; --text: #f1ede4; --accent: #ffb347; }
+    body { margin: 0; padding: 40px 16px; background: var(--bg); color: var(--text);
+           font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <p>MagicMaker ESP32 transmitter: <a href="flasher/">open the web flasher</a>.</p>
+</body>
+</html>

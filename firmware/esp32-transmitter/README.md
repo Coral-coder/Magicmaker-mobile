@@ -23,7 +23,10 @@ protocol has to change — the app already knows how to drive this service.
 - **Chip settings**: wake preamble, command burst, wand burst, TX power and interleave mode.
   RAM only; the app pushes its values every time it links (the iPhone is the authority).
 - **The chip never scans.** Scanning, logging, auto-responses and the library stay on the
-  phone; asking the chip to scan is answered `"unsupported"`.
+  phone; asking the chip to scan is answered `"unsupported"`. Between transmissions it just
+  sits idle, waiting for the phone.
+- **Battery (Heltec V3):** % left, charge left in mAh and the **expected runtime in hours and
+  minutes** on the screen and in STATUS (the app's LINK tab). See **Battery** below.
 
 ## Hardware
 
@@ -108,7 +111,11 @@ The sketch detects the board when it is compiled (`board.h`); no build flags nee
 **The screen is off and unpowered unless you are using it.**
 
 - Press **PRG** → the screen lights on the **STATUS** page.
-- Press again → next page: **STATUS → LAST PACKET → DEVICE → STATUS …**
+- Press again → next page: **STATUS → LAST PACKET → DEVICE → STATUS …** (on DEVICE the page
+  turns when you let go).
+- On **DEVICE**, **hold PRG for 1 s** → the next battery capacity: 400 → 500 → 1000 → 1100 →
+  2000 → 3000 → 5000 → 400 mAh (keep holding to step again every second; the `CAP` line is
+  highlighted). The choice is saved and survives reboots.
 - It goes dark **10 s after the last press** (`SCREEN_ON_MS` at the top of the `.ino`).
 - Nothing else lights it: no boot splash, not a phone connecting, not a transmit.
 - At runtime PRG is just a button. It only selects flashing mode when held while you tap
@@ -116,13 +123,14 @@ The sketch detects the board when it is compiled (`board.h`); no build flags nee
 
 | Page | Shows |
 |---|---|
-| STATUS | `BLE` LINKED / WAITING FOR PHONE · `TX` IDLE / WAKE / SEND with a progress bar for the current phase · what the chip runs by itself: KEEP AWAKE ON / TX LOOP 3S / WAND LOOP 2.5S / KEEP AWAKE OFF · `PKT` packets sent since boot · the last packet's kind (BAND / WAND / PING / RAW) and how long ago |
+| STATUS | `BLE` LINKED / WAITING FOR PHONE · `TX` IDLE / WAKE / SEND with a progress bar for the current phase · what the chip runs by itself: KEEP AWAKE ON / TX LOOP 3S / WAND LOOP 2.5S / KEEP AWAKE OFF · `PKT` packets sent since boot · the last packet's kind (BAND / WAND / PING / RAW) and how long ago · `BAT` % and expected runtime (`68% ~9H 40M`), or `68% CHARGING` / `100% USB POWER` / `--` |
 | LAST PACKET | kind (RAW = a replay step or an MBLE tap), length and stream time (`WAKE+` when a wake ping ran first), then the packet hex, seven bytes a line |
-| DEVICE | `BAT` battery voltage and % (`--` without a plausible reading) · `UP` uptime · `BLE` name and the last three bytes of its address · `FW` firmware version and board |
+| DEVICE | `BAT` battery voltage and % · `CAP` charge left of the capacity (`272 OF 400MAH`; hold PRG to change the capacity) · `RUN` expected runtime (`~9H 40M LEFT`, `~40M LEFT`, `~99H+ LEFT`) or CHARGING / USB POWER · `UP` uptime · `BLE` name and the last three bytes of its address · `FW` firmware version and board (`--` wherever there is no plausible battery reading) |
 
 The text uses the app's VFD 5×7 dot-matrix face. `vfd_font_5x7.h` is generated from
 `tools/vfd/vfd_font.py` by `python3 tools/vfd/gen_c.py` (`--check` tells whether it is
-current). Screen code: `oled_ui.h` (power, button, battery), `oled_pages.h` (layout).
+current). Screen code: `oled_ui.h` (power, button), `oled_pages.h` (layout). Battery and LoRa:
+`power.h` (hardware), `battery_model.h` (%, charging, runtime; pure C++).
 
 **Power notes**
 
@@ -132,35 +140,77 @@ current). Screen code: `oled_ui.h` (power, button, battery), `oled_pages.h` (lay
 - While lit it redraws at most 4×/s and sends only the 8-pixel rows that changed. Lighting
   it pauses the firmware's main loop for under 0.1 s (panel reset + first frame); a
   transmit in progress at that moment runs that much longer.
-- No Wi-Fi. The SX1262 LoRa radio is never initialised (left in its power-on state).
-- CPU stays at 80 MHz and advertising is unchanged, as on other boards.
+- No Wi-Fi. The SX1262 LoRa radio, which this firmware never uses, is **put to sleep at boot**
+  (reset, wait until ready, `SetSleep`; its chip select then stays high). Out of power-on it
+  would idle in standby at ~0.6 mA. `MM_LORA_SLEEP 0` (top of `power.h`) leaves it alone.
 
 **Battery**
 
 - A LiPo on the battery connector is read on GPIO1 through the board's divider (×4.9, ×1.045
-  calibration). The divider is switched on (GPIO37) only for a reading, **only while the
-  screen is lit, at most every 5 s**, and switched off again straight after.
+  calibration). The divider is switched on (GPIO37) **only for a reading** (~10 ms) and off
+  again straight after: **once a minute while the screen is dark**, every 5 s while it is lit,
+  and 0.1 s after boot. A reading waits while a beacon is on air (its transmit bursts dip the
+  voltage), at most 10 s.
 - The divider switch is active LOW on V3.0/V3.1 and active HIGH on V3.2: the firmware tries
   LOW, then HIGH if that reads ~0 V, and remembers which worked.
-- The % is a rough LiPo resting-voltage estimate; it reads high while charging. Without a
-  battery it shows `--` or the charger's output voltage.
+- **%** comes from the filtered voltage on a LiPo resting-voltage curve (rough; it reads high
+  while charging). **Charge left** = capacity × %. The capacity is `BATTERY_MAH` (400 mAh) until
+  you pick another on the DEVICE page (hold PRG); that choice is the only thing the firmware
+  ever writes to flash, and only when you change it.
+- **Expected runtime** = charge left ÷ estimated draw. The board cannot measure its current,
+  only the voltage, so the estimate starts from a **model**: a ~15-minute time-weighted average
+  of per-state draws (`DRAW_*` at the top of `battery_model.h`: base, advertising, phone
+  linked, beacon on air, screen lit). Once the battery has visibly drained (≥ 2 % over ≥ 20 min,
+  counted from 10 min after boot or charging), the **measured** drain takes over: the % slope
+  over the last hour (or since the discharge began, for big cells), smoothed, and kept within
+  0.5–2.5× the model, because the flat middle of a LiPo curve makes single slopes noisy.
+- **Charging** = the voltage rose ≥ 15 mV within 5 min (it ends when the voltage falls 10 mV
+  from its peak, i.e. unplugged); **USB POWER** = above 4.25 V. Neither shows a runtime. On USB
+  with a full, idle cell the voltage looks like a resting battery, so the screen then shows a
+  runtime as if on battery: the board has no USB-sense pin.
+- **Tune the model with a USB meter** (battery unplugged, board on the meter): the screen-dark,
+  no-phone, nothing-on-air reading is `DRAW_BASE_MA + DRAW_ADV_MA`; link a phone, start
+  keep-awake and light the screen one at a time to see what each adds. Until then the runtime
+  is only as good as the seed `DRAW_BASE_MA` (37.5 mA) for the first half hour.
+- Without a battery the screen shows `--` (or the charger's output voltage, as USB POWER).
 
 ## Power (backpack use)
 
-Tuned to sip battery:
+The board sits idle between transmissions and does what it can to save battery. Each measure,
+honestly:
 
-- CPU throttled to **80 MHz** (~half the draw of 240 MHz; still ample for BLE).
-- The **Disney beacon is only on air during a transmit burst** — the rest of the time the
-  radio is nearly idle.
-- Idle-connectable advertising is **relaxed (200–400 ms)** for 30 s after boot or after a phone
-  leaves, then **slows to ~1–1.3 s**; a linked connection requests a **30–50 ms interval with
-  latency**, so the radio mostly idles between events.
-- `loop()` **sleeps until its next deadline** (a phase end, a loop burst, an LED blink, the
-  screen) and is woken early by a command, a connect/disconnect or PRG; it no longer polls.
+- **CPU at 80 MHz** (about half the draw of 240 MHz). This is the floor: BLE needs the 80 MHz
+  APB clock.
+- **The Disney beacon is on air only while something is being sent** (a tap, a replay step,
+  a loop burst, the keep-awake stream), and only then at full power (the app's TX power
+  setting, +9 dBm by default).
+- **Waiting for a phone:** connectable advertising at **+3 dBm**, every 200–400 ms for 30 s
+  after boot or after a phone leaves (quick relink), then every **546–760 ms** (Apple's
+  recommended intervals).
+- **Linked:** the link runs at **+3 dBm** with a 30–50 ms connection interval and slave latency
+  2, so the radio idles between events. (A longer latency would save ~0.3 mA but add up to
+  ~0.2 s to every tap.)
+- **`loop()` sleeps until its next deadline** (a phase end, a loop burst, an LED blink, a
+  battery reading, the screen; at most 5 s) and is woken early by a command, a
+  connect/disconnect or PRG. It does not poll.
+- **Heltec V3:** the LoRa radio is asleep (~0.6 mA saved, check with a meter), the OLED and its
+  Vext rail are unpowered unless you use PRG, and the battery divider is on for ~10 ms a
+  minute. The LED only blinks.
+- **No Wi-Fi, nothing written to flash** (except a battery capacity you pick on the screen).
 
-Rough idle draw is a few mA on a bare module; a small LiPo lasts a full park day. For even
-longer runtime, drop `NimBLEDevice::setPower()` from `P9` to a lower level (shorter range),
-and remove the status-LED writes.
+What it can't do in this core (Arduino-ESP32 2.0.17):
+
+- **No automatic light sleep:** `CONFIG_PM_ENABLE` is off in the prebuilt core, so the CPU wakes
+  for every 1 ms FreeRTOS tick. Manual light sleep would drop the BLE link.
+- **ESP32-S3 (Heltec V3): no BLE modem sleep** either (compiled out of this core's S3
+  controller), so the radio's clocks stay up between events. Expect roughly **30–45 mA idle**
+  (estimate; measure yours), i.e. about **9–13 h on a 400 mAh cell**. The screen shows the live
+  estimate.
+- The **classic ESP32** does use BLE modem sleep between radio events; its datasheet figures
+  for modem sleep at 80 MHz are ~20–30 mA. It has no battery reader.
+
+For longer runtime: a bigger cell, fewer loops/keep-awake (the beacon is the biggest extra), or
+a lower beacon power in the app (shorter range).
 
 ## Tuning (top of the `.ino`)
 
@@ -174,17 +224,21 @@ and remove the status-LED writes.
 | `LOOP_DEFAULT_MS` | TX / wand loop interval until the app sends one | 3000 ms |
 | `BEACON_ADV_MIN/MAX` | advertising interval during a burst (lower = stronger/quicker) | 20–30 ms |
 | `IDLE_ADV_FAST_MIN/MAX` | advertising interval while waiting for a phone, first 30 s | 200–400 ms |
-| `IDLE_ADV_SLOW_MIN/MAX` | … after `IDLE_FAST_WINDOW_MS` | 1022.5–1285 ms |
+| `IDLE_ADV_SLOW_MIN/MAX` | … after `IDLE_FAST_WINDOW_MS` | 546.25–760 ms |
 | `IDLE_FAST_WINDOW_MS` | fast idle advertising after boot / a disconnect | 30 s |
+| `IDLE_ADV_POWER` | TX power while waiting for a phone | +3 dBm |
+| `LINK_POWER` | TX power of the link to the phone (BLE default power); raise to `P9` if it drops at range | +3 dBm |
 | `LED_MIN_FLASH_GAP_MS` | at most one transmit flash per this long (dense replays still blink) | 250 ms |
-| `LOOP_MAX_SLEEP_MS` | longest `loop()` sleep between deadlines | 1000 ms |
+| `LOOP_MAX_SLEEP_MS` | longest `loop()` sleep between deadlines (all deadlines are tracked; a safety net) | 5000 ms |
 | `SCREEN_ON_MS` | Heltec V3: how long the screen stays lit after the last PRG press | 10 s |
-| `BATTERY_MAH` | Heltec V3: rated LiPo capacity (STATUS `batMah`) | 400 mAh |
+| `BATTERY_MAH` | Heltec V3: LiPo capacity until one is picked on the screen (STATUS `batMah`) | 400 mAh |
 
 The wire clamps (TX-characteristic duration 60–12000 ms, `raw_burst` 60–10000 ms, loop interval
 500–60000 ms, setting ranges) are part of the relay contract and live in `relay_proto.h`.
-Screen internals (frame rate, battery period, panel reset timing) are at the top of
-`oled_ui.h`.
+Screen internals (frame rate, long press, panel reset timing) are at the top of `oled_ui.h`;
+battery timing (reading periods, capacity presets) and `MM_LORA_SLEEP` at the top of
+`power.h`; the per-state draw estimates (`DRAW_*`) and the runtime model at the top of
+`battery_model.h`.
 
 ## Protocol reference
 
@@ -249,8 +303,8 @@ that replaced it. Disconnects change nothing; nothing is stored in flash.
 | `starlightLoopEnabled`, `starlightIntervalMs` | WAND LOOP runs | |
 | `wakeupPreambleMs`, `commandBurstMs`, `starlightBurstMs`, `txPowerLevel`, `txInterleave` | always | chip settings |
 | `uptimeS`, `sent` | always | seconds since boot, jobs put on air since boot |
-| `batMv`, `batPct`, `batMah` | Heltec V3 with a plausible, recent reading | battery |
-| `runMin` / `charging` | with the battery keys | runtime estimate in minutes (omitted while unknown) / `true` while charging |
+| `batMv`, `batPct`, `batMah` | Heltec V3 with a plausible reading | filtered battery mV, %, capacity (mAh) |
+| `runMin` / `charging` | with the battery keys | expected runtime in minutes / `true` while charging or on USB power (then no `runMin`) |
 | `items` | after a catalog action | `[]` |
 | `keepAwakeHex` | KEEP AWAKE runs | the streamed packet |
 | `txLoopHex`, `txLoopLabel` | TX LOOP runs | its packet and label (label dropped first if the object would exceed 508 bytes) |
@@ -262,7 +316,8 @@ Example (idle, Heltec):
 {"ok":true,"running":true,"proto":2,"fw":"1.2","board":"HELTEC V3","keepAwake":false,"wakeupPreambleMs":520,"commandBurstMs":4000,"starlightBurstMs":500,"txPowerLevel":3,"txInterleave":false,"uptimeS":8123,"sent":42,"batMv":3921,"batPct":68,"batMah":400,"runMin":431}
 ```
 
-**Advertising.** Waiting for a phone: flags + service UUID, name `MM_ESP` in the scan response.
-While a packet is on air: manufacturer data only, connectable, 20–30 ms; with no phone linked
+**Advertising.** Waiting for a phone: flags + service UUID, name `MM_ESP` in the scan response,
++3 dBm. While a packet is on air: manufacturer data only, connectable, 20–30 ms, at the app's
+beacon power; with no phone linked
 its scan response carries `MM_ESP` + the service UUID, so the app can find the board and relink
 during a keep-awake stream or a loop. Linked and idle: not advertising.
