@@ -46,8 +46,14 @@ defaults:
     working-directory: ios
 
 jobs:
-  # Reads the *b / *u markers; cheap, so it runs on Linux for every push.
+  # Reads the *b / *u markers. Skipped outright (no runner, no minutes) unless the pushed
+  # commit message contains a marker, a tag or a manual run started it; the step below then
+  # checks the SUBJECT line only.
   plan:
+    if: >-
+      github.event_name != 'push' || github.ref_type == 'tag' ||
+      contains(github.event.head_commit.message, '*u') ||
+      contains(github.event.head_commit.message, '*b')
     runs-on: ubuntu-latest
     outputs:
       build: ${{ steps.plan.outputs.build }}

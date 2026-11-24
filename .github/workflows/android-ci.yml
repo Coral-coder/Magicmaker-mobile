@@ -1,14 +1,26 @@
 name: Android CI
 
-# Real, always-on CI: builds the app on every push and pull request so you get a
-# green/red check automatically — no tags, no secrets, no setup required.
+# Builds the app on every push / pull request that touches android/ (or the VFD golden data)
+# so you get a green/red check automatically — no tags, no secrets, no setup required.
 # (Signed release builds + OTA distribution live in android-release.yml, which
 # runs on version tags.)
 
 on:
   push:
     branches: [main]
+    # Only when something the Android build or its VFD golden test reads changed: iOS,
+    # firmware and docs pushes don't spend Actions minutes here.
+    paths:
+      - "android/**"
+      - "tools/vfd/golden/**"
+      - "tools/vfd/gen_kotlin.py"
+      - "tools/vfd/vfd_font.py"
+      - ".github/workflows/android-ci.yml"
   pull_request:
+    paths:
+      - "android/**"
+      - "tools/vfd/golden/**"
+      - ".github/workflows/android-ci.yml"
   workflow_dispatch:
 
 permissions:
