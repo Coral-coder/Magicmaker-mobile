@@ -254,15 +254,15 @@ enum FirmwareFiles {
         var request = URLRequest(url: api, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        let body: Data
-        let response: URLResponse
+        let reply: (Data, URLResponse)
         do {
-            (body, response) = try await URLSession.shared.data(for: request)
+            reply = try await URLSession.shared.data(for: request)
         } catch {
             result.error = error.localizedDescription
             return result
         }
-        let code: Int = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let body: Data = reply.0
+        let code: Int = (reply.1 as? HTTPURLResponse)?.statusCode ?? 0
         if code == 404 {
             result.error = "no firmware release on GitHub"
             return result
@@ -285,11 +285,11 @@ enum FirmwareFiles {
                merged.count > appOffset {
                 app = Data(merged.dropFirst(appOffset))
             }
-            guard let app else {
+            guard let appData = app else {
                 result.notes.append("\(board.label): not in the release")
                 continue
             }
-            guard let image = makeImage(from: app, source: .web, board: board) else {
+            guard let image = makeImage(from: appData, source: .web, board: board) else {
                 result.notes.append("\(board.label): no version marker (firmware before 1.2)")
                 continue
             }
@@ -321,14 +321,14 @@ enum FirmwareFiles {
     private static func download(_ url: URL) async -> Data? {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        let data: Data
-        let response: URLResponse
+        let reply: (Data, URLResponse)
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            reply = try await URLSession.shared.data(for: request)
         } catch {
             return nil
         }
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        let data: Data = reply.0
+        guard (reply.1 as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         guard data.count <= appOffset + maxImageBytes else { return nil }
         return data
     }

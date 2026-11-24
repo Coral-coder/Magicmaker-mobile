@@ -14,6 +14,17 @@ final class AndroidRelayGattClient: NSObject {
     static let commandUUID = CBUUID(string: "A7830003-0000-1000-8000-00805F9B34FB")
     static let statusUUID = CBUUID(string: "A7830004-0000-1000-8000-00805F9B34FB")
     static let catalogUUID = CBUUID(string: "A7830005-0000-1000-8000-00805F9B34FB")
+    /// Firmware updates over Bluetooth (ESP32 firmware 1.2+, firmware/esp32-transmitter/ota.h):
+    /// write, write without response, notify. The Android relay has no such characteristic.
+    static let otaUUID = CBUUID(string: "A7830007-0000-1000-8000-00805F9B34FB")
+    /// Every characteristic the link looks for on the relay service.
+    static let relayCharacteristicUUIDs: [CBUUID] = [
+        AndroidRelayGattClient.transmitUUID,
+        AndroidRelayGattClient.commandUUID,
+        AndroidRelayGattClient.statusUUID,
+        AndroidRelayGattClient.catalogUUID,
+        AndroidRelayGattClient.otaUUID
+    ]
     /// The Android relay's tag: ASCII service data on `serviceUUID` in its scan response. It
     /// advertises no name, so the phone's own Bluetooth name is never changed.
     static let androidRelayTag = "MM_AND"
@@ -98,6 +109,62 @@ final class AndroidRelayGattClient: NSObject {
     var onCommandReady: (() -> Void)?
     var onCatalogReceived: (([String: Any]?) -> Void)?
     weak var scanCoordinator: RelayGattScanning?
+
+    // MARK: Firmware updates (OTA characteristic, ESP32 firmware 1.2+)
+
+    /// A notification on the OTA characteristic: [0x80 | op][status][u32 value][text].
+    var onOtaNotify: ((Data) -> Void)?
+    /// The OTA characteristic became usable (true: its notifications are on) or went away (false).
+    var onOtaLinkChanged: ((Bool) -> Void)?
+    /// CoreBluetooth can take more writes without response.
+    var onOtaWriteReady: (() -> Void)?
+    /// A write with response to the OTA characteristic finished (nil: accepted).
+    var onOtaWriteResult: ((Error?) -> Void)?
+    /// A firmware transfer holds the link: transmits, commands and status reads are refused.
+    var otaBusy = false
+    private var otaCharacteristic: CBCharacteristic?
+    private var otaNotifying = false
+
+    /// The linked relay has the OTA characteristic (an ESP32 on firmware 1.2 or newer).
+    var hasOtaCharacteristic: Bool {
+        relay != nil && otaCharacteristic != nil
+    }
+
+    /// The OTA characteristic is found and its notifications are on.
+    var isOtaReady: Bool {
+        relay?.state == .connected && otaCharacteristic != nil && otaNotifying
+    }
+
+    /// Largest write without response this link takes (ATT MTU - 3).
+    var otaMaxWriteWithoutResponse: Int {
+        relay?.maximumWriteValueLength(for: .withoutResponse) ?? 20
+    }
+
+    var otaCanSendWithoutResponse: Bool {
+        relay?.canSendWriteWithoutResponse ?? false
+    }
+
+    /// One OTA request. Without response it is only written while CoreBluetooth can take it
+    /// (false otherwise; `onOtaWriteReady` says when to try again).
+    @discardableResult
+    func otaWrite(_ data: Data, withResponse: Bool) -> Bool {
+        guard let relay, relay.state == .connected, let ota = otaCharacteristic else { return false }
+        if withResponse {
+            relay.writeValue(data, for: ota, type: .withResponse)
+            return true
+        }
+        guard relay.canSendWriteWithoutResponse else { return false }
+        relay.writeValue(data, for: ota, type: .withoutResponse)
+        return true
+    }
+
+    /// The link dropped or is being rebuilt: the OTA characteristic is gone until rediscovered.
+    private func dropOta() {
+        let had: Bool = otaCharacteristic != nil || otaNotifying
+        otaCharacteristic = nil
+        otaNotifying = false
+        if had { onOtaLinkChanged?(false) }
+    }
 
     private var relay: CBPeripheral?
     private var txCharacteristic: CBCharacteristic?
@@ -215,10 +282,7 @@ final class AndroidRelayGattClient: NSObject {
         if peripheral.services?.isEmpty != false {
             peripheral.discoverServices(nil)
         } else if let service = peripheral.services?.first(where: { Self.uuidMatches($0.uuid, Self.serviceUUID) }) {
-            peripheral.discoverCharacteristics(
-                [Self.transmitUUID, Self.commandUUID, Self.statusUUID, Self.catalogUUID],
-                for: service
-            )
+            peripheral.discoverCharacteristics(Self.relayCharacteristicUUIDs, for: service)
         } else {
             peripheral.discoverServices(nil)
         }
@@ -229,6 +293,7 @@ final class AndroidRelayGattClient: NSObject {
         markProgress()
         // CoreBluetooth never answers a read or write still in flight when the link drops, so
         // fail them here or the GATT queue stays busy after the relay links again.
+        dropOta()
         if isBroadcasting {
             txCharacteristic = nil
             connectInProgress = false
@@ -332,10 +397,7 @@ final class AndroidRelayGattClient: NSObject {
                 if relay.services?.isEmpty != false {
                     relay.discoverServices(nil)
                 } else if let service = relay.services?.first(where: { Self.uuidMatches($0.uuid, Self.serviceUUID) }) {
-                    relay.discoverCharacteristics(
-                        [Self.transmitUUID, Self.commandUUID, Self.statusUUID, Self.catalogUUID],
-                        for: service
-                    )
+                    relay.discoverCharacteristics(Self.relayCharacteristicUUIDs, for: service)
                 } else {
                     relay.discoverServices(nil)
                 }
@@ -398,6 +460,7 @@ final class AndroidRelayGattClient: NSObject {
         guard isRelayPeripheral(peripheral) else { return }
         markProgress()
         if isBroadcasting {
+            dropOta()
             txCharacteristic = nil
             relay = nil
             connectInProgress = false
@@ -419,6 +482,11 @@ final class AndroidRelayGattClient: NSObject {
     }
 
     func transmit(hex: String, durationMs: Double, central: CBCentralManager, onComplete: @escaping (Bool) -> Void) {
+        if otaBusy {
+            onStatus?("Firmware update running — transmit paused")
+            onComplete(false)
+            return
+        }
         let canonical = HexUtils.canonicalHex(hex)
         pendingHex = canonical
         pendingDurationMs = Int(durationMs)
@@ -466,7 +534,7 @@ final class AndroidRelayGattClient: NSObject {
     }
 
     func sendRemoteCommandJson(_ body: [String: Any], onComplete: @escaping ([String: Any]?) -> Void) {
-        guard isCommandReady else {
+        guard isCommandReady, !otaBusy else {
             onComplete(nil)
             return
         }
@@ -635,7 +703,7 @@ final class AndroidRelayGattClient: NSObject {
     }
 
     func readRemoteStatus(onComplete: @escaping (AndroidRemoteStatus?) -> Void) {
-        guard isReady else {
+        guard isReady, !otaBusy else {
             onComplete(nil)
             return
         }
@@ -690,7 +758,7 @@ final class AndroidRelayGattClient: NSObject {
     }
 
     var hasGattWorkQueued: Bool {
-        gattBusy || !gattQueue.isEmpty || pendingJsonCompletion != nil || pendingStatusCompletion != nil
+        otaBusy || gattBusy || !gattQueue.isEmpty || pendingJsonCompletion != nil || pendingStatusCompletion != nil
     }
 
     private func sendCommand(json: String, onComplete: @escaping (Bool) -> Void) {
@@ -775,6 +843,7 @@ final class AndroidRelayGattClient: NSObject {
         commandCharacteristic = nil
         statusCharacteristic = nil
         catalogCharacteristic = nil
+        dropOta()
     }
 
     private func clearPendingReads() {
@@ -870,10 +939,7 @@ extension AndroidRelayGattClient: CBPeripheralDelegate {
             failLink("Android missing relay service (found: \(found))")
             return
         }
-        peripheral.discoverCharacteristics(
-            [Self.transmitUUID, Self.commandUUID, Self.statusUUID, Self.catalogUUID],
-            for: service
-        )
+        peripheral.discoverCharacteristics(Self.relayCharacteristicUUIDs, for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
@@ -900,7 +966,14 @@ extension AndroidRelayGattClient: CBPeripheralDelegate {
             failLink("Android missing command/status (found: \(found))")
             return
         }
+        let ota: CBCharacteristic? = chars.first(where: { Self.uuidMatches($0.uuid, Self.otaUUID) })
+        if ota == nil { dropOta() }
+        otaCharacteristic = ota
+        otaNotifying = false
         completeLink()
+        if let ota, ota.properties.contains(.notify) {
+            peripheral.setNotifyValue(true, for: ota)
+        }
         onStatus?("Android relay ready — syncing library…")
         // Chunked catalog_sync is the reliable path; skip parallel CATALOG handshake (races GATT queue).
         onCommandReady?()
@@ -910,6 +983,11 @@ extension AndroidRelayGattClient: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        if Self.uuidMatches(characteristic.uuid, Self.otaUUID) {
+            guard peripheral.identifier == relay?.identifier else { return }
+            onOtaWriteResult?(error)
+            return
+        }
         if Self.uuidMatches(characteristic.uuid, Self.commandUUID) {
             if error != nil {
                 finishPendingCommandJson(nil, success: false)
@@ -930,6 +1008,11 @@ extension AndroidRelayGattClient: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        if Self.uuidMatches(characteristic.uuid, Self.otaUUID) {
+            guard peripheral.identifier == relay?.identifier, error == nil, let value = characteristic.value else { return }
+            onOtaNotify?(value)
+            return
+        }
         if Self.uuidMatches(characteristic.uuid, Self.catalogUUID) {
             if pendingJsonCompletion != nil {
                 if error == nil, let json = acceptCommandJson(from: characteristic.value) {
@@ -1033,12 +1116,30 @@ extension AndroidRelayGattClient: CBPeripheralDelegate {
         return object as? [String: Any]
     }
 
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        guard peripheral.identifier == relay?.identifier,
+              Self.uuidMatches(characteristic.uuid, Self.otaUUID),
+              otaCharacteristic != nil else {
+            return
+        }
+        let on: Bool = error == nil && characteristic.isNotifying
+        if on == otaNotifying { return }
+        otaNotifying = on
+        onOtaLinkChanged?(on)
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        guard peripheral.identifier == relay?.identifier else { return }
+        onOtaWriteReady?()
+    }
+
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
         if invalidatedServices.contains(where: { Self.uuidMatches($0.uuid, Self.serviceUUID) }) {
             txCharacteristic = nil
             commandCharacteristic = nil
             statusCharacteristic = nil
             catalogCharacteristic = nil
+            dropOta()
             onStatus?("Android relay reset — reconnecting")
         }
     }
