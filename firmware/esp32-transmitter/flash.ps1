@@ -259,9 +259,10 @@ if ($Bin) {
             $headers = @{ Authorization = "Bearer $Token"; Accept = "application/octet-stream"; "User-Agent" = "magicmaker-flash" }
             $api = "https://api.github.com/repos/$RepoSlug/releases/tags/esp32-firmware"
             $rel = Invoke-RestMethod -Uri $api -Headers @{ Authorization = "Bearer $Token"; "User-Agent" = "magicmaker-flash"; Accept = "application/vnd.github+json" }
-            $asset = $rel.assets | Where-Object { $_.name -eq $Asset } | Select-Object -First 1
-            if (-not $asset) { throw "Release asset $Asset not found (has CI built it yet?)." }
-            Invoke-WebRequest -UseBasicParsing -Uri $asset.url -Headers $headers -OutFile $Bin
+            # (not $asset: PowerShell names are case-insensitive, that would clobber $Asset)
+            $relAsset = $rel.assets | Where-Object { $_.name -eq $Asset } | Select-Object -First 1
+            if (-not $relAsset) { throw "Release asset $Asset not found (has CI built it yet?)." }
+            Invoke-WebRequest -UseBasicParsing -Uri $relAsset.url -Headers $headers -OutFile $Bin
         } else {
             Invoke-WebRequest -UseBasicParsing -Uri $BinUrl -OutFile $Bin -Headers @{ "User-Agent" = "magicmaker-flash" }
         }
