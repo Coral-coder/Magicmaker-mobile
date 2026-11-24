@@ -1378,6 +1378,47 @@ final class VFDRenderer: ObservableObject {
     private static let tickerCellsPerSecond: Double = 20
     private static let tickerGap: Int = 18
 
+    /// True when VFDW.telemetry draws the whole line: the same walk over its tokens (split at
+    /// " | ", each followed by a rule 3 cells on and 5 cells wide, a next token only with room
+    /// for its first two characters), without drawing.
+    private static func telemetryFits(_ text: String, _ L: VFDLayout) -> Bool {
+        let sep: [Unicode.Scalar] = [" ", "|", " "]
+        let limit: Int = L.right + 1
+        let advance: Int = VFDSize.small.advance
+        var x: Int = L.left
+        var first: Bool = true
+        for token in VFDText.split(VFDText.scalars(VFDW.upper(text)), sep) where !token.isEmpty {
+            if !first {
+                let next: Int = x + 3 + 5
+                if next + VFDText.width(count: 2) > limit { return false }
+                x = next
+            }
+            if x + VFDText.width(count: token.count) > limit { return false }
+            x += token.count * advance
+            first = false
+        }
+        return true
+    }
+
+    /// Seconds the ticker has scrolled at `time` for a line of `cycle` cells. A new cycle (the
+    /// line got wider or narrower) moves the origin so the scroll position carries on from where
+    /// it was; the first one starts at the line's beginning.
+    private func tickerSeconds(_ time: Double, cycle: Int) -> Double {
+        if !time.isFinite { return 0 }
+        if cycle != tickerCycle {
+            let speed: Double = VFDRenderer.tickerCellsPerSecond
+            if tickerCycle > 0 {
+                let elapsed: Double = max(0, time - tickerEpoch)
+                let travelled: Double = (elapsed * speed).truncatingRemainder(dividingBy: Double(tickerCycle))
+                tickerEpoch = time - travelled / speed
+            } else {
+                tickerEpoch = time
+            }
+            tickerCycle = cycle
+        }
+        return max(0, time - tickerEpoch)
+    }
+
     /// The telemetry line scrolling left, clipped to the telemetry row.
     private static func drawTicker(_ fb: VFDFrameBuffer, _ L: VFDLayout, text: String, width: Int,
                                    time: Double) {
