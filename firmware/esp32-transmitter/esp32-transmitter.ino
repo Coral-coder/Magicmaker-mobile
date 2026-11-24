@@ -36,6 +36,7 @@
 #include <NimBLEDevice.h>
 #include <esp_timer.h>
 #include "board.h"
+#include "ota.h"   // firmware updates over Bluetooth from the app (button-armed, A7830007)
 #include "relay_proto.h"
 #include "relay_engine.h"
 #if MM_HELTEC_V3
@@ -318,6 +319,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     // loop() restarts advertising (advertiseOnDisconnect is off).
     if (gLinked > 0) gLinked = gLinked - 1;
     gDisconnects = gDisconnects + 1;
+    otaOnDisconnect();                    // an interrupted firmware update is dropped
     wakeLoop();
   }
 };
@@ -404,6 +406,7 @@ void setup() {
   gCmdQueue = xQueueCreate(CMD_QUEUE_DEPTH, sizeof(ChipCmd));
 
   NimBLEDevice::init(DEVICE_NAME);
+  NimBLEDevice::setMTU(247);              // larger packets for firmware updates from the app
   NimBLEDevice::setPower(LINK_POWER);     // default (the link); advertising power is set per advert
 
   gServer = NimBLEDevice::createServer();
@@ -423,6 +426,7 @@ void setup() {
   NimBLECharacteristic* catalog = svc->createCharacteristic(CATALOG_UUID, NIMBLE_PROPERTY::READ);
   catalog->setCallbacks(new CatalogCallbacks());
   setText(catalog, EMPTY_CATALOG);
+  otaSetup(svc);                          // OTA characteristic (A7830007)
 
   svc->start();
 
@@ -433,6 +437,7 @@ void setup() {
 }
 
 void loop() {
+  otaLoop();  // button arming, lost-link abort, restart after a firmware update
   // A phone left: advertise fast again for a while so it (or another) relinks quickly.
   const uint32_t disconnects = gDisconnects;
   if (disconnects != gSeenDisconnects) {
@@ -497,6 +502,8 @@ void loop() {
   const uint32_t powerMs = powerNextDueMs(after);
   if (powerMs < waitMs) waitMs = powerMs;
 #endif
+  const uint32_t otaMs = otaNextDueMs(after);
+  if (otaMs < waitMs) waitMs = otaMs;
   if (waitMs < 1) waitMs = 1;
   ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(waitMs));
 }
