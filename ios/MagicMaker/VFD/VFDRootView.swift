@@ -1337,10 +1337,19 @@ final class VFDRenderer: ObservableObject {
         let onTab: (String) -> Void = { [weak self] key in
             self?.selectTab(key: key)
         }
-        VFDW.frame(fb, L, tab: chrome.tab, title: chrome.title, telemetry: chrome.telemetry,
+        // A telemetry line wider than the screen scrolls like a ticker (the frame then draws only
+        // its rule); one that fits is drawn by the frame as before.
+        let tickerText: String = VFDW.upper(chrome.telemetry)
+        let tickerWidth: Int = VFDText.width(tickerText)
+        let ticker: Bool = tickerWidth > L.width
+        VFDW.frame(fb, L, tab: chrome.tab, title: chrome.title, telemetry: ticker ? "" : chrome.telemetry,
                    back: back != nil, right: rightText, rightColor: chrome.rightColor, scroll: scroll,
                    rightTap: nil, tabs: tabList, onBack: back, onRight: rightAction, onTab: onTab)
         fb.popClip()
+        if ticker {
+            VFDRenderer.drawTicker(fb, L, text: tickerText, width: tickerWidth, time: ctx.time)
+            fb.wantsAnimation = true
+        }
         fb.pushClip(0, win.top, fb.cols, win.bottom - win.top, dy: -scroll)
         let depth: Int = fb.clipDepth
         let firstTap: Int = fb.taps.count
@@ -1352,6 +1361,26 @@ final class VFDRenderer: ObservableObject {
             VFDW.scrollbar(fb, L, e, scroll: scroll)
         }
         return end
+    }
+
+    /// Ticker speed (cells per second, about 33 points per second on a 3x screen) and the gap
+    /// between the two copies that follow each other across the telemetry row.
+    private static let tickerCellsPerSecond: Double = 20
+    private static let tickerGap: Int = 18
+
+    /// The telemetry line scrolling left, clipped to the telemetry row.
+    private static func drawTicker(_ fb: VFDFrameBuffer, _ L: VFDLayout, text: String, width: Int,
+                                   time: Double) {
+        let cycle: Int = width + tickerGap
+        if cycle <= 0 { return }
+        let steps: Double = (max(0, time) * tickerCellsPerSecond).truncatingRemainder(dividingBy: Double(cycle))
+        let travelled: Int = steps.isFinite ? Int(steps) : 0
+        let r: Int = L.telemetryRow
+        fb.pushClip(L.left, r - 1, L.width, 10)
+        let x0: Int = L.left - travelled
+        _ = fb.text(x0, r, text, .small, VFDInk.dim)
+        _ = fb.text(x0 + cycle, r, text, .small, VFDInk.dim)
+        fb.popClip()
     }
 
     private static func reset(_ b: VFDFrameBuffer, base: VFDBase, alarmInverted: Bool) {

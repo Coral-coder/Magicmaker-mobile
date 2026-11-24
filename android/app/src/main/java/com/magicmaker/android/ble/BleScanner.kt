@@ -13,6 +13,8 @@ class BleScanner(
     private val onDisneyPacket: (hex: String, rssi: Int, address: String) -> Unit,
     private val onRelayCommand: ((hex: String, durationMs: Int) -> Unit)? = null,
     private val onScanFailed: ((Int) -> Unit)? = null,
+    /** The ESP32 transmitter's battery heartbeat (firmware 1.4+), read from its adverts. */
+    private val onEsp32Heartbeat: ((Esp32Heartbeat) -> Unit)? = null,
 ) {
     private var scanning = false
     private var callback: ScanCallback? = null
@@ -59,6 +61,10 @@ class BleScanner(
             ScanFilter.Builder()
                 .setManufacturerData(HexUtils.DISNEY_COMPANY_ID, byteArrayOf())
                 .build(),
+            // The ESP32 transmitter's battery heartbeat (0xFFFF 'M' 'B' ...).
+            ScanFilter.Builder()
+                .setManufacturerData(Esp32Heartbeat.COMPANY_ID, Esp32Heartbeat.FILTER_DATA, Esp32Heartbeat.FILTER_MASK)
+                .build(),
         )
     }
 
@@ -67,6 +73,12 @@ class BleScanner(
 
     private fun handleResult(result: ScanResult) {
         val record = result.scanRecord ?: return
+
+        // Our own ESP32 transmitter's battery heartbeat: report it, never treat it as a packet.
+        Esp32Heartbeat.parse(record.getManufacturerSpecificData(Esp32Heartbeat.COMPANY_ID))?.let { hb ->
+            onEsp32Heartbeat?.invoke(hb)
+            return
+        }
 
         record.deviceName?.let { name ->
             HexUtils.hexFromMagicMakerLocalName(name)?.let { hex ->

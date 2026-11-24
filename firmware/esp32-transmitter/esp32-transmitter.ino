@@ -118,13 +118,24 @@ static const uint32_t LED_MIN_FLASH_GAP_MS = 250;
 // ---- State ---------------------------------------------------------------------------
 // Owned by loop(): the engine, the advertising state, the LED. The NimBLE callbacks (host task)
 // only parse, write the reply under gSnapMux, queue work and wake loop().
-enum AdvKind : uint8_t { ADV_OFF = 0, ADV_IDLE, ADV_BEACON };
+enum AdvKind : uint8_t { ADV_OFF = 0, ADV_IDLE, ADV_BEACON, ADV_HEARTBEAT };
+
+// Battery heartbeat other devices read without connecting (the Android app's scanner shows it):
+// manufacturer data, company id 0xFFFF (reserved for testing, so nothing mistakes it for a
+// Disney packet): FF FF 'M' 'B' <version 1> <battery % or 0xFF> <flags> <runtime min, u16 LE or
+// 0xFFFF>. flags: bit0 charging, bit1 on USB power, bit2 battery reading present.
+// In the scan response while no phone is linked; while one is, a slow non-connectable advert
+// (name + heartbeat) keeps it visible.
+static const uint8_t  HEARTBEAT_LEN     = 9;
+static const uint16_t HEARTBEAT_ADV_MIN = 0x640;  // 1 s
+static const uint16_t HEARTBEAT_ADV_MAX = 0xC80;  // 2 s
 
 struct AdvState {
   uint8_t kind;      // AdvKind
   bool    slow;      // idle: the slow interval
   bool    scanResp;  // beacon: answer scan requests with the name + service UUID (no phone linked)
   uint8_t power;     // beacon power level 0..3
+  uint8_t hb[HEARTBEAT_LEN];  // idle / heartbeat: the battery heartbeat bytes
   uint8_t len;
   uint8_t bytes[RELAY_PACKET_MAX];
 };
@@ -172,9 +183,29 @@ static void setText(NimBLECharacteristic* c, const char* text) {
 }
 
 // ---- Advertising manager (loop() only; the only code that drives gAdv) ------------------
+static void heartbeatBytes(uint8_t out[HEARTBEAT_LEN]) {
+  uint8_t pct = 0xFF, flags = 0;
+  uint16_t runMin = 0xFFFF;
+#if MM_HELTEC_V3
+  if (powerBatteryMv() >= 0) {
+    const int p = powerBatteryPct();
+    pct = (uint8_t)(p < 0 ? 0 : (p > 100 ? 100 : p));
+    flags |= 0x04;
+    if (powerCharging()) flags |= 0x01;
+    if (powerOnUsb()) flags |= 0x02;
+    const int32_t r = powerRuntimeMin();
+    if (r >= 0) runMin = (uint16_t)(r > 0xFFFE ? 0xFFFE : r);
+  }
+#endif
+  out[0] = 0xFF; out[1] = 0xFF; out[2] = 'M'; out[3] = 'B'; out[4] = 1;
+  out[5] = pct; out[6] = flags;
+  out[7] = (uint8_t)(runMin & 0xFF); out[8] = (uint8_t)(runMin >> 8);
+}
+
 static bool advSame(const AdvState& a, const AdvState& b) {
   if (a.kind != b.kind) return false;
-  if (a.kind == ADV_IDLE) return a.slow == b.slow;
+  if (a.kind == ADV_IDLE) return a.slow == b.slow && memcmp(a.hb, b.hb, HEARTBEAT_LEN) == 0;
+  if (a.kind == ADV_HEARTBEAT) return memcmp(a.hb, b.hb, HEARTBEAT_LEN) == 0;
   if (a.kind == ADV_BEACON) {
     return a.scanResp == b.scanResp && a.power == b.power && a.len == b.len && memcmp(a.bytes, b.bytes, a.len) == 0;
   }
@@ -192,20 +223,36 @@ static void advApply(const AdvState& want) {
     // Waiting for a phone: flags + the 128-bit service UUID (how the app finds a relay). The
     // name goes in the scan response: the UUID nearly fills the 31-byte primary advert.
     NimBLEDevice::setPower(IDLE_ADV_POWER, ESP_BLE_PWR_TYPE_ADV);
+    gAdv->setAdvertisementType(BLE_GAP_CONN_MODE_UND);
     ad.setFlags(0x06);
     ad.setCompleteServices(NimBLEUUID(SERVICE_UUID));
     scan.setName(DEVICE_NAME);
+    scan.setManufacturerData(std::string((const char*)want.hb, HEARTBEAT_LEN));
     gAdv->setAdvertisementData(ad);
     gAdv->setScanResponseData(scan);
     gAdv->setScanResponse(true);
     gAdv->setMinInterval(want.slow ? IDLE_ADV_SLOW_MIN : IDLE_ADV_FAST_MIN);
     gAdv->setMaxInterval(want.slow ? IDLE_ADV_SLOW_MAX : IDLE_ADV_FAST_MAX);
+  } else if (want.kind == ADV_HEARTBEAT) {
+    // A phone is linked and nothing is on air: name + battery heartbeat, non-connectable and
+    // slow (1-2 s), at the low idle power, so the other phone can see the battery.
+    NimBLEDevice::setPower(IDLE_ADV_POWER, ESP_BLE_PWR_TYPE_ADV);
+    gAdv->setAdvertisementType(BLE_GAP_CONN_MODE_NON);
+    ad.setFlags(0x06);
+    ad.setName(DEVICE_NAME);
+    ad.setManufacturerData(std::string((const char*)want.hb, HEARTBEAT_LEN));
+    gAdv->setAdvertisementData(ad);
+    gAdv->setScanResponseData(scan);
+    gAdv->setScanResponse(false);
+    gAdv->setMinInterval(HEARTBEAT_ADV_MIN);
+    gAdv->setMaxInterval(HEARTBEAT_ADV_MAX);
   } else {
     // The Disney manufacturer packet: [83 01][payload] = company id 0x0183 + payload, exactly the
     // decoded hex. Connectable, as always (a non-connectable advert has a 100 ms minimum
     // interval). With no phone linked the scan response carries the name and the service UUID,
     // so the app can find the board and relink in the middle of a keep-awake stream.
     NimBLEDevice::setPower(BEACON_POWER[want.power & 3], ESP_BLE_PWR_TYPE_ADV);
+    gAdv->setAdvertisementType(BLE_GAP_CONN_MODE_UND);
     ad.setManufacturerData(std::string((const char*)want.bytes, want.len));
     if (want.scanResp) {
       scan.setName(DEVICE_NAME);
@@ -237,8 +284,10 @@ static void advManage(uint32_t now, int linked) {
   } else if (linked == 0) {
     want.kind = ADV_IDLE;
     want.slow = now - gIdleSince >= IDLE_FAST_WINDOW_MS;
+    heartbeatBytes(want.hb);
   } else {
-    want.kind = ADV_OFF;
+    want.kind = ADV_HEARTBEAT;  // linked, nothing on air: the battery heartbeat
+    heartbeatBytes(want.hb);
   }
   if (advSame(want, gAdvNow) && (want.kind == ADV_OFF || gAdv->isAdvertising())) return;
   advApply(want);

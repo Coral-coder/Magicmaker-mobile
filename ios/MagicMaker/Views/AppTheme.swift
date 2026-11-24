@@ -84,12 +84,8 @@ struct TelemetryBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(line)
-                .font(MMTheme.techLabel())
-                .foregroundStyle(MMTheme.textDim)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // Scrolls sideways like a ticker when the line is wider than the screen.
+            TickerText(text: line, font: MMTheme.techLabel(), color: MMTheme.textDim)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
             Rectangle()
@@ -111,10 +107,30 @@ struct TelemetryBar: View {
         return "BLE:LINK"
     }
 
+    /// "ESP32:68% ~9H 40M", "ESP32:CHG", "ESP32:4.05V", or nil when no ESP32 status with a battery.
+    @MainActor
+    static func esp32BatteryToken(vm: AppViewModel) -> String? {
+        guard vm.relayBackend == .esp32, let status = vm.androidRemote else { return nil }
+        guard status.batteryMv != nil || status.batteryPercent != nil else { return nil }
+        if status.charging { return "ESP32:CHG" }
+        var token: String = "ESP32:"
+        if let pct = status.batteryPercent {
+            token += "\(pct)%"
+            if let minutes = status.runtimeMinutes, minutes >= 0 {
+                token += " " + AndroidRemoteStatus.runtimeText(minutes: minutes)
+            }
+        } else if let mv = status.batteryMv {
+            token += String(format: "%.2fV", Double(mv) / 1000.0)
+        }
+        return token
+    }
+
     /// The telemetry line for the app state. The VFD theme draws the same text in its header.
     @MainActor
     static func telemetryLine(vm: AppViewModel, scan: ScanEngine, tx: TxEngine) -> String {
         var text: String = "MM/RF " + radioToken(scan: scan)
+        // The ESP32 transmitter's battery, right at the front, while it is the linked backend.
+        if let battery = esp32BatteryToken(vm: vm) { text += " | " + battery }
         text += " | RX:\(scan.packetsHeard)"
         text += " | TX-AUTO:\(scan.autoResponsesSent)"
         if scan.scanActive { text += " | SCAN:ON" }
@@ -163,5 +179,85 @@ struct MMCompactTabBar<Tab: Hashable & Identifiable>: View {
         .overlay(alignment: .top) {
             Rectangle().fill(MMTheme.panelLine).frame(height: 0.5)
         }
+    }
+}
+
+
+// MARK: - Ticker
+
+/// One line of text that stays put when it fits and otherwise scrolls sideways like a ticker,
+/// endlessly, at a normal reading speed (`speed` points per second), with `gap` between copies.
+struct TickerText: View {
+    let text: String
+    let font: Font
+    let color: Color
+    var speed: Double = 32
+    var gap: CGFloat = 36
+
+    @State private var textWidth: CGFloat = 0
+
+    var body: some View {
+        // The hidden label sets the row's height; the visible one is drawn over it.
+        Text(text)
+            .font(font)
+            .lineLimit(1)
+            .hidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) {
+                GeometryReader { (geo: GeometryProxy) in
+                    content(boxWidth: geo.size.width)
+                }
+            }
+            .clipped()
+            .background(alignment: .leading) {
+                // Natural width of the text, measured once per change.
+                Text(text)
+                    .font(font)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .hidden()
+                    .background(GeometryReader { (g: GeometryProxy) in
+                        Color.clear.preference(key: TickerWidthKey.self, value: g.size.width)
+                    })
+            }
+            .onPreferenceChange(TickerWidthKey.self) { (w: CGFloat) in
+                textWidth = w
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(text)
+    }
+
+    @ViewBuilder
+    private func content(boxWidth: CGFloat) -> some View {
+        if textWidth > boxWidth + 0.5 && boxWidth > 0 {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
+                let cycle: Double = Double(textWidth + gap)
+                let seconds: Double = timeline.date.timeIntervalSinceReferenceDate
+                let travelled: Double = (seconds * speed).truncatingRemainder(dividingBy: cycle)
+                HStack(spacing: gap) {
+                    label
+                    label
+                }
+                .fixedSize()
+                .offset(x: -CGFloat(travelled))
+            }
+        } else {
+            label
+        }
+    }
+
+    private var label: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .fixedSize()
+    }
+}
+
+private struct TickerWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

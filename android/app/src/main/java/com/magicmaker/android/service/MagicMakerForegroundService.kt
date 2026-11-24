@@ -43,6 +43,8 @@ class MagicMakerForegroundService : Service() {
     companion object {
         const val CHANNEL_ID = "magicmaker_ble"
         const val NOTIFICATION_ID = 1001
+        /** The ESP32 battery leaves the top bar after this long without a heartbeat advert. */
+        const val ESP32_HEARTBEAT_STALE_MS = 120_000L
 
         const val ACTION_START = "com.magicmaker.android.START"
         const val ACTION_STOP = "com.magicmaker.android.STOP"
@@ -523,6 +525,7 @@ class MagicMakerForegroundService : Service() {
         bleScanner = BleScanner(
             onDisneyPacket = { hex, rssi, address -> onHeard(hex, rssi, address) },
             onScanFailed = { code -> restartScanDelayed(code) },
+            onEsp32Heartbeat = { hb -> mainHandler.post { onEsp32Heartbeat(hb) } },
         )
         leScanner = adapter.bluetoothLeScanner
         scanCallback = bleScanner!!.buildCallback()
@@ -1071,6 +1074,22 @@ class MagicMakerForegroundService : Service() {
                 starlightBurstMs = store.getStarlightBurstMs(),
             )
         }
+    }
+
+    // ---- ESP32 battery heartbeat (top bar) ---------------------------------------------------
+    private var esp32HeartbeatAt = 0L
+    private val esp32HeartbeatStale = Runnable {
+        if (System.currentTimeMillis() - esp32HeartbeatAt >= ESP32_HEARTBEAT_STALE_MS - 50) {
+            ServiceState.update { it.copy(esp32Battery = null) }
+        }
+    }
+
+    /** Main thread. Adverts arrive many times a second; the UI only changes on new values. */
+    private fun onEsp32Heartbeat(hb: com.magicmaker.android.ble.Esp32Heartbeat) {
+        esp32HeartbeatAt = System.currentTimeMillis()
+        if (ServiceState.state.value.esp32Battery != hb) ServiceState.update { it.copy(esp32Battery = hb) }
+        mainHandler.removeCallbacks(esp32HeartbeatStale)
+        mainHandler.postDelayed(esp32HeartbeatStale, ESP32_HEARTBEAT_STALE_MS)
     }
 
     private fun onHeard(hex: String, rssi: Int, address: String = "") {

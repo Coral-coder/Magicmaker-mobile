@@ -632,6 +632,9 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
     )
 
     companion object {
+        /** Telemetry ticker speed (cells per second; about 30 dp/s) and the gap between copies. */
+        const val TICKER_CELLS_PER_SECOND: Double = 20.0
+        const val TICKER_GAP: Int = 18
         /** Movement (dp) before a touch counts as a drag. */
         const val slopDp: Float = 8f
         /** Horizontal travel (dp) for a swipe action. */
@@ -1390,8 +1393,13 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
                            alarmInverted: Boolean): Int? {
         reset(fb, base, alarmInverted)
         val right: VFDHeaderRight? = chrome.right
-        return VFDW.drawScreen(
-            fb, L, tab = chrome.tab, title = chrome.title, telemetry = chrome.telemetry,
+        // A telemetry line wider than the screen scrolls like a ticker (the frame then draws only
+        // its rule); one that fits is drawn by the frame as before.
+        val tickerText: String = VFDW.upper(chrome.telemetry)
+        val tickerWidth: Int = VFDText.width(tickerText)
+        val ticker: Boolean = tickerWidth > L.width
+        val end: Int? = VFDW.drawScreen(
+            fb, L, tab = chrome.tab, title = chrome.title, telemetry = if (ticker) "" else chrome.telemetry,
             back = chrome.back != null, right = right?.text, rightColor = chrome.rightColor, rightTap = null,
             scroll = scroll, tabs = tabList, onBack = chrome.back, onRight = right?.action, onTab = onTab,
             probe = probe,
@@ -1399,6 +1407,26 @@ internal class VFDRenderer(val app: MagicMakerApp, val settings: VFDSettings) {
             ctx.use(b)
             screen.draw(ctx)
         }
+        if (ticker) {
+            drawTicker(fb, L, tickerText, tickerWidth, ctx.time)
+            fb.wantsAnimation = true
+        }
+        return end
+    }
+
+    /** The telemetry line scrolling left (TICKER_CELLS_PER_SECOND), two copies TICKER_GAP apart,
+     *  clipped to the telemetry row. */
+    private fun drawTicker(fb: VFDFrameBuffer, L: VFDLayout, text: String, width: Int, time: Double) {
+        val cycle: Int = width + TICKER_GAP
+        if (cycle <= 0) return
+        val steps: Double = (maxOf(0.0, time) * TICKER_CELLS_PER_SECOND) % cycle.toDouble()
+        val travelled: Int = if (steps.isFinite()) steps.toInt() else 0
+        val r: Int = L.telemetryRow
+        fb.pushClip(L.left, r - 1, L.width, 10)
+        val x0: Int = L.left - travelled
+        fb.text(x0, r, text, VFDSize.small, VFDInk.dim)
+        fb.text(x0 + cycle, r, text, VFDSize.small, VFDInk.dim)
+        fb.popClip()
     }
 
     /** The fallback frame when a screen threw: the chrome, the error, STANDARD THEME and the

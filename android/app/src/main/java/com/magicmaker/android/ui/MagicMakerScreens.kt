@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -273,6 +274,8 @@ internal fun telemetryLineText(state: ServiceState.UiState): String {
     return buildString {
         append("MM/RF ")
         append(ble)
+        // The ESP32 transmitter's battery (its heartbeat adverts), right at the front.
+        state.esp32Battery?.telemetryToken()?.let { append(" | "); append(it) }
         append(" | RX:")
         append(state.packetsHeard)
         append(" | TX-AUTO:")
@@ -286,16 +289,21 @@ internal fun telemetryLineText(state: ServiceState.UiState): String {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TelemetryLine(state: ServiceState.UiState) {
     Column(Modifier.fillMaxWidth()) {
+        // Scrolls sideways like a ticker (normal reading speed) when wider than the screen.
         Text(
             telemetryLineText(state),
             style = techLabel(),
             color = AppColors.TextDim,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = AppDimens.pad, vertical = 2.dp),
+            softWrap = false,
+            modifier = Modifier
+                .padding(horizontal = AppDimens.pad, vertical = 2.dp)
+                .fillMaxWidth()
+                .basicMarquee(iterations = Int.MAX_VALUE, velocity = 32.dp),
         )
         HorizontalDivider(color = AppColors.PanelLine, thickness = 1.dp)
     }

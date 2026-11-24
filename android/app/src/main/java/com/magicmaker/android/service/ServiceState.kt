@@ -95,6 +95,8 @@ object ServiceState {
         val labLoadTick: Int = 0,
         val keepAwakeActive: Boolean = false,
         val keepAwakeHex: String = "",
+        /** The ESP32 transmitter's battery, from its heartbeat adverts (null = not heard lately). */
+        val esp32Battery: com.magicmaker.android.ble.Esp32Heartbeat? = null,
     )
 
     fun setCloudSyncStatus(status: String) {
