@@ -253,6 +253,7 @@ static uint32_t powerNextDueMs(uint32_t now) {
 // Results (-1: unknown).
 static int32_t powerBatteryMv() { return gBat.have ? (int32_t)(gBat.filtMv + 0.5f) : -1; }
 static int powerBatteryPct() { return gBat.percent(); }
+static float powerBatteryPctExact() { return gBat.have ? gBat.pct : -1.0f; }  // unrounded, 0..100
 static int32_t powerLeftMah() { return gBat.leftMah(); }
 static int32_t powerRuntimeMin() { return gBat.runtimeMin(); }
 static bool powerCharging() { return gBat.have && gBat.charging; }

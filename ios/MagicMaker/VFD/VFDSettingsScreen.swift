@@ -5,7 +5,8 @@ import SwiftUI
 /// BASE COLOUR with the stored colour's hex on its label row and a true-colour swatch in every
 /// chip; CUSTOM opens the system colour picker in a sheet), TRANSMISSION SETTINGS (folds, under
 /// the standard screen's preference key: relay note, TX MODE switch, BROADCAST STRENGTH, the WAKE
-/// SLICE / COMMAND BURST / STARLIGHT WAND sliders), SCAN FILTER, BACKGROUND and ABOUT.
+/// SLICE / COMMAND BURST / STARLIGHT WAND sliders), SCAN FILTER, BACKGROUND, BOARD FIRMWARE (the
+/// ESP32's firmware and its Bluetooth update, FirmwareUpdater) and ABOUT.
 @MainActor
 enum VFDSettingsScreen: VFDScreen {
     static let title: String = "SETTINGS"
@@ -28,6 +29,7 @@ enum VFDSettingsScreen: VFDScreen {
         y = transmission(ctx, c, y, w)
         y = scanFilter(ctx, c, y, w)
         y = background(ctx, c, y, w)
+        y = firmware(ctx, c, y, w)
         y = about(ctx, c, y, w)
         return y
     }
@@ -229,6 +231,63 @@ extension VFDSettingsScreen {
         let stateColor: UInt8 = state == .needsLocation ? VFDInk.alarm : VFDInk.dim
         y = VFDW.textBlock(fb, L, c, y, w, state.text, color: stateColor)
         return VFDW.textBlock(fb, L, c, y, w, AppViewModel.backgroundKeepAliveNote, color: VFDInk.dim)
+    }
+
+    /// BOARD FIRMWARE (SettingsFirmwareSection): BOARD and AVAILABLE key / value lines (BOARD in
+    /// ALARM for firmware without Bluetooth updates), the last web check and [CHECK WEB], the
+    /// instruction (highlight while the board's button is awaited), the LED progress meter with
+    /// percent and KB/s, the result (ALARM on an error), then [UPDATE …] (primary; the same or an
+    /// older version asks first) or, while an update runs, [CANCEL] (alarm).
+    fileprivate static func firmware(_ ctx: VFDContext, _ c: Int, _ top: Int, _ w: Int) -> Int {
+        let fb: VFDFrameBuffer = ctx.fb
+        let L: VFDLayout = ctx.L
+        let s: FirmwareUpdater.Summary = ctx.vm.firmware.summary(linked: ctx.vm.esp32Linked)
+        var y: Int = VFDW.section(fb, L, c, top, w, "BOARD FIRMWARE")
+        y = VFDW.kv(fb, L, c, y, w, "BOARD", VFDW.upper(s.boardText),
+                    color: s.boardAlarm ? VFDInk.alarm : VFDInk.highlight)
+        for item in s.available {
+            y = VFDW.kv(fb, L, c, y, w, item.key, VFDW.upper(item.value))
+        }
+        if !s.webText.isEmpty {
+            y = VFDW.textBlock(fb, L, c, y + 1, w, s.webText, color: VFDInk.dim)
+        }
+        let webLabel: String = s.checkingWeb ? "CHECKING…" : "CHECK WEB"
+        y = VFDW.button(fb, L, c, y + 2, nil, webLabel, enabled: !s.checkingWeb && !s.busy,
+                        name: "button:CHECK WEB", action: {
+                            ctx.vm.firmware.catalog.checkWeb()
+                        })
+        if !s.instruction.isEmpty {
+            y = VFDW.textBlock(fb, L, c, y + 2, w, s.instruction,
+                               color: s.instructionIsPrompt ? VFDInk.highlight : VFDInk.dim)
+        }
+        if s.showsProgress {
+            y = VFDW.meter(fb, L, c, y, w, "PROGRESS", VFDW.upper(s.progressText), s.progress)
+        }
+        if !s.resultText.isEmpty {
+            y = VFDW.textBlock(fb, L, c, y + 1, w, s.resultText,
+                               color: s.resultIsError ? VFDInk.alarm : VFDInk.highlight)
+        }
+        if s.canCancel {
+            return VFDW.button(fb, L, c, y + 4, nil, "CANCEL", alarm: true, action: {
+                ctx.vm.firmware.cancel()
+            })
+        }
+        let confirm: String? = s.confirmMessage
+        return VFDW.button(fb, L, c, y + 4, nil, s.actionTitle, primary: true, enabled: s.actionEnabled,
+                           name: "button:FIRMWARE UPDATE", action: {
+                               VFDSettingsScreen.startFirmwareUpdate(ctx, confirm: confirm)
+                           })
+    }
+
+    /// UPDATE: the same or an older version than the board runs asks first.
+    fileprivate static func startFirmwareUpdate(_ ctx: VFDContext, confirm: String?) {
+        guard let message = confirm else {
+            ctx.vm.firmware.startUpdate()
+            return
+        }
+        ctx.confirm(title: "Install firmware?", message: message, confirmLabel: "INSTALL", action: {
+            ctx.vm.firmware.startUpdate()
+        })
     }
 
     /// ABOUT: MAGICMAKER v<version> (<build>).

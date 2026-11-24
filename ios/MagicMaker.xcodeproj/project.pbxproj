@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		53132E3ABF5AD13DC9AF32DF /* magicmaker-esp32-app.bin in Resources */ = {isa = PBXBuildFile; fileRef = 15545B59E5519AFAFE12A246 /* magicmaker-esp32-app.bin */; };
+		F33C09BEE5F201A0A040DCD4 /* magicmaker-heltec-v3-app.bin in Resources */ = {isa = PBXBuildFile; fileRef = A037E4FEE03150F0595EAEE0 /* magicmaker-heltec-v3-app.bin */; };
+		4B5CE1811418F5F442994F36 /* FirmwareUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E56DE67FB4B3B004B3B6251 /* FirmwareUpdater.swift */; };
+		EE511A1BEA9DE1A7FFC11D62 /* FirmwareCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E441FF85F9952AEA430AAAE1 /* FirmwareCatalog.swift */; };
 		E44A266C036A56361A611FB3 /* LabSegmentEditorSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FCEAB34E4925955FAED6040 /* LabSegmentEditorSheet.swift */; };
 		60446815DDD8F7BEBA00CEA8 /* LabSegmentEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853A046B970EA56F35FC969E /* LabSegmentEditor.swift */; };
 		4B287684E7BD9826D90D0DF5 /* VFDWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 173EF2B7EC427BE8752B80FF /* VFDWidgets.swift */; };
@@ -82,6 +86,10 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		15545B59E5519AFAFE12A246 /* magicmaker-esp32-app.bin */ = {isa = PBXFileReference; lastKnownFileType = file; path = "magicmaker-esp32-app.bin"; sourceTree = "<group>"; };
+		A037E4FEE03150F0595EAEE0 /* magicmaker-heltec-v3-app.bin */ = {isa = PBXFileReference; lastKnownFileType = file; path = "magicmaker-heltec-v3-app.bin"; sourceTree = "<group>"; };
+		0E56DE67FB4B3B004B3B6251 /* FirmwareUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirmwareUpdater.swift; sourceTree = "<group>"; };
+		E441FF85F9952AEA430AAAE1 /* FirmwareCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirmwareCatalog.swift; sourceTree = "<group>"; };
 		9FCEAB34E4925955FAED6040 /* LabSegmentEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabSegmentEditorSheet.swift; sourceTree = "<group>"; };
 		853A046B970EA56F35FC969E /* LabSegmentEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabSegmentEditor.swift; sourceTree = "<group>"; };
 		173EF2B7EC427BE8752B80FF /* VFDWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDWidgets.swift; sourceTree = "<group>"; };
@@ -158,6 +166,15 @@
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		D2CDF6A19DE7C7BA815EF076 /* Firmware */ = {
+			isa = PBXGroup;
+			children = (
+				15545B59E5519AFAFE12A246 /* magicmaker-esp32-app.bin */,
+				A037E4FEE03150F0595EAEE0 /* magicmaker-heltec-v3-app.bin */,
+			);
+			path = Firmware;
+			sourceTree = "<group>";
+		};
 		F709DDD741EE34A3DD7624AC /* VFD */ = {
 			isa = PBXGroup;
 			children = (
@@ -194,6 +211,7 @@
 		9BDA14E78FD22C6E6275609C /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				E441FF85F9952AEA430AAAE1 /* FirmwareCatalog.swift */,
 				853A046B970EA56F35FC969E /* LabSegmentEditor.swift */,
 				3EF965165682BF3E7A56E44D /* MapMath.swift */,
 				899C5DB75C5AE4881E523D65 /* LogAnalysis.swift */,
@@ -221,6 +239,7 @@
 		9D434489A5D76027E15694FC /* BLE */ = {
 			isa = PBXGroup;
 			children = (
+				0E56DE67FB4B3B004B3B6251 /* FirmwareUpdater.swift */,
 				91EAB618875B6CF9EA21C986 /* LocationTracker.swift */,
 				213E2CED2AADA68CBCBE83FC /* AndroidRelayGattClient.swift */,
 				6636D2A512568C7BCA2BFA76 /* AndroidRemoteClient.swift */,
@@ -263,6 +282,7 @@
 		D2E59D43C42A37462916EFF2 /* MagicMaker */ = {
 			isa = PBXGroup;
 			children = (
+				D2CDF6A19DE7C7BA815EF076 /* Firmware */,
 				F709DDD741EE34A3DD7624AC /* VFD */,
 				3E37DEFFC05D2AC1FAC1C8F2 /* Assets.xcassets */,
 				8602255608055BB152278E8A /* MagicMakerApp.swift */,
@@ -360,6 +380,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				53132E3ABF5AD13DC9AF32DF /* magicmaker-esp32-app.bin in Resources */,
+				F33C09BEE5F201A0A040DCD4 /* magicmaker-heltec-v3-app.bin in Resources */,
 				0051E14CCE3250E47ED71C12 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -371,6 +393,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4B5CE1811418F5F442994F36 /* FirmwareUpdater.swift in Sources */,
+				EE511A1BEA9DE1A7FFC11D62 /* FirmwareCatalog.swift in Sources */,
 				E44A266C036A56361A611FB3 /* LabSegmentEditorSheet.swift in Sources */,
 				60446815DDD8F7BEBA00CEA8 /* LabSegmentEditor.swift in Sources */,
 				4B287684E7BD9826D90D0DF5 /* VFDWidgets.swift in Sources */,

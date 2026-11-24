@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // The ESP32 transmitter firmware images the app can install over Bluetooth (FirmwareUpdater):
@@ -18,6 +19,14 @@ enum FirmwareBoard: String, CaseIterable, Identifiable, Sendable {
     var label: String {
         switch self {
         case .heltecV3: return "HELTEC V3"
+        case .esp32: return "ESP32"
+        }
+    }
+
+    /// How instructions name the board.
+    var boardName: String {
+        switch self {
+        case .heltecV3: return "Heltec"
         case .esp32: return "ESP32"
         }
     }
@@ -146,11 +155,38 @@ struct FirmwareImage: Sendable {
 
 /// What a web check found.
 struct FirmwareWebResult: Sendable {
+    /// Images downloaded on this check (each newer than the one the app had for its board).
     var images: [FirmwareImage] = []
-    /// Per board, why nothing usable was found.
+    /// The release's firmware version (its firmware.json), when it lists one.
+    var releaseVersion: String? = nil
+    /// Per board, what the check found when nothing was downloaded for it.
     var notes: [String] = []
     /// Set when the release itself could not be read.
     var error: String? = nil
+}
+
+/// The release's firmware.json (tools/firmware_manifest.py): the version, and per board the app
+/// image's MD5, which a download is checked against.
+struct FirmwareReleaseManifest: Sendable {
+    var version: String?
+    var appMd5: [FirmwareBoard: String] = [:]
+
+    static func parse(_ data: Data) -> FirmwareReleaseManifest? {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let json = object as? [String: Any] else {
+            return nil
+        }
+        var out = FirmwareReleaseManifest(version: json["version"] as? String)
+        if let boards = json["boards"] as? [String: Any] {
+            for (key, value) in boards {
+                guard let board = FirmwareBoard(rawValue: key), let entry = value as? [String: Any] else { continue }
+                if let md5 = entry["md5"] as? String, md5.count == 32 {
+                    out.appMd5[board] = md5.lowercased()
+                }
+            }
+        }
+        return out
+    }
 }
 
 /// Reading, checking, downloading and caching images. Not tied to the main actor, so file and
@@ -161,6 +197,7 @@ enum FirmwareFiles {
     /// The firmware's own size cap (OTA_MAX_SIZE).
     static let maxImageBytes: Int = 0x300000
     static let releaseAPI: String = "https://api.github.com/repos/Coral-coder/Magicmaker-mobile/releases/tags/esp32-firmware"
+    static let manifestFileName: String = "firmware.json"
     private static let userAgent: String = "MagicMaker-iOS"
 
     /// An image the board can take: an ESP image header for the board's chip, a sane size, and a
@@ -174,6 +211,12 @@ enum FirmwareFiles {
         guard (chipLow | (chipHigh << 8)) == expected.chipId else { return nil }
         guard let marker = FirmwareMarker.find(in: data), marker.board == expected else { return nil }
         return FirmwareImage(board: expected, version: marker.version, source: source, data: Data(data))
+    }
+
+    /// Lower-case hex MD5 of `data`.
+    static func md5Hex(_ data: Data) -> String {
+        let digest = Insecure.MD5.hash(data: data)
+        return digest.map { (byte: UInt8) -> String in String(format: "%02x", byte) }.joined()
     }
 
     /// The images shipped in the app bundle.
@@ -242,10 +285,12 @@ enum FirmwareFiles {
         }
     }
 
-    /// The latest release images from GitHub (public repository, no token): each board's
-    /// magicmaker-<board>-app.bin, or else its merged magicmaker-<board>.bin from 0x10000. Usable
-    /// images newer than the cached ones are cached.
-    static func fetchLatest() async -> FirmwareWebResult {
+    /// The latest release images from GitHub (public repository, no token). `have`: the version
+    /// the app already has per board; a board whose release version (firmware.json) is not newer
+    /// is not downloaded. Otherwise each board's magicmaker-<board>-app.bin is downloaded (or else
+    /// its merged magicmaker-<board>.bin, from 0x10000), checked against firmware.json's MD5 and
+    /// the image's own header and marker, and cached when newer than the cached one.
+    static func fetchLatest(have: [FirmwareBoard: String]) async -> FirmwareWebResult {
         var result = FirmwareWebResult()
         guard let api = URL(string: releaseAPI) else {
             result.error = "bad release address"
@@ -267,6 +312,10 @@ enum FirmwareFiles {
             result.error = "no firmware release on GitHub"
             return result
         }
+        if code == 403 || code == 429 {
+            result.error = "GitHub is limiting requests — try again in an hour"
+            return result
+        }
         if code != 200 {
             result.error = "GitHub answered \(code)"
             return result
@@ -276,12 +325,23 @@ enum FirmwareFiles {
             result.error = "the release has no files"
             return result
         }
+        var manifest: FirmwareReleaseManifest? = nil
+        if let url = assets[manifestFileName], let json = await download(url, limit: 64 * 1024) {
+            manifest = FirmwareReleaseManifest.parse(json)
+        }
+        result.releaseVersion = manifest?.version
         for board in FirmwareBoard.allCases {
+            if let listed = manifest?.version, let mine = have[board],
+               FirmwareVersion.compare(listed, mine) <= 0 {
+                result.notes.append("\(board.label) v\(listed): already in the app")
+                continue
+            }
             var app: Data? = nil
             if let url = assets[board.appFileName] {
-                app = await download(url)
+                app = await download(url, limit: maxImageBytes)
             }
-            if app == nil, let url = assets[board.mergedFileName], let merged = await download(url),
+            if app == nil, let url = assets[board.mergedFileName],
+               let merged = await download(url, limit: appOffset + maxImageBytes),
                merged.count > appOffset {
                 app = Data(merged.dropFirst(appOffset))
             }
@@ -289,8 +349,16 @@ enum FirmwareFiles {
                 result.notes.append("\(board.label): not in the release")
                 continue
             }
+            if let expected = manifest?.appMd5[board], md5Hex(appData) != expected {
+                result.notes.append("\(board.label): download damaged (checksum)")
+                continue
+            }
             guard let image = makeImage(from: appData, source: .web, board: board) else {
-                result.notes.append("\(board.label): no version marker (firmware before 1.2)")
+                result.notes.append("\(board.label): not a \(board.label) image with a version marker")
+                continue
+            }
+            if let mine = have[board], FirmwareVersion.compare(image.version, mine) <= 0 {
+                result.notes.append("\(board.label) v\(image.version): already in the app")
                 continue
             }
             result.images.append(image)
@@ -318,7 +386,9 @@ enum FirmwareFiles {
         return out
     }
 
-    private static func download(_ url: URL) async -> Data? {
+    /// One release file (GitHub redirects to its storage host; URLSession follows). nil on any
+    /// error or when it is larger than `limit` bytes.
+    private static func download(_ url: URL, limit: Int) async -> Data? {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         let reply: (Data, URLResponse)
@@ -329,7 +399,7 @@ enum FirmwareFiles {
         }
         let data: Data = reply.0
         guard (reply.1 as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        guard data.count <= appOffset + maxImageBytes else { return nil }
+        guard !data.isEmpty, data.count <= limit else { return nil }
         return data
     }
 }
@@ -376,8 +446,10 @@ final class FirmwareCatalog: ObservableObject {
         if isCheckingWeb { return }
         isCheckingWeb = true
         webStatus = "Checking GitHub…"
+        // Only a version newer than these is downloaded.
+        let have: [FirmwareBoard: String] = images.mapValues { (image: FirmwareImage) -> String in image.version }
         Task { [weak self] in
-            let result: FirmwareWebResult = await FirmwareFiles.fetchLatest()
+            let result: FirmwareWebResult = await FirmwareFiles.fetchLatest(have: have)
             self?.finishWebCheck(result)
         }
     }
@@ -405,7 +477,7 @@ final class FirmwareCatalog: ObservableObject {
         var parts: [String] = []
         for board in FirmwareBoard.allCases {
             if let image = result.images.first(where: { (item: FirmwareImage) -> Bool in item.board == board }) {
-                parts.append("\(board.label) v\(image.version)")
+                parts.append("\(board.label) v\(image.version) downloaded")
             }
         }
         parts.append(contentsOf: result.notes)

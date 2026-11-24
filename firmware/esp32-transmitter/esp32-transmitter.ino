@@ -129,6 +129,17 @@ enum AdvKind : uint8_t { ADV_OFF = 0, ADV_IDLE, ADV_BEACON, ADV_HEARTBEAT };
 static const uint8_t  HEARTBEAT_LEN     = 9;
 static const uint16_t HEARTBEAT_ADV_MIN = 0x640;  // 1 s
 static const uint16_t HEARTBEAT_ADV_MAX = 0xC80;  // 2 s
+#if MM_HELTEC_V3
+// What the heartbeat carries moves only when the battery really does, so the advert is not
+// restarted (advSame) for a flickering last digit: the % holds until the reading is
+// HEARTBEAT_PCT_HYST points away (a value sitting on x.5 cannot flip); the runtime moves in
+// steps of 5 min (under 10 h), 15 min (under 24 h) or 30 min, once it is a whole step away, and
+// stops at 99 h (every display shows "~99H+" from there). Multiples of 5 also keep a wand marker
+// out of the bytes: 3023 min is CF 0B, and the iPhone looks for CF 0B / CF 9B in any company's
+// manufacturer data.
+static const float   HEARTBEAT_PCT_HYST    = 0.75f;
+static const int32_t HEARTBEAT_RUN_CAP_MIN = 99 * 60;
+#endif
 
 struct AdvState {
   uint8_t kind;      // AdvKind
@@ -170,6 +181,10 @@ static uint32_t gLedFlashAt = 0;
 static bool     gLedFlashed = false;        // a flash happened since boot (gLedFlashAt valid)
 static bool     gLedFlashWanted = false;
 static bool     gLedOn = false;
+#if MM_HELTEC_V3
+static int16_t  gHbPct = -1;                // battery % the heartbeat carries (-1: none yet)
+static int32_t  gHbRunMin = -1;             // runtime it carries, a multiple of 5 min (-1: none)
+#endif
 
 // ---- Wake loop() ---------------------------------------------------------------------
 static void wakeLoop() {
@@ -187,14 +202,31 @@ static void heartbeatBytes(uint8_t out[HEARTBEAT_LEN]) {
   uint8_t pct = 0xFF, flags = 0;
   uint16_t runMin = 0xFFFF;
 #if MM_HELTEC_V3
-  if (powerBatteryMv() >= 0) {
-    const int p = powerBatteryPct();
-    pct = (uint8_t)(p < 0 ? 0 : (p > 100 ? 100 : p));
+  const float exact = powerBatteryPctExact();  // < 0: no reading
+  if (exact >= 0.0f) {
+    if (gHbPct < 0 || fabsf(exact - (float)gHbPct) >= HEARTBEAT_PCT_HYST) {
+      const int p = (int)(exact + 0.5f);
+      gHbPct = (int16_t)(p > 100 ? 100 : p);
+    }
+    pct = (uint8_t)gHbPct;
     flags |= 0x04;
     if (powerCharging()) flags |= 0x01;
     if (powerOnUsb()) flags |= 0x02;
-    const int32_t r = powerRuntimeMin();
-    if (r >= 0) runMin = (uint16_t)(r > 0xFFFE ? 0xFFFE : r);
+    int32_t r = powerRuntimeMin();
+    if (r >= 0) {
+      if (r > HEARTBEAT_RUN_CAP_MIN) r = HEARTBEAT_RUN_CAP_MIN;
+      const int32_t step = r < 10 * 60 ? 5 : (r < 24 * 60 ? 15 : 30);  // minutes
+      if (gHbRunMin < 0 || r - gHbRunMin >= step || gHbRunMin - r >= step) {
+        gHbRunMin = (r + step / 2) / step * step;
+        if (gHbRunMin > HEARTBEAT_RUN_CAP_MIN) gHbRunMin = HEARTBEAT_RUN_CAP_MIN;
+      }
+      runMin = (uint16_t)gHbRunMin;
+    } else {
+      gHbRunMin = -1;  // charging, USB power: picked afresh when the runtime is back
+    }
+  } else {
+    gHbPct = -1;
+    gHbRunMin = -1;
   }
 #endif
   out[0] = 0xFF; out[1] = 0xFF; out[2] = 'M'; out[3] = 'B'; out[4] = 1;

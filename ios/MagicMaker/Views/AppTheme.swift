@@ -107,10 +107,13 @@ struct TelemetryBar: View {
         return "BLE:LINK"
     }
 
-    /// "ESP32:68% ~9H 40M", "ESP32:CHG", "ESP32:4.05V", or nil when no ESP32 status with a battery.
+    /// "ESP32:68% ~9H 40M", "ESP32:CHG" (charging or on USB power, as the Android app shows it),
+    /// "ESP32:4.05V", or nil when no ESP32 status with a battery. Only while the link is up: the
+    /// last status is kept until a poll reads none, and a skipped poll (firmware transfer, GATT
+    /// work queued) would otherwise leave an unlinked board's old battery on the bar.
     @MainActor
     static func esp32BatteryToken(vm: AppViewModel) -> String? {
-        guard vm.relayBackend == .esp32, let status = vm.androidRemote else { return nil }
+        guard vm.relayBackend == .esp32, vm.relayGattReady, let status = vm.androidRemote else { return nil }
         guard status.batteryMv != nil || status.batteryPercent != nil else { return nil }
         if status.charging { return "ESP32:CHG" }
         var token: String = "ESP32:"
@@ -195,6 +198,9 @@ struct TickerText: View {
     var gap: CGFloat = 36
 
     @State private var textWidth: CGFloat = 0
+    /// Where the scroll counts from. Moved when the text's width changes, so the line keeps its
+    /// place instead of jumping (the offset is the time since this, modulo the cycle).
+    @State private var epoch: Date = Date()
 
     var body: some View {
         // The hidden label sets the row's height; the visible one is drawn over it.
@@ -220,8 +226,20 @@ struct TickerText: View {
                         Color.clear.preference(key: TickerWidthKey.self, value: g.size.width)
                     })
             }
-            .onPreferenceChange(TickerWidthKey.self) { (w: CGFloat) in
-                textWidth = w
+            .onPreferenceChange(TickerWidthKey.self) { [widthBinding = $textWidth, epochBinding = $epoch,
+                                                        gapWidth = gap, pointsPerSecond = speed] (w: CGFloat) in
+                let old: CGFloat = widthBinding.wrappedValue
+                if old == w { return }
+                // A counter gaining a digit or a token coming or going changes only the cycle's
+                // length: the epoch moves so the line stays where it is.
+                let oldCycle: Double = Double(old + gapWidth)
+                if old > 0 && oldCycle > 0 && pointsPerSecond > 0 {
+                    let now: Date = Date()
+                    let elapsed: Double = max(0, now.timeIntervalSince(epochBinding.wrappedValue))
+                    let travelled: Double = (elapsed * pointsPerSecond).truncatingRemainder(dividingBy: oldCycle)
+                    epochBinding.wrappedValue = now.addingTimeInterval(-travelled / pointsPerSecond)
+                }
+                widthBinding.wrappedValue = w
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)
@@ -232,7 +250,7 @@ struct TickerText: View {
         if textWidth > boxWidth + 0.5 && boxWidth > 0 {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
                 let cycle: Double = Double(textWidth + gap)
-                let seconds: Double = timeline.date.timeIntervalSinceReferenceDate
+                let seconds: Double = max(0, timeline.date.timeIntervalSince(epoch))
                 let travelled: Double = (seconds * speed).truncatingRemainder(dividingBy: cycle)
                 HStack(spacing: gap) {
                     label

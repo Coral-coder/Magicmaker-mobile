@@ -65,6 +65,8 @@ struct SettingsScreen: View {
                     .padding(.top, 8)
                 SettingsBackgroundSection()
                     .padding(.top, 8)
+                SettingsFirmwareSection(updater: vm.firmware)
+                    .padding(.top, 8)
                 aboutLine
                     .padding(.top, 8)
             }
@@ -569,5 +571,133 @@ private struct SettingsBackgroundSection: View {
             get: { vm.keepRunningInBackground },
             set: { on in vm.setKeepRunningInBackground(on) }
         )
+    }
+}
+
+// MARK: - Board firmware
+
+/// BOARD FIRMWARE: the linked ESP32's board and firmware version, the newest image the app has for
+/// it (bundled, or downloaded with CHECK WEB), UPDATE with the press-the-button prompt, the
+/// progress (percent, KB/s), the result and CANCEL (FirmwareUpdater). Installing the same or an
+/// older version asks first.
+private struct SettingsFirmwareSection: View {
+    @EnvironmentObject var vm: AppViewModel
+    @ObservedObject private var updater: FirmwareUpdater
+    @State private var confirmPresented: Bool = false
+    @State private var confirmText: String = ""
+
+    init(updater: FirmwareUpdater) {
+        _updater = ObservedObject(wrappedValue: updater)
+    }
+
+    var body: some View {
+        content(updater.summary(linked: vm.esp32Linked))
+            .alert("Install firmware?", isPresented: $confirmPresented) {
+                Button("INSTALL") {
+                    updater.startUpdate()
+                }
+                Button("CANCEL", role: .cancel) { }
+            } message: {
+                Text(confirmText)
+            }
+    }
+
+    private func content(_ s: FirmwareUpdater.Summary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("BOARD FIRMWARE")
+                .font(MMTheme.techHeader())
+                .foregroundStyle(MMTheme.cyan)
+            valueRow("BOARD", s.boardText, color: s.boardAlarm ? MMTheme.amber : MMTheme.cyan)
+            ForEach(0..<s.available.count, id: \.self) { index in
+                valueRow(s.available[index].key, s.available[index].value, color: MMTheme.cyan)
+            }
+            if !s.webText.isEmpty {
+                Text(s.webText)
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(MMTheme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !s.instruction.isEmpty {
+                Text(s.instruction)
+                    .font(MMTheme.techLabel(s.instructionIsPrompt ? 12 : 10))
+                    .foregroundStyle(s.instructionIsPrompt ? MMTheme.amber : MMTheme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
+            if s.showsProgress {
+                ProgressView(value: s.progress)
+                    .tint(MMTheme.cyan)
+                    .padding(.top, 4)
+                Text(s.progressText)
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(MMTheme.cyan)
+            }
+            if !s.resultText.isEmpty {
+                Text(s.resultText)
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(s.resultIsError ? MMTheme.error : MMTheme.cyan)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
+            HStack(spacing: 4) {
+                if s.canCancel {
+                    actionButton("CANCEL", enabled: true, color: MMTheme.error) {
+                        updater.cancel()
+                    }
+                } else {
+                    actionButton(s.actionTitle, enabled: s.actionEnabled, color: MMTheme.cyan) {
+                        update(s)
+                    }
+                }
+                actionButton(s.checkingWeb ? "CHECKING…" : "CHECK WEB", enabled: !s.checkingWeb && !s.busy,
+                             color: MMTheme.cyan) {
+                    updater.catalog.checkWeb()
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private func valueRow(_ key: String, _ value: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(key)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(MMTheme.textDim)
+            Spacer(minLength: 4)
+            Text(value)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(color)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func actionButton(_ title: String, enabled: Bool, color: Color,
+                              action: @escaping () -> Void) -> some View {
+        let lineColor: Color = enabled ? color : MMTheme.panelLine
+        return Button {
+            action()
+        } label: {
+            Text(title)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(enabled ? color : MMTheme.textDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .frame(height: 28)
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(lineColor, lineWidth: 0.5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+    }
+
+    /// The same or an older version asks first.
+    private func update(_ s: FirmwareUpdater.Summary) {
+        if let message = s.confirmMessage {
+            confirmText = message
+            confirmPresented = true
+            return
+        }
+        updater.startUpdate()
     }
 }

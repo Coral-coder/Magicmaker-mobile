@@ -23,6 +23,10 @@ on:
       - "firmware/esp32-transmitter/**.ino"
       - "firmware/esp32-transmitter/**.h"
       - "firmware/esp32-transmitter/**.cpp"
+      # Packed into MagicMaker-Flasher-Windows.zip, so a change re-publishes the zip (the
+      # rebuilt images are byte-identical, so nothing is committed back).
+      - "firmware/esp32-transmitter/flash.bat"
+      - "firmware/esp32-transmitter/flash.ps1"
       - "tools/firmware_manifest.py"
       - ".github/workflows/esp32-firmware.yml"
 
@@ -174,6 +178,9 @@ jobs:
         with:
           tag_name: esp32-firmware
           name: ESP32 firmware ${{ steps.manifest.outputs.version }} (latest)
+          # Never the repo's "latest" release: the Android app's updater reads
+          # /releases/latest and expects an APK release there (android-release.yml).
+          make_latest: false
           body: |
             Prebuilt MagicMaker ESP32 transmitter firmware ${{ steps.manifest.outputs.version }}: one merged image per board, each flashed at offset 0x0.
             - `magicmaker-esp32.bin`: classic ESP32 (DevKit / WROOM / WROVER, 4MB flash).
@@ -200,7 +207,7 @@ jobs:
       # Also commit the built images into the repo so a plain `git pull` delivers the firmware
       # and the flashers can flash it with no download: merged images next to the flashers and
       # (with both manifests) into the web flasher, app images into the iPhone app's bundle.
-      # None of these .bin/.json paths matches this workflow's .ino/.h/.cpp/script/workflow
+      # None of these .bin/.json paths matches this workflow's source/flash-script/workflow
       # triggers, and [skip ci] + the GITHUB_TOKEN push start no workflow, so this won't loop.
       # pages.yml redeploys the flasher when this run finishes (workflow_run).
       - name: Commit prebuilt bins into the repo

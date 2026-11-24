@@ -12,13 +12,16 @@ import UIKit
 ///
 /// QUERY answers "MMFW:<version>:<board>;s=<state>;o=<offset>;n=<size>" with the seconds left in
 /// the button-armed window as its value: the board only takes an update for 120 s after PRG
-/// (Heltec V3) / BOOT (classic ESP32) is pressed. During DATA the board acks with OK every 4096
-/// bytes; the app keeps at most `window` bytes beyond the last ack in flight and carries on from
-/// the board's offset after an ERR_OFFSET. After END the board checks the image and restarts
-/// into it about 1.5 s later; the app relinks and asks again to confirm the new version.
+/// (Heltec V3) / BOOT (classic ESP32) is pressed. BEGIN, END, ABORT and QUERY are written with
+/// response, DATA without (chunks of the link's largest write minus the 5-byte header). During
+/// DATA the board acks with OK every 4096 bytes and at the end; the app keeps at most `window`
+/// bytes beyond the last ack in flight and carries on from the board's offset after an
+/// ERR_OFFSET. After END the board checks the image and restarts into it about 1.5 s later; the
+/// link drops, the app links again on its own and asks again to confirm the new version.
 ///
 /// While a transfer runs, transmits, relay commands and status reads are refused (the client's
-/// `otaBusy`), the local scan pauses (`onBusyChanged`) and the screen stays awake.
+/// `otaBusy`), the local scan pauses (`onBusyChanged`) and the screen stays awake
+/// (`holdsScreen`).
 @MainActor
 final class FirmwareUpdater: ObservableObject {
     enum Phase: Equatable {
@@ -69,6 +72,8 @@ final class FirmwareUpdater: ObservableObject {
         var resultText: String
         var resultIsError: Bool
         var canCancel: Bool
+        /// A transfer holds the link (CHECK WEB waits).
+        var busy: Bool
     }
 
     private enum Op {
@@ -87,6 +92,8 @@ final class FirmwareUpdater: ObservableObject {
 
     /// Bytes allowed in flight beyond the board's last ack.
     private static let window: Int = 16 * 1024
+    /// One GATT value carries at most 512 bytes: the DATA payload is at most 512 - 5.
+    private static let maxChunk: Int = 512 - 5
 
     let catalog: FirmwareCatalog
 
@@ -106,6 +113,11 @@ final class FirmwareUpdater: ObservableObject {
 
     /// A transfer started (true) or ended (false): the app pauses its own radio work meanwhile.
     var onBusyChanged: ((Bool) -> Void)?
+    /// `holdsScreen` changed: the app's idle-timer owner (TxEngine.refreshIdleTimer) applies it.
+    /// Without one the updater sets UIApplication.isIdleTimerDisabled itself.
+    var onScreenHoldChanged: (() -> Void)?
+    /// The screen should stay on: from the button prompt until the update has ended.
+    private(set) var holdsScreen: Bool = false
 
     private weak var client: AndroidRelayGattClient?
     private var catalogChanges: AnyCancellable?
@@ -124,7 +136,6 @@ final class FirmwareUpdater: ObservableObject {
     private var lastPublishAt: Date = .distantPast
     private var sawLinkDrop: Bool = false
     private var ticker: Task<Void, Never>?
-    private var holdsScreen: Bool = false
     private var screenWasHeld: Bool = false
 
     init() {
@@ -135,15 +146,16 @@ final class FirmwareUpdater: ObservableObject {
         }
     }
 
-    /// Wires the relay link (once, after Bluetooth starts).
+    /// Wires the relay link (once, after Bluetooth starts). The client calls back on the main
+    /// queue (its central runs there).
     func attach(to client: AndroidRelayGattClient) {
         self.client = client
         client.onOtaNotify = { [weak self] data in
             self?.handleNotify(data)
         }
         client.onOtaLinkChanged = { [weak self] up in
-            // Later on the main queue: the client is mid-way through its own link bookkeeping.
-            DispatchQueue.main.async {
+            // A turn later: the client is mid-way through its own link bookkeeping.
+            Task { @MainActor [weak self] in
                 self?.linkChanged(up)
             }
         }
@@ -158,7 +170,7 @@ final class FirmwareUpdater: ObservableObject {
         }
     }
 
-    /// A transfer holds the link (BEGIN until the board is back or the update ended).
+    /// A transfer holds the link (BEGIN until END is answered or the update ended).
     var isBusy: Bool { busy }
 
     /// UPDATE (or REINSTALL): asks for the button press, then installs the newest image for the
@@ -174,8 +186,8 @@ final class FirmwareUpdater: ObservableObject {
         resultIsError = false
         progress = 0
         bytesPerSecond = 0
-        guard let client, client.isOtaReady else {
-            fail("Link the ESP32 first (LINK tab, backend ESP32)")
+        guard client?.isOtaReady == true else {
+            fail("Link the ESP32 first (LINK tab, ESP32 backend), then tap UPDATE.")
             return
         }
         if board == nil {
@@ -215,7 +227,9 @@ final class FirmwareUpdater: ObservableObject {
             fail("The board did not say which firmware it runs.")
             return
         }
-        guard let image = catalog.newest(for: info.board) else {
+        // Catalog images are filed under their own marker's board, so this is an image built
+        // for the board that answered QUERY.
+        guard let image = catalog.newest(for: info.board), image.board == info.board else {
             fail("No \(info.board.label) firmware in the app — tap CHECK WEB.")
             return
         }
@@ -266,12 +280,12 @@ final class FirmwareUpdater: ObservableObject {
         }
     }
 
-    /// Carry on from what the board holds.
+    /// Carry on from what the board holds. Not progress by itself (`lastProgressAt` moves only
+    /// when the board acks more), so a board that keeps losing the same bytes still times out.
     private func resend(from offset: Int) {
         rewindOffset = offset
         nextOffset = offset
         ackedOffset = offset
-        lastProgressAt = Date()
         pump()
     }
 
@@ -284,6 +298,13 @@ final class FirmwareUpdater: ObservableObject {
         if !client.otaWrite(Data([Op.end]), withResponse: true) {
             fail("The ESP32 link dropped before the update finished — the board keeps its current firmware.")
         }
+    }
+
+    /// END was answered (or the board restarted before its answer came): the transfer no longer
+    /// holds the link, which drops when the board restarts and comes back by itself.
+    private func awaitRestart() {
+        setBusy(false)
+        setPhase(.restarting)
     }
 
     // MARK: Board replies
@@ -309,6 +330,7 @@ final class FirmwareUpdater: ObservableObject {
         case Op.end:
             endReply(status)
         default:
+            // ABORT's reply needs nothing.
             break
         }
     }
@@ -332,14 +354,17 @@ final class FirmwareUpdater: ObservableObject {
                 fail("The board dropped the update — it keeps its current firmware. Try again.")
                 return
             }
-            if info.offset > ackedOffset {
-                ackedOffset = min(info.offset, bytes.count)
+            let held: Int = min(info.offset, bytes.count)
+            let stalled: Bool = Date().timeIntervalSince(lastProgressAt) > 4
+            if held > ackedOffset {
+                ackedOffset = held
                 lastProgressAt = Date()
+                publishProgress(force: false)
             }
             if ackedOffset >= bytes.count {
                 sendEnd()
-            } else if info.offset < nextOffset && Date().timeIntervalSince(lastProgressAt) > 4 {
-                resend(from: info.offset)
+            } else if stalled && held < nextOffset {
+                resend(from: held)
             } else {
                 pump()
             }
@@ -355,8 +380,8 @@ final class FirmwareUpdater: ObservableObject {
     private func beginReply(_ status: UInt8) {
         guard phase == .starting else { return }
         if status == Status.ok {
-            let maxWrite: Int = min(client?.otaMaxWriteWithoutResponse ?? 20, 512)
-            chunkSize = max(16, maxWrite - 5)
+            let maxWrite: Int = client?.otaMaxWriteWithoutResponse ?? 20
+            chunkSize = max(16, min(maxWrite - 5, Self.maxChunk))
             nextOffset = 0
             ackedOffset = 0
             rewindOffset = -1
@@ -386,6 +411,8 @@ final class FirmwareUpdater: ObservableObject {
                 lastProgressAt = Date()
                 publishProgress(force: false)
             }
+            // Past the last resend point: a new ERR_OFFSET there is a new gap.
+            if value > rewindOffset { rewindOffset = -1 }
             if ackedOffset >= bytes.count {
                 sendEnd()
             } else {
@@ -409,13 +436,24 @@ final class FirmwareUpdater: ObservableObject {
     private func endReply(_ status: UInt8) {
         guard phase == .finishing else { return }
         if status == Status.ok {
-            setPhase(.restarting)
+            awaitRestart()
             return
         }
         fail("The board rejected the new firmware: \(Self.statusText(status)). It keeps its current firmware.")
     }
 
     private func verifyAfterRestart(_ info: BoardInfo) {
+        // Only BEGIN sets the size the board reports, and it is 0 after a boot: a size means the
+        // board did not restart (END never took, or the link dropped before it), whatever version
+        // it reports, so a reinstall of the same version is not taken for a success.
+        if info.size != 0 {
+            if info.state == 1 {
+                // Still holding the transfer: drop it.
+                client?.otaWrite(Data([Op.abort]), withResponse: true)
+            }
+            fail("The board did not restart into the new firmware — it still runs v\(info.version). Try again.")
+            return
+        }
         guard let target else {
             finish(.succeeded, "The board restarted on v\(info.version).", error: false)
             return
@@ -444,11 +482,11 @@ final class FirmwareUpdater: ObservableObject {
         case .querying, .waitingForButton:
             fail("The ESP32 link dropped — link it again, then tap UPDATE.")
         case .starting, .sending:
-            fail("The Bluetooth link dropped during the update — the board keeps its current firmware. Link it again and retry.")
+            fail("The Bluetooth link dropped during the update — the board drops the partial image and keeps its current firmware. Link it again and retry.")
         case .finishing:
             // END may have gone through and the board restarted before its reply came back.
             sawLinkDrop = true
-            setPhase(.restarting)
+            awaitRestart()
         case .restarting:
             sawLinkDrop = true
         default:
@@ -479,7 +517,8 @@ final class FirmwareUpdater: ObservableObject {
         switch phase {
         case .querying:
             if inPhase > 8 {
-                fail("The board did not answer — it needs firmware 1.2 or newer for Bluetooth updates.")
+                // Only reached with the update characteristic linked, so the firmware has updates.
+                fail("The board did not say which firmware it runs — link it again, then tap UPDATE.")
             } else if sinceQuery > 2 {
                 sendQuery()
             }
@@ -505,7 +544,7 @@ final class FirmwareUpdater: ObservableObject {
         case .finishing:
             if inPhase > 20 {
                 // No answer to END: find out after the restart what the board runs.
-                setPhase(.restarting)
+                awaitRestart()
             }
         case .restarting:
             if inPhase > 90 {
@@ -515,9 +554,6 @@ final class FirmwareUpdater: ObservableObject {
             }
         case .idle, .succeeded, .failed:
             stopTicker()
-        }
-        if holdsScreen && !UIApplication.shared.isIdleTimerDisabled {
-            UIApplication.shared.isIdleTimerDisabled = true
         }
     }
 
@@ -587,6 +623,10 @@ final class FirmwareUpdater: ObservableObject {
     private func holdScreen(_ on: Bool) {
         if holdsScreen == on { return }
         holdsScreen = on
+        if let apply = onScreenHoldChanged {
+            apply()
+            return
+        }
         if on {
             screenWasHeld = UIApplication.shared.isIdleTimerDisabled
             UIApplication.shared.isIdleTimerDisabled = true
@@ -603,7 +643,8 @@ final class FirmwareUpdater: ObservableObject {
         let next: Double = min(1, Double(ackedOffset) / Double(total))
         if progress != next { progress = next }
         let elapsed: TimeInterval = now.timeIntervalSince(transferStartedAt)
-        bytesPerSecond = elapsed > 0.5 ? Double(ackedOffset) / elapsed : 0
+        let rate: Double = elapsed > 0.5 ? Double(ackedOffset) / elapsed : 0
+        if bytesPerSecond != rate { bytesPerSecond = rate }
     }
 
     // MARK: Helpers
@@ -638,7 +679,7 @@ final class FirmwareUpdater: ObservableObject {
     static func statusText(_ status: UInt8) -> String {
         switch status {
         case 0: return "OK"
-        case 1: return "the button window is closed (press PRG / BOOT again)"
+        case 1: return "the button window is closed (press PRG on the Heltec, BOOT on a classic ESP32, and try again)"
         case 2: return "the image size does not fit this board"
         case 3: return "the board could not open its update slot"
         case 4: return "data arrived out of order"
@@ -652,16 +693,16 @@ final class FirmwareUpdater: ObservableObject {
 
     // MARK: Summary for the SETTINGS screens
 
-    /// `linked`: the relay link to the ESP32 is up (backend ESP32, commands ready).
+    /// `linked`: the ESP32 is the selected backend and its relay link takes commands.
     func summary(linked: Bool) -> Summary {
-        let hasOta: Bool = client?.hasOtaCharacteristic ?? false
-        var boardText: String = "NOT LINKED"
+        let hasOta: Bool = linked && (client?.hasOtaCharacteristic ?? false)
+        var boardText: String = "NOT LINKED TO THE ESP32"
         var boardAlarm: Bool = false
         if let info = board {
             boardText = "\(info.board.label) · v\(info.version)"
         } else if phase == .restarting {
             boardText = "RESTARTING…"
-        } else if linked && hasOta {
+        } else if hasOta {
             boardText = "LINKED · ASKING…"
         } else if linked {
             boardText = "FIRMWARE BEFORE 1.2"
@@ -674,7 +715,7 @@ final class FirmwareUpdater: ObservableObject {
             if let image {
                 available.append((key: "AVAILABLE", value: "v\(image.version) · \(image.source.label)"))
             } else {
-                available.append((key: "AVAILABLE", value: "NONE FOR \(info.board.label)"))
+                available.append((key: "AVAILABLE", value: catalog.loaded ? "NONE FOR \(info.board.label)" : "…"))
             }
         } else {
             for kind in FirmwareBoard.allCases {
@@ -694,38 +735,44 @@ final class FirmwareUpdater: ObservableObject {
                 actionTitle = "UPDATE TO v\(image.version)"
             } else if order == 0 {
                 actionTitle = "REINSTALL v\(image.version)"
-                confirmMessage = "The board already runs v\(info.version). Install it again?"
+                confirmMessage = "The \(info.board.label) already runs v\(info.version). Install it again?"
             } else {
                 actionTitle = "INSTALL OLDER v\(image.version)"
-                confirmMessage = "The board runs v\(info.version), newer than v\(image.version). Install the older firmware?"
+                confirmMessage = "The \(info.board.label) runs v\(info.version), newer than v\(image.version). Install the older firmware?"
             }
         }
         let idle: Bool = phase == .idle || phase == .succeeded || phase == .failed
-        let actionEnabled: Bool = idle && otaReady && board != nil && image != nil
+        let actionEnabled: Bool = idle && linked && otaReady && board != nil && image != nil
 
         var instruction: String = ""
         var prompt: Bool = false
-        let button: String = board?.board.buttonName ?? target?.board.buttonName ?? "PRG"
+        let kind: FirmwareBoard? = board?.board ?? target?.board
         let version: String = target?.version ?? ""
         switch phase {
         case .querying:
             instruction = "Asking the board which firmware it runs…"
         case .waitingForButton:
-            instruction = "Press \(button) on the board now (PRG on a Heltec V3, BOOT on a classic ESP32). The update starts by itself."
+            let named: String
+            if let kind {
+                named = "Press \(kind.buttonName) on the \(kind.boardName) now"
+            } else {
+                named = "Press the board's button now"
+            }
+            instruction = named + " (PRG on the Heltec, BOOT on a classic ESP32). The update starts by itself."
             prompt = true
         case .starting:
             instruction = "Starting the update…"
         case .sending:
-            instruction = "Sending v\(version) — keep the phone near the board. Transmits are paused."
+            instruction = "Sending v\(version) — keep the phone near the board and this screen open. Transmits are paused."
         case .finishing:
             instruction = "The board is checking the new firmware…"
         case .restarting:
             instruction = "The board is restarting into v\(version) — linking again…"
         case .idle, .succeeded, .failed:
-            if linked && hasOta {
-                instruction = "UPDATE asks you to press PRG (Heltec V3) or BOOT (classic ESP32) on the board: it only takes an update for 2 minutes after a press."
+            if hasOta {
+                instruction = "UPDATE asks you to press PRG on the Heltec (BOOT on a classic ESP32): the board only takes an update for 2 minutes after a press."
             } else if linked {
-                instruction = "This board's firmware has no Bluetooth updates. Flash 1.2 once over USB (flash.sh / flash.ps1 in firmware/esp32-transmitter, or the web flasher); later updates come from here."
+                instruction = "This board's firmware has no Bluetooth updates. Flash 1.2 or newer once over USB (the web flasher, or flash.sh / flash.ps1 in firmware/esp32-transmitter); later updates come from here."
             } else {
                 instruction = "Select ESP32 on LINK and power the board to see its firmware and update it."
             }
@@ -733,17 +780,21 @@ final class FirmwareUpdater: ObservableObject {
 
         var showsProgress: Bool = false
         var progressText: String = ""
+        var shownProgress: Double = 0
         switch phase {
         case .starting, .sending:
             showsProgress = true
+            shownProgress = progress
             let percent: Int = Int((progress * 100).rounded(.down))
             let kbs: Double = bytesPerSecond / 1024
             progressText = kbs > 0 ? "\(percent)% · " + String(format: "%.1f KB/s", kbs) : "\(percent)%"
         case .finishing:
             showsProgress = true
+            shownProgress = 1
             progressText = "100% · CHECKING"
         case .restarting:
             showsProgress = true
+            shownProgress = 1
             progressText = "100% · RESTARTING"
         default:
             break
@@ -761,11 +812,12 @@ final class FirmwareUpdater: ObservableObject {
             instruction: instruction,
             instructionIsPrompt: prompt,
             showsProgress: showsProgress,
-            progress: showsProgress ? (phase == .sending || phase == .starting ? progress : 1) : 0,
+            progress: shownProgress,
             progressText: progressText,
             resultText: resultText,
             resultIsError: resultIsError,
-            canCancel: canCancel
+            canCancel: canCancel,
+            busy: busy
         )
     }
 }

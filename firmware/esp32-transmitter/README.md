@@ -26,7 +26,9 @@ protocol has to change — the app already knows how to drive this service.
   phone; asking the chip to scan is answered `"unsupported"`. Between transmissions it just
   sits idle, waiting for the phone.
 - **Battery (Heltec V3):** % left, charge left in mAh and the **expected runtime in hours and
-  minutes** on the screen and in STATUS (the app's LINK tab). See **Battery** below.
+  minutes** on the screen and in STATUS (the app's LINK tab). From firmware 1.4 it is also in a
+  **battery heartbeat** advert that the Android app reads without connecting (top bar
+  `ESP32:68% ~9H 40M`). See **Battery** and **Battery heartbeat** below.
 
 ## Hardware
 
@@ -105,7 +107,10 @@ cable):
 2. Press the board's button once: **PRG** on a Heltec V3, **BOOT** on a classic DevKit. For the
    next **2 minutes** the board accepts an update. Without that press it refuses one, so nobody
    nearby can reflash it.
-3. Start the firmware update in the app. It sends the app image it carries for that board;
+3. Start the firmware update in the app (Settings, **BOARD FIRMWARE**, **UPDATE**; you can also
+   tap UPDATE first and press the button when the app asks). It sends the newest app image it
+   has for that board: the one bundled with the app, or a newer one downloaded from the
+   `esp32-firmware` release with **CHECK WEB** (checked against `firmware.json`'s MD5);
    the board checks it (MD5, the image's own SHA-256 and chip type) and restarts into it about
    1.5 s after the last byte, and the app relinks. If the update fails or is interrupted, the
    board keeps running its current firmware.
@@ -252,7 +257,8 @@ honestly:
   recommended intervals).
 - **Linked:** the link runs at **+3 dBm** with a 30–50 ms connection interval and slave latency
   2, so the radio idles between events. (A longer latency would save ~0.3 mA but add up to
-  ~0.2 s to every tap.)
+  ~0.2 s to every tap.) Firmware 1.4 adds one slow non-connectable advert while linked: the
+  battery heartbeat, every 1–2 s at +3 dBm.
 - **`loop()` sleeps until its next deadline** (a phase end, a loop burst, an LED blink, a
   battery reading, the screen; at most 5 s) and is woken early by a command, a
   connect/disconnect or PRG. It does not poll.
@@ -290,6 +296,7 @@ a lower beacon power in the app (shorter range).
 | `IDLE_ADV_SLOW_MIN/MAX` | … after `IDLE_FAST_WINDOW_MS` | 546.25–760 ms |
 | `IDLE_FAST_WINDOW_MS` | fast idle advertising after boot / a disconnect | 30 s |
 | `IDLE_ADV_POWER` | TX power while waiting for a phone | +3 dBm |
+| `HEARTBEAT_ADV_MIN/MAX` | battery heartbeat advert interval while a phone is linked | 1–2 s |
 | `LINK_POWER` | TX power of the link to the phone (BLE default power); raise to `P9` if it drops at range | +3 dBm |
 | `LED_MIN_FLASH_GAP_MS` | at most one transmit flash per this long (dense replays still blink) | 250 ms |
 | `LOOP_MAX_SLEEP_MS` | longest `loop()` sleep between deadlines (all deadlines are tracked; a safety net) | 5000 ms |
@@ -361,7 +368,7 @@ that replaced it. Disconnects change nothing; nothing is stored in flash.
 |---|---|---|
 | `ok`, `error` | always / on failure | the last command's reply (reset to ok on connect) |
 | `running` | always (`true`) | marks a real status (firmware before 1.2 sent a bare `{"ok":true}`) |
-| `proto`, `fw`, `board` | always | `2`, `"1.2"`, `"HELTEC V3"` / `"ESP32"` |
+| `proto`, `fw`, `board` | always | `2`, `MM_FW_VERSION` (`"1.4"`), `"HELTEC V3"` / `"ESP32"` |
 | `keepAwake` | always | KEEP AWAKE runs |
 | `txLoopEnabled`, `txLoopIntervalMs` | TX LOOP runs | |
 | `starlightLoopEnabled`, `starlightIntervalMs` | WAND LOOP runs | |
@@ -377,11 +384,19 @@ that replaced it. Disconnects change nothing; nothing is stored in flash.
 Example (idle, Heltec):
 
 ```
-{"ok":true,"running":true,"proto":2,"fw":"1.2","board":"HELTEC V3","keepAwake":false,"wakeupPreambleMs":520,"commandBurstMs":4000,"starlightBurstMs":500,"txPowerLevel":3,"txInterleave":false,"uptimeS":8123,"sent":42,"batMv":3921,"batPct":68,"batMah":400,"runMin":431}
+{"ok":true,"running":true,"proto":2,"fw":"1.4","board":"HELTEC V3","keepAwake":false,"wakeupPreambleMs":520,"commandBurstMs":4000,"starlightBurstMs":500,"txPowerLevel":3,"txInterleave":false,"uptimeS":8123,"sent":42,"batMv":3921,"batPct":68,"batMah":400,"runMin":431}
 ```
 
-**Advertising.** Waiting for a phone: flags + service UUID, name `MM_ESP` in the scan response,
-+3 dBm. While a packet is on air: manufacturer data only, connectable, 20–30 ms, at the app's
-beacon power; with no phone linked
+**Advertising.** Waiting for a phone: flags + service UUID, name `MM_ESP` + the battery
+heartbeat in the scan response, +3 dBm. While a packet is on air: manufacturer data only,
+connectable, 20–30 ms, at the app's beacon power; with no phone linked
 its scan response carries `MM_ESP` + the service UUID, so the app can find the board and relink
-during a keep-awake stream or a loop. Linked and idle: not advertising.
+during a keep-awake stream or a loop. Linked and idle: `MM_ESP` + the battery heartbeat,
+non-connectable, every 1–2 s, +3 dBm.
+
+**Battery heartbeat** (firmware 1.4+, read by the Android app without connecting):
+manufacturer data with company id `0xFFFF`: `FF FF 4D 42 01 <battery % or FF> <flags>
+<runtime minutes, u16 little-endian, or FFFF>`; flags bit 0 charging, bit 1 USB power, bit 2
+battery reading present (a classic ESP32 sends `FF 00 FFFF`). The % holds until the reading is
+0.75 points away and the runtime moves in steps of 5 min (under 10 h), 15 min (under 24 h) or
+30 min, up to 99 h, so the advert only changes when the battery does.

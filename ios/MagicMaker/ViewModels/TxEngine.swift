@@ -95,6 +95,8 @@ final class TxEngine: ObservableObject {
     /// Whether the user has scanning switched on: "Scanning" or "Idle" once a replay ends, and
     /// the screen is kept awake while it is on.
     var scanWanted: () -> Bool = { true }
+    /// Something else needs the screen kept on (a firmware update); see `refreshIdleTimer`.
+    var screenHoldWanted: () -> Bool = { false }
 
     /// Which loop a relay runs for this engine.
     enum RelayLoop { case tx, wand }
@@ -1158,7 +1160,7 @@ final class TxEngine: ObservableObject {
     /// screen. Call again when the scan switch changes.
     func refreshIdleTimer() {
         let phoneLoops: Bool = !relayRunsLoops() && (txLoopEnabled || starlightLoopEnabled)
-        let wanted = phoneLoops || randomShowEnabled || replayActive || scanWanted()
+        let wanted = phoneLoops || randomShowEnabled || replayActive || scanWanted() || screenHoldWanted()
         if wanted == idleTimerHeld { return }
         idleTimerHeld = wanted
         if wanted {

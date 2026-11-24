@@ -891,6 +891,10 @@ final class VFDRenderer: ObservableObject {
     private var currentTab: String = ""
     private var pageMax: Int = 0
     private var redrawPending: Bool = false
+    /// The telemetry ticker's time origin and cycle (cells; 0 while the line fits). The origin
+    /// moves when the cycle changes, so the line keeps its place instead of jumping.
+    private var tickerEpoch: Double = 0
+    private var tickerCycle: Int = 0
 
     // menu
     private var menu: VFDMenuRequest?
@@ -1338,17 +1342,23 @@ final class VFDRenderer: ObservableObject {
             self?.selectTab(key: key)
         }
         // A telemetry line wider than the screen scrolls like a ticker (the frame then draws only
-        // its rule); one that fits is drawn by the frame as before.
+        // its rule); one that fits is drawn by the frame as before. "Fits" is the frame's own
+        // layout (8-cell rules between tokens), not the ticker's wider " | " text, so a line the
+        // frame shows whole never runs the 30 fps clock.
         let tickerText: String = VFDW.upper(chrome.telemetry)
         let tickerWidth: Int = VFDText.width(tickerText)
-        let ticker: Bool = tickerWidth > L.width
+        let ticker: Bool = !VFDRenderer.telemetryFits(chrome.telemetry, L)
         VFDW.frame(fb, L, tab: chrome.tab, title: chrome.title, telemetry: ticker ? "" : chrome.telemetry,
                    back: back != nil, right: rightText, rightColor: chrome.rightColor, scroll: scroll,
                    rightTap: nil, tabs: tabList, onBack: back, onRight: rightAction, onTab: onTab)
         fb.popClip()
         if ticker {
-            VFDRenderer.drawTicker(fb, L, text: tickerText, width: tickerWidth, time: ctx.time)
+            let seconds: Double = tickerSeconds(ctx.time, cycle: tickerWidth + VFDRenderer.tickerGap)
+            VFDRenderer.drawTicker(fb, L, text: tickerText, width: tickerWidth, time: seconds)
             fb.wantsAnimation = true
+        } else {
+            // The next ticker starts from the line's beginning.
+            tickerCycle = 0
         }
         fb.pushClip(0, win.top, fb.cols, win.bottom - win.top, dy: -scroll)
         let depth: Int = fb.clipDepth

@@ -38,13 +38,8 @@ static const uint8_t  OTA_BUTTON_PIN = 0;        // PRG (Heltec V3) / BOOT (DevK
 static const uint32_t OTA_ACK_EVERY  = 4096;     // progress ack spacing (bytes)
 static const uint32_t OTA_MAX_SIZE   = 0x300000; // sanity cap; Update checks the real slot
 
-#if MM_HELTEC_V3
-static const char* OTA_BOARD = "heltec-v3";
-#else
-static const char* OTA_BOARD = "esp32";
-#endif
-
-// Version marker the app can find inside a downloaded image ("MMFW:<version>:<board>").
+// Version marker the app can find inside a downloaded image ("MMFW:<version>:<board>", board =
+// heltec-v3 | esp32).
 #if MM_HELTEC_V3
 static const char MM_FW_TAG[] = "MMFW:" MM_FW_VERSION ":heltec-v3";
 #else

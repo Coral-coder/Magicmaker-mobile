@@ -30,6 +30,10 @@ final class AppViewModel: ObservableObject {
     let scan: ScanEngine
     /// Everything that sends, through the linked relay.
     let tx: TxEngine
+    /// Firmware updates for the linked ESP32 over Bluetooth (SETTINGS → BOARD FIRMWARE).
+    let firmware: FirmwareUpdater
+    /// Every firmware-update change is announced as this model's, so both themes' SETTINGS follow.
+    private var firmwareChanges: AnyCancellable?
 
     private lazy var ble: BleCoordinator = {
         let coordinator = BleCoordinator()
@@ -105,13 +109,13 @@ final class AppViewModel: ObservableObject {
             switch self {
             case .off: return "OFF — iOS suspends MagicMaker soon after you leave it."
             case .needsLocation: return "NEEDS LOCATION — allow Location “While Using” for MagicMaker in iOS Settings."
-            case .idle: return "ON — nothing is running right now, so iOS may suspend the app."
+            case .idle: return "ON — no loop, show or replay is running on this iPhone, so iOS may suspend the app."
             case .running: return "ON — MagicMaker keeps running in the background (blue location indicator)."
             }
         }
     }
 
-    static let backgroundKeepAliveNote: String = "Uses background location to keep MagicMaker running while you use other apps or lock the phone — only while scanning, logging, a loop, show or replay, keep-awake or a relay link is active. Kept running: the relay link, transmits, loops, the random show, replays and the open capture log. iPhone limit: iOS does not pass band or wand packets to apps in the background, so this iPhone hears and records nothing new, and auto-responses don't fire, until you come back to MagicMaker. An Android relay keeps scanning on its own; the ESP32 runs keep-awake and its loops by itself. Uses extra battery."
+    static let backgroundKeepAliveNote: String = "Uses background location to keep MagicMaker running while you use other apps or lock the phone — only while this iPhone is sending something itself: a TX or wand loop it times for an Android relay, the random show, a replay or a send in progress. Scanning and logging don't count: iPhone limit — iOS does not pass band or wand packets to apps in the background, so this iPhone hears and records nothing new, and auto-responses don't fire, until you come back to MagicMaker. Keep-awake and the ESP32's loops run on the relay by themselves, and an Android relay keeps scanning on its own. Uses extra battery."
 
     init() {
         let store = MagicStore()
@@ -121,7 +125,11 @@ final class AppViewModel: ObservableObject {
         self.location = location
         self.scan = ScanEngine(store: store, location: location)
         self.tx = TxEngine(store: store)
+        self.firmware = FirmwareUpdater()
         wireEngines()
+        firmwareChanges = firmware.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     /// Connects the engines to each other and to the relay link. The engines never talk to
@@ -170,6 +178,17 @@ final class AppViewModel: ObservableObject {
         scan.onWandColorHeard = { [weak self] index in
             self?.noteWandColor(index)
         }
+        // A firmware transfer has the radio to itself (the local scan pauses) and keeps the
+        // screen on through the TX engine's idle-timer hold.
+        firmware.onBusyChanged = { [weak self] _ in
+            self?.syncBleListenModes()
+        }
+        tx.screenHoldWanted = { [weak self] in
+            self?.firmware.holdsScreen ?? false
+        }
+        firmware.onScreenHoldChanged = { [weak self] in
+            self?.tx.refreshIdleTimer()
+        }
     }
 
     /// A replay step through the relay: the packet alone for exactly durationMs, no wake. An older
@@ -193,7 +212,10 @@ final class AppViewModel: ObservableObject {
                         completion(true)
                     }
                 } else {
-                    self.relayLacksRawBurst = true
+                    // Only an older Android relay lacks raw_burst. The ESP32 (1.2+) always takes it,
+                    // so a refusal there (a full command queue, a bad packet) costs this step alone
+                    // instead of sending the rest of the replay with a wake preamble.
+                    if self.relayBackend != .esp32 { self.relayLacksRawBurst = true }
                     self.tx.radioSend(hex, durationMs, completion)
                 }
             }
@@ -331,6 +353,9 @@ final class AppViewModel: ObservableObject {
 
     func bootstrapAfterLaunch() {
         _ = ble
+        // Before Bluetooth starts, so the first link's OTA characteristic is seen.
+        firmware.attach(to: ble.bleCentral.relayGatt)
+        firmware.catalog.loadIfNeeded()
         loadNewWandNames()
         loadCachedCatalog()          // reuse the saved library so we don't re-pull it every launch
         ble.activateBluetooth()
@@ -358,10 +383,15 @@ final class AppViewModel: ObservableObject {
         updateBackgroundKeepAlive()
     }
 
-    /// Something is running that the app should stay alive for in the background.
+    /// This iPhone itself is sending something that would stop if iOS suspended the app: a TX or
+    /// wand loop it times (every relay but the ESP32, which runs its loops on the chip), the random
+    /// show, a replay or a send in progress. Scanning and logging are not counted: in the background
+    /// the scan only looks for the relay (BleCentral.startScan) and iOS passes no band or wand
+    /// packets, so they would only keep location on (scan is on by default). Keep-awake streams on
+    /// the relay, and the relay link holds through `bluetooth-central` without this.
     private var backgroundWorkActive: Bool {
-        scan.scanActive || scan.recordSessionActive || tx.txLoopEnabled || tx.starlightLoopEnabled
-            || tx.randomShowEnabled || tx.replayActive || keepAwakeActive || remoteLinkReady
+        let phoneLoops: Bool = relayBackend != .esp32 && (tx.txLoopEnabled || tx.starlightLoopEnabled)
+        return phoneLoops || tx.randomShowEnabled || tx.replayActive || tx.isTransmitting
     }
 
     /// Background location runs only while the setting is on and there is work; otherwise iOS may
@@ -467,9 +497,9 @@ final class AppViewModel: ObservableObject {
         ble.ensureRelayLink()
     }
 
-    /// The radio listens while the scan engine wants packets.
+    /// The radio listens while the scan engine wants packets, except during a firmware transfer.
     private var wantsLocalScan: Bool {
-        scan.scanActive
+        scan.scanActive && !firmware.isBusy
     }
 
     private func syncBleListenModes() {
@@ -592,6 +622,11 @@ final class AppViewModel: ObservableObject {
         case .androidWifi:
             return androidRemote?.running == true
         }
+    }
+
+    /// The ESP32 is the selected backend and its relay link takes commands (BOARD FIRMWARE).
+    var esp32Linked: Bool {
+        relayBackend == .esp32 && relayCommandReady
     }
 
     func refreshRelayStatus() {
