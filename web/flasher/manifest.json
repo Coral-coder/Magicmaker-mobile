@@ -1,13 +1,13 @@
 {
   "name": "MagicMaker ESP32 transmitter",
-  "version": "1.4",
+  "version": "1.4.1",
   "new_install_improv_wait_time": 0,
   "builds": [
     {
       "chipFamily": "ESP32",
       "parts": [
         {
-          "path": "magicmaker-esp32.bin?v=10725e489d57",
+          "path": "magicmaker-esp32.bin?v=f13298fb143f",
           "offset": 0
         }
       ]
@@ -16,7 +16,7 @@
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "magicmaker-heltec-v3.bin?v=f0e28ae4b444",
+          "path": "magicmaker-heltec-v3.bin?v=f94b7bc893c0",
           "offset": 0
         }
       ]

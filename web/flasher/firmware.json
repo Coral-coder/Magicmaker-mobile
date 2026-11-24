@@ -1,24 +1,24 @@
 {
-  "version": "1.4",
+  "version": "1.4.1",
   "release": "https://github.com/Coral-coder/Magicmaker-mobile/releases/download/esp32-firmware/",
   "boards": {
     "esp32": {
       "merged": "magicmaker-esp32.bin",
       "app": "magicmaker-esp32-app.bin",
       "size": 593152,
-      "md5": "439ca427e8ece41929dffecbc72ae09c",
-      "sha256": "137e15e5fe0f73a3ae4152c9b7ff57ac8253950ad68a9e88cfe5787b5f4477ce",
+      "md5": "c5970720319b363d3eb7d26c33e6ec74",
+      "sha256": "7179136c63ad7666018644b1262f3720dcd45f0e4fb9bda06f287a73f2fb7501",
       "mergedSize": 658688,
-      "mergedMd5": "10725e489d574d41ffc7d3ecfdd61add"
+      "mergedMd5": "f13298fb143f542715fe38d41ea69d7c"
     },
     "heltec-v3": {
       "merged": "magicmaker-heltec-v3.bin",
       "app": "magicmaker-heltec-v3-app.bin",
-      "size": 561168,
-      "md5": "1324b86154ed6fca31698957af26fcb1",
-      "sha256": "61d47e5640096674b15bb73c1c19aa34b669e18a9ed309386b8b71470c498ade",
-      "mergedSize": 626704,
-      "mergedMd5": "f0e28ae4b444ba607e6a2ba861c36f77"
+      "size": 561312,
+      "md5": "c7941bf22e90bd454a4089adceba0d9e",
+      "sha256": "72dda813d0428091b31fa295f311f072c2bda9d20560a588257f10c5c406f78a",
+      "mergedSize": 626848,
+      "mergedMd5": "f94b7bc893c0e27003d2f5dceb3c4af4"
     }
   }
 }
