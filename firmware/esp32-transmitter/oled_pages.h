@@ -55,6 +55,7 @@ static const int SCR_RULE_Y     = 9;
 static const int SCR_LINE0_Y    = 12;
 static const int SCR_LINE_PITCH = 9;
 static const int SCR_VALUE_X    = 4 * VFD5X7_ADVANCE;
+static const int SCR_VALUE_COLS = (SCR_W - SCR_VALUE_X - VFD5X7_W) / VFD5X7_ADVANCE + 1;  // 17 characters fit
 static const int SCR_BAR_W      = 72;   // 23 segments: 3 px pitch inside a 1 px frame + 1 px gap
 
 static int scrLineY(int line) { return SCR_LINE0_Y + line * SCR_LINE_PITCH; }
@@ -152,6 +153,8 @@ static void scrPageStatus(u8g2_t* g, const ScreenModel& m) {
     char age[12];
     scrAge(age, sizeof(age), m.lastAgeS);
     snprintf(buf, sizeof(buf), "LAST %s %s AGO", scrKindName(m.lastKind), age);
+    // From 100 days the line is 18 characters: drop " AGO" rather than clip it to " AG".
+    if (strlen(buf) > (size_t)SCR_VALUE_COLS) snprintf(buf, sizeof(buf), "LAST %s %s", scrKindName(m.lastKind), age);
     scrValue(g, 4, buf);
   }
 }

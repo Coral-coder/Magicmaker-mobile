@@ -105,17 +105,28 @@ if ($ListPorts) {
     return
 }
 
-# Find esptool: an already-downloaded portable exe, one on PATH, python -m esptool, or
+# True if this esptool runs and is v4 or newer (older ones predate full ESP32-S3 support).
+# `esptool version` prints a banner, then the bare version ("4.8.1") as its last line.
+function Test-Esptool([string]$Exe, [string[]]$Pre) {
+    $ErrorActionPreference = "Continue"
+    try {
+        $out = @(& $Exe @Pre version 2>$null)
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $v = ("" + ($out | Select-Object -Last 1)).Trim()
+        return ($v -match '^v?(\d+)\.' -and [int]$Matches[1] -ge 4)
+    } catch { return $false }
+}
+
+# Find esptool (v4+): an already-downloaded portable exe, one on PATH, python -m esptool, or
 # download the standalone Windows build (no Python needed). Returns {Exe, Pre}.
 function Get-Esptool {
     $local = Get-ChildItem -Path $Tools -Recurse -Filter esptool.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($local) { return [pscustomobject]@{ Exe = $local.FullName; Pre = @() } }
-    if (Get-Command esptool.exe -ErrorAction SilentlyContinue) { return [pscustomobject]@{ Exe = "esptool.exe"; Pre = @() } }
-    if (Get-Command esptool    -ErrorAction SilentlyContinue) { return [pscustomobject]@{ Exe = "esptool";     Pre = @() } }
+    foreach ($c in @("esptool.exe", "esptool")) {
+        if ((Get-Command $c -ErrorAction SilentlyContinue) -and (Test-Esptool $c @())) { return [pscustomobject]@{ Exe = $c; Pre = @() } }
+    }
     foreach ($py in @("python", "py")) {
-        if (Get-Command $py -ErrorAction SilentlyContinue) {
-            try { & $py -m esptool version *> $null; if ($LASTEXITCODE -eq 0) { return [pscustomobject]@{ Exe = $py; Pre = @("-m", "esptool") } } } catch {}
-        }
+        if ((Get-Command $py -ErrorAction SilentlyContinue) -and (Test-Esptool $py @("-m", "esptool"))) { return [pscustomobject]@{ Exe = $py; Pre = @("-m", "esptool") } }
     }
     Say "Downloading esptool $EsptoolVer (one-time)..."
     New-Item -ItemType Directory -Force -Path $Tools | Out-Null
@@ -212,11 +223,14 @@ function Resolve-Board($Tool, [string]$ComPort) {
 
 # Which board a merged image is for, from its ESP image header. ESP32-S3 images have the
 # bootloader (magic 0xE9, chip id 9 at byte 12) at offset 0x0; classic ESP32 images have it at
-# 0x1000 (chip id 0) after 4 KB of 0xFF. Returns "heltec-v3", "esp32" or "" (not a merged image).
+# 0x1000 (chip id 0) after 4 KB of 0xFF. Both carry the partition table (magic AA 50) at
+# 0x8000, which a bare app .bin (also 0xE9 + chip id at 0x0) doesn't.
+# Returns "heltec-v3", "esp32" or "" (not a merged image).
 function Get-ImageBoard([string]$Path) {
     $b = [System.IO.File]::ReadAllBytes($Path)
-    if ($b.Length -ge 16 -and $b[0] -eq 0xE9 -and $b[12] -eq 9 -and $b[13] -eq 0) { return "heltec-v3" }
-    if ($b.Length -ge 0x1010 -and $b[0x1000] -eq 0xE9 -and $b[0x100C] -eq 0 -and $b[0x100D] -eq 0) { return "esp32" }
+    if ($b.Length -lt 0x10000 -or $b[0x8000] -ne 0xAA -or $b[0x8001] -ne 0x50) { return "" }
+    if ($b[0] -eq 0xE9 -and $b[12] -eq 9 -and $b[13] -eq 0) { return "heltec-v3" }
+    if ($b[0x1000] -eq 0xE9 -and $b[0x100C] -eq 0 -and $b[0x100D] -eq 0) { return "esp32" }
     return ""
 }
 
@@ -299,7 +313,7 @@ if ($ImgBoard -ne $Target) {
     if ($ImgBoard) {
         throw "$Bin is the $($BoardInfo[$ImgBoard].Name) firmware, but the board is a $($Info.Name). Use $Asset (or drop -Bin)."
     }
-    throw "$Bin isn't a merged $($Info.Name) image (bootloader header not where expected). Use $Asset from the esp32-firmware release."
+    throw "$Bin isn't a merged $($Info.Name) image (bootloader + partition table not where expected; a bare app .bin won't do). Use $Asset from the esp32-firmware release."
 }
 
 # 4. Flash. The .bin is a single merged image built to sit at flash offset 0x0.
@@ -318,6 +332,9 @@ if ($LASTEXITCODE -ne 0) {
         Warn "    (After flashing in that mode, tap RST once to start the new firmware.)"
     } else {
         Warn "  * Hold the BOOT button while it says 'Connecting...', release after it starts."
+    }
+    if ($Board -ne "auto") {
+        Warn "  * esptool said 'Wrong --chip argument?' -> this board isn't a $($Info.Name): rerun without -Board."
     }
     Warn "  * Try a slower speed: ./flash.ps1 -Baud 460800"
     Warn "  * Close any serial monitor / Arduino IDE that may hold the port."

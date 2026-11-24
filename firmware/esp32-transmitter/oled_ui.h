@@ -64,7 +64,7 @@ static uint32_t gBtnChangeMs   = 0;
 // Packet stats, fed by the sketch from beginTransmit().
 static uint32_t gScrSent       = 0;
 static uint8_t  gScrLastKind   = PACKET_NONE;
-static uint32_t gScrLastMs     = 0;
+static int64_t  gScrLastUs     = 0;            // esp_timer: 64-bit, unlike millis() it never wraps
 static uint8_t  gScrLastLen    = 0;
 static uint8_t  gScrLastBytes[31];
 static uint32_t gScrLastCmdMs  = 0;
@@ -197,7 +197,7 @@ static void screenNotePacket(const uint8_t* bytes, size_t len, uint32_t cmdMs, b
   if (len > sizeof(gScrLastBytes)) len = sizeof(gScrLastBytes);
   gScrSent++;
   gScrLastKind = kind;
-  gScrLastMs = millis();
+  gScrLastUs = esp_timer_get_time();
   gScrLastLen = (uint8_t)len;
   memcpy(gScrLastBytes, bytes, len);
   gScrLastCmdMs = cmdMs;
@@ -286,13 +286,14 @@ static void screenDraw(bool linked, uint8_t txState, uint16_t txPermille, bool k
   m.keepAwake = keepAwake;
   m.sent = gScrSent;
   m.lastKind = gScrLastKind;
-  m.lastAgeS = (now - gScrLastMs) / 1000;
+  const int64_t nowUs = esp_timer_get_time();
+  m.lastAgeS = (uint32_t)((nowUs - gScrLastUs) / 1000000LL);
   m.lastLen = gScrLastLen;
   memcpy(m.lastBytes, gScrLastBytes, sizeof(m.lastBytes));
   m.lastCmdMs = gScrLastCmdMs;
   m.lastWake = gScrLastWake;
   m.batteryMv = gBatMv;
-  m.uptimeS = (uint32_t)(esp_timer_get_time() / 1000000LL);
+  m.uptimeS = (uint32_t)(nowUs / 1000000LL);
   m.bleName = gScrName;
   memcpy(m.bleAddr, gScrAddr, sizeof(m.bleAddr));
   m.fwVersion = MM_FW_VERSION;

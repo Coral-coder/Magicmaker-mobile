@@ -195,10 +195,14 @@ detect_board() {
 
 # Which board a merged image is for, from its ESP image header: ESP32-S3 images have the
 # bootloader (magic 0xE9, chip id 9 at byte 12) at 0x0; classic ESP32 images have it at
-# 0x1000 (chip id 0). Prints heltec-v3, esp32, or nothing.
+# 0x1000 (chip id 0). Both carry the partition table (magic AA 50) at 0x8000, which a bare
+# app .bin (also 0xE9 + chip id at 0x0) doesn't. Prints heltec-v3, esp32, or nothing.
 hexbytes() { { od -An -tx1 -j "$2" -N "$3" "$1" 2>/dev/null || true; } | tr -d ' \n'; }
 image_board() {
-  local h0 h1
+  local h0 h1 size
+  [ -f "$1" ] || return 0
+  size="$(wc -c < "$1" | tr -d ' ')"
+  if [ "${size:-0}" -lt 65536 ] || [ "$(hexbytes "$1" 32768 2)" != "aa50" ]; then return 0; fi
   h0="$(hexbytes "$1" 0 16)"
   h1="$(hexbytes "$1" 4096 16)"
   if [ "${h0:0:2}" = "e9" ] && [ "${h0:24:4}" = "0900" ]; then echo "heltec-v3"
@@ -212,9 +216,11 @@ if [ -z "$PORT" ]; then find_port; fi
 say "Using port $PORT (override with --port if wrong)"
 
 find_esptool
+FORCED=0
 if [ "$BOARD" = "auto" ]; then
   detect_board
 else
+  FORCED=1
   say "Board forced: $BOARD (skipping detection)"
 fi
 
@@ -264,7 +270,7 @@ fi
 IMG="$(image_board "$BIN")"
 if [ "$IMG" != "$BOARD" ]; then
   if [ -n "$IMG" ]; then die "$BIN is the $IMG firmware, but the board is a $NAME. Use $ASSET (or drop --bin)."; fi
-  die "$BIN isn't a merged $NAME image (bootloader header not where expected). Use $ASSET."
+  die "$BIN isn't a merged $NAME image (bootloader + partition table not where expected; a bare app .bin won't do). Use $ASSET."
 fi
 
 say "Flashing $ASSET to the $NAME on $PORT at $BAUD baud..."
@@ -276,6 +282,12 @@ if ! "${ESPTOOL[@]}" --chip "$CHIP" --port "$PORT" --baud "$BAUD" \
     warn "    (After flashing in that mode, tap RST once to start the new firmware.)"
   else
     warn "  * Hold the BOOT button while it says 'Connecting...', release after it starts."
+  fi
+  if [ "$FORCED" = 1 ]; then
+    warn "  * esptool said 'Wrong --chip argument?' -> this board isn't a $NAME: rerun without --board."
+  fi
+  if [ -e "$PORT" ] && [ ! -w "$PORT" ]; then
+    warn "  * No write access to $PORT: add yourself to the dialout group (Arch: uucp), log out and back in."
   fi
   warn "  * Try a slower speed: ./flash.sh --baud 460800"
   warn "  * Close any serial monitor / Arduino IDE that may hold the port."

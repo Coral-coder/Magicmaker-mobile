@@ -21,6 +21,12 @@ on:
 permissions:
   contents: write
 
+# One run at a time, oldest first, so an older build can never commit its bins on top of a
+# newer one's (a queued run is superseded by a newer queued run, never cancelled mid-build).
+concurrency:
+  group: esp32-firmware
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -89,7 +95,8 @@ jobs:
           ls -la magicmaker-esp32.bin magicmaker-heltec-v3.bin
 
       # The flashers check the same thing before writing: a merged image must carry the
-      # bootloader header (magic 0xE9 + chip id) where that chip's ROM looks for it.
+      # bootloader header (magic 0xE9 + chip id) where that chip's ROM looks for it, and the
+      # partition table (magic AA 50) at 0x8000.
       - name: Sanity-check the images
         run: |
           python3 - <<'EOF'
@@ -98,8 +105,10 @@ jobs:
           def check(path, offset, chip_id, chip):
               b = open(path, "rb").read()
               ok = (len(b) > 100 * 1024 and b[offset] == 0xE9
-                    and (b[offset + 12] | b[offset + 13] << 8) == chip_id)
-              print(f"{path}: {len(b)} bytes, {chip} bootloader header at {offset:#x}: {'OK' if ok else 'BAD'}")
+                    and (b[offset + 12] | b[offset + 13] << 8) == chip_id
+                    and b[0x8000:0x8002] == b"\xaa\x50")
+              print(f"{path}: {len(b)} bytes, {chip} bootloader header at {offset:#x}"
+                    f" + partition table at 0x8000: {'OK' if ok else 'BAD'}")
               return ok
 
           ok = check("magicmaker-esp32.bin", 0x1000, 0, "ESP32")
@@ -136,7 +145,14 @@ jobs:
           git add firmware/esp32-transmitter/magicmaker-esp32.bin firmware/esp32-transmitter/magicmaker-heltec-v3.bin
           if git diff --cached --quiet; then
             echo "prebuilt bins unchanged"
-          else
-            git commit -m "ci: update prebuilt ESP32 firmware (classic + Heltec V3) [skip ci]"
-            git push origin HEAD:main
+            exit 0
           fi
+          git commit -m "ci: update prebuilt ESP32 firmware (classic + Heltec V3) [skip ci]"
+          # main may have moved while we built (other pushes): replay the bin commit on top.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            echo "push rejected (main moved?) - rebasing onto origin/main, attempt $attempt"
+            git pull --rebase origin main
+          done
+          echo "could not push the prebuilt bins"
+          exit 1
