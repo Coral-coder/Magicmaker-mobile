@@ -37,7 +37,8 @@ static const char* TRANSMIT_UUID = "A7830002-0000-1000-8000-00805F9B34FB";
 static const char* COMMAND_UUID  = "A7830003-0000-1000-8000-00805F9B34FB";
 static const char* STATUS_UUID   = "A7830004-0000-1000-8000-00805F9B34FB";
 static const char* CATALOG_UUID  = "A7830005-0000-1000-8000-00805F9B34FB";
-static const char* DEVICE_NAME   = "MagicMaker-ESP32";
+// Incognito name (the iPhone app also still accepts the older "MagicMaker-ESP32").
+static const char* DEVICE_NAME   = "MM_ESP";
 
 // ---- Transmit timing (mirrors the phone's sustained wake->command model) -------------
 // Band commands: stream the wake ping, then stream the command. Starlight wands / pings
@@ -178,15 +179,46 @@ static void startBeacon(const uint8_t* bytes, size_t len) {
   gAdv->setMinInterval(BEACON_ADV_MIN);
   gAdv->setMaxInterval(BEACON_ADV_MAX);
   gAdv->start();
-  digitalWrite(STATUS_LED, HIGH);
 }
 
 static void stopBeacon() {
   gAdv->stop();
-  digitalWrite(STATUS_LED, gConnected ? HIGH : LOW);
   // Idle: only re-advertise (connectable) when no phone is linked; while connected we stay
   // quiet to save power and let the connection carry the next command.
   if (!gConnected) startIdleAdvertising();
+}
+
+// ---- Status LED: short blinks only, never on steadily ---------------------------------
+// Waiting for a phone: a tiny blink every second. Phone linked: a tiny blink every 5 s.
+// Every transmission: one short flash. Driven from loop() only.
+static const uint32_t LED_BLINK_MS      = 25;    // heartbeat blink length
+static const uint32_t LED_WAITING_EVERY = 1000;  // no phone linked
+static const uint32_t LED_LINKED_EVERY  = 5000;  // phone linked
+static const uint32_t LED_TX_FLASH_MS   = 60;    // one flash per transmission
+static uint32_t gLedLastBeat  = 0;
+static uint32_t gLedTxUntil   = 0;
+static bool     gLedTxPending = false;
+static bool     gLedOn        = false;
+
+static void serviceLed() {
+  const uint32_t now = millis();
+  if (gLedTxPending) {
+    gLedTxPending = false;
+    gLedTxUntil = now + LED_TX_FLASH_MS;
+    gLedLastBeat = now; // next heartbeat counts from this flash
+  }
+  bool on;
+  if ((int32_t)(gLedTxUntil - now) > 0) {
+    on = true;
+  } else {
+    const uint32_t every = gConnected ? LED_LINKED_EVERY : LED_WAITING_EVERY;
+    if (now - gLedLastBeat >= every) gLedLastBeat = now;
+    on = (now - gLedLastBeat) < LED_BLINK_MS;
+  }
+  if (on != gLedOn) {
+    gLedOn = on;
+    digitalWrite(STATUS_LED, on ? HIGH : LOW);
+  }
 }
 
 // ---- Transmit state machine ----------------------------------------------------------
@@ -196,6 +228,7 @@ static void beginTransmit(const uint8_t* bytes, size_t len, uint32_t cmdMs) {
   gCmdLen = len;
   gCmdMs = (cmdMs >= MIN_CMD_MS && cmdMs <= MAX_CMD_MS) ? cmdMs : DEFAULT_CMD_MS;
   gKeepOn = false; // the command takes the advertising slot
+  gLedTxPending = true; // one LED flash per transmission
 
   const bool wand = isStarlight(bytes, len);
   const bool ping = !wand && isStandalonePing(bytes, len);
@@ -311,7 +344,6 @@ static size_t jsonStringValue(const std::string& json, const char* key, char* ou
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* s, ble_gap_conn_desc* desc) override {
     gConnected = true;
-    digitalWrite(STATUS_LED, HIGH);
     // Ask for a relaxed connection interval to cut idle wakeups (battery).
     s->updateConnParams(desc->conn_handle, 24, 40, 2, 400); // 30–50 ms, latency 2, 4 s sup.
   }
@@ -320,8 +352,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     // Keep-awake needs a linked phone to turn it off again; drop it with the link so the
     // board goes back to being connectable.
     requestKeepAwake(false, nullptr, 0);
-    if (gPhase == TX_IDLE) { digitalWrite(STATUS_LED, LOW); startIdleAdvertising(); }
-    else startIdleAdvertising(); // resume connectable adv; beacon keeps running if mid-burst
+    startIdleAdvertising(); // resume connectable adv; a beacon mid-burst keeps running
   }
 };
 
@@ -419,6 +450,7 @@ void setup() {
 
 void loop() {
   serviceTransmit();
+  serviceLed();
 #if MM_HELTEC_V3
   screenPoll(); // PRG button, screen power + timeout, battery (only while lit)
   if (screenFrameDue()) {

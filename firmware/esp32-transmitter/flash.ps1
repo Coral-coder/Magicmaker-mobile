@@ -324,6 +324,16 @@ $flashArgs = @($t.Pre) + @(
 )
 Say "Flashing $Asset to the $($Info.Name) on $Port at $Baud baud..."
 & $t.Exe @flashArgs
+if ($LASTEXITCODE -ne 0 -and $Baud -gt 460800) {
+    # Some USB cables / hubs can't keep up at 921600: one automatic retry at 460800.
+    Warn "Flashing at $Baud baud failed - retrying at 460800..."
+    $flashArgs = @($t.Pre) + @(
+        "--chip", $Info.Chip, "--port", $Port, "--baud", "460800",
+        "--before", "default_reset", "--after", "hard_reset",
+        "write_flash", "0x0", $Bin
+    )
+    & $t.Exe @flashArgs
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     Warn "Flashing failed. Common fixes:"
@@ -342,8 +352,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($Target -eq "heltec-v3") {
-    Say "Done. The Heltec V3 is now advertising as MagicMaker-ESP32 - pick the ESP32 backend in the app."
+    Say "Done. The Heltec V3 is now advertising as MM_ESP - pick the ESP32 backend in the app."
     Say "The screen stays dark to save battery: press PRG to light the screen."
 } else {
-    Say "Done. The ESP32 is now advertising as MagicMaker-ESP32 - pick the ESP32 backend in the app."
+    Say "Done. The ESP32 is now advertising as MM_ESP - pick the ESP32 backend in the app."
 }

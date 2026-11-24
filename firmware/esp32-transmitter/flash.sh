@@ -269,6 +269,7 @@ fi
 # Refuse an image for the other board (or not a merged image): we write it all at 0x0.
 IMG="$(image_board "$BIN")"
 if [ "$IMG" != "$BOARD" ]; then
+  if [ "$IMG" = "heltec-v3" ]; then IMG="Heltec WiFi LoRa 32 V3"; elif [ -n "$IMG" ]; then IMG="classic ESP32"; fi
   if [ -n "$IMG" ]; then die "$BIN is the $IMG firmware, but the board is a $NAME. Use $ASSET (or drop --bin)."; fi
   die "$BIN isn't a merged $NAME image (bootloader + partition table not where expected; a bare app .bin won't do). Use $ASSET."
 fi
@@ -295,8 +296,8 @@ if ! "${ESPTOOL[@]}" --chip "$CHIP" --port "$PORT" --baud "$BAUD" \
 fi
 
 if [ "$BOARD" = "heltec-v3" ]; then
-  say "Done. The Heltec V3 is now advertising as MagicMaker-ESP32 - pick the ESP32 backend in the app."
+  say "Done. The Heltec V3 is now advertising as MM_ESP - pick the ESP32 backend in the app."
   say "The screen stays dark to save battery: press PRG to light the screen."
 else
-  say "Done. The ESP32 is now advertising as MagicMaker-ESP32 - pick the ESP32 backend in the app."
+  say "Done. The ESP32 is now advertising as MM_ESP - pick the ESP32 backend in the app."
 fi

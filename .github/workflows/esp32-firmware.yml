@@ -138,6 +138,7 @@ jobs:
       # and the flashers can flash it with no download (the repo is private). A .bin path
       # doesn't match this workflow's .ino/.h/.cpp/workflow triggers, so this push won't loop.
       - name: Commit prebuilt bins into the repo
+        if: github.ref == 'refs/heads/main'   # a manual run on another branch only publishes
         run: |
           cp magicmaker-esp32.bin magicmaker-heltec-v3.bin firmware/esp32-transmitter/
           git config user.name "github-actions[bot]"

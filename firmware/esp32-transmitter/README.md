@@ -9,7 +9,7 @@ protocol has to change — the app already knows how to drive this service.
 
 ## What it does
 
-- Advertises a BLE service the app recognizes (`A7830001-…`, name `MagicMaker-ESP32`).
+- Advertises a BLE service the app recognizes (`A7830001-…`, name `MM_ESP`; older firmware used `MagicMaker-ESP32`).
 - The phone connects and **writes `"{hex}|{durationMs}"`** to the TX characteristic.
 - The ESP32 broadcasts that packet as **Disney manufacturer data (company `0x0183`)**,
   using the same **wake-ping → command** timing the phone's own transmitter uses, so bands
@@ -51,8 +51,8 @@ In PowerShell, in this folder:
   Other chips (S2, C3, C6, H2, …) are refused with a message naming the chip. Before
   writing it also checks the image header matches the board, so the wrong `.bin` can't be
   flashed.
-- **esptool:** uses one on PATH or in Python if present, otherwise downloads the standalone
-  esptool v4.8.1 into `.tools/` once (no Python needed).
+- **esptool:** uses one on PATH or in Python if present and v4 or newer, otherwise downloads
+  the standalone esptool v4.8.1 into `.tools/` once (no Python needed).
 - **Which image file:** `-Bin`, else the `.bin` committed here (`git pull` keeps it
   current), else the `esp32-firmware` release. The repo is private, so for the download
   pass `-Token ghp_…` (repo read scope) or download the asset in a browser and use `-Bin`.
@@ -70,7 +70,8 @@ into `.tools/venv` on first run if no esptool is installed.
 ## Build & flash (Arduino IDE)
 
 1. Install the ESP32 board support (Boards Manager → "esp32" by Espressif; CI uses 2.0.17).
-2. Install the library: **Tools → Manage Libraries → "NimBLE-Arduino"** (h2zero), ≥ 1.4.0.
+2. Install the library: **Tools → Manage Libraries → "NimBLE-Arduino"** (h2zero), version
+   **1.4.x** (CI uses 1.4.3; pick it in the version list, 2.x won't compile).
    For the Heltec V3 also install **"U8g2"** (olikraus) for the OLED.
 3. Open `esp32-transmitter.ino`, select your ESP32 board + port, **Upload**. For the
    Heltec, pick **Heltec WiFi LoRa 32(V3)**; the sketch detects it and enables the screen.
@@ -78,7 +79,8 @@ into `.tools/venv` on first run if no esptool is installed.
 No secrets, no Wi-Fi, no config. It just works once flashed.
 
 > Prefer PlatformIO? `platformio.ini` with `framework = arduino`,
-> `lib_deps = h2zero/NimBLE-Arduino@^1.4.1`, and build this `.ino` as `src/main.cpp`.
+> `lib_deps = h2zero/NimBLE-Arduino@^1.4.1`, and `src_dir` set to this folder (or copy the
+> `.ino` to `src/main.cpp` together with the `.h` files next to it).
 > Heltec V3: `board = heltec_wifi_lora_32_V3` and add `olikraus/U8g2@2.35.30` to `lib_deps`.
 
 ## Use it with the app
