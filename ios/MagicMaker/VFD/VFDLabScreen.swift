@@ -73,6 +73,14 @@ private enum VFDLabKeys {
     static let inspector: String = "inspectorOpen"
     static let segment: String = "segment"
     static let segmentHex: String = "segmentHex"
+    /// The selected block's box shows its full explanation (ABOUT).
+    static let segmentAbout: String = "segmentAbout"
+    /// ABOUT THIS FIELD: the field's title and explanation, shown in that box.
+    static let segmentFieldTitle: String = "segmentFieldTitle"
+    static let segmentFieldAbout: String = "segmentFieldAbout"
+    /// The builder's packet before the last block edit, and the packet that edit made (UNDO EDIT).
+    static let segmentUndo: String = "segmentUndo"
+    static let segmentUndoTo: String = "segmentUndoTo"
     static let interval: String = "intervalMs"
     static let intervalDrag: String = "intervalDrag"
     static let intervalDraft: String = "intervalDraft"
@@ -121,6 +129,14 @@ private struct VFDLabModel {
     let summary: LabPacketSummary
     let segments: [DisneyTlv.Segment]
     let selectedSegment: Int?
+    /// The selected block's explanation (LabSegmentEditor.about: parse + anatomy only).
+    let segmentAbout: LabSegmentEditor.About?
+    let aboutOpen: Bool
+    /// ABOUT THIS FIELD's field title and text ("" when none was asked for).
+    let fieldAboutTitle: String
+    let fieldAbout: String
+    /// UNDO EDIT applies: the builder still holds the packet the last block edit made.
+    let undoAvailable: Bool
     let classified: ClassifiedPacket?
     let bytes: [String]
     let reject: String?
@@ -426,7 +442,7 @@ extension VFDLabScreen {
             st.label = ctx.store.getLabLabel()
             st.preview = saved
             if tick > 0 {
-                decodeInto(&st, saved, from: "received packet")
+                decodeInto(&st, saved, from: "received packet", extended: extendedOn(ui))
             }
             applyExtended(&st, extendedOn(ui))
             let current: String = st.built
@@ -440,7 +456,7 @@ extension VFDLabScreen {
             st.label = ctx.store.getLabLabel()
             st.preview = saved
             if tick > 0 {
-                let decoded: Bool = decodeInto(&st, saved, from: "received packet")
+                let decoded: Bool = decodeInto(&st, saved, from: "received packet", extended: extendedOn(ui))
                 let after: String = st.built
                 if decoded && after != before && !after.isEmpty {
                     st.preview = after
@@ -480,10 +496,25 @@ extension VFDLabScreen {
         ui.setInt(VFDLabKeys.sync, ctx.vm.labLoadTick)
     }
 
-    /// LabBuilderPanel.applyDecoded + the load message. False when there is nothing to decode.
+    /// LabBuilderPanel.decodeLoaded / loadFromHexField: the builder state that rebuilds exactly
+    /// this packet (Raw Hex, byte-for-byte, when no builder type makes those bytes), the LED mask
+    /// back to all, and the load message. False when there is nothing to decode.
     @discardableResult
-    fileprivate static func decodeInto(_ st: inout VFDLabState, _ hex: String, from source: String) -> Bool {
-        guard let decoded = LabPacketBuilder.decode(hex) else { return false }
+    fileprivate static func decodeInto(_ st: inout VFDLabState, _ hex: String, from source: String,
+                                       extended: Bool) -> Bool {
+        guard let decoded = LabSegmentEditor.builderState(hex, extended: extended) else { return false }
+        applyDecoded(&st, decoded)
+        st.ledMask = 7
+        if decoded.type == LabPacketBuilder.LabPacketType.raw {
+            st.loadMsg = "Loaded Raw Hex from " + source + " (kept byte-for-byte)"
+        } else {
+            st.loadMsg = "Loaded " + decoded.type.label + " from " + source
+        }
+        return true
+    }
+
+    /// LabBuilderPanel.applyDecoded.
+    fileprivate static func applyDecoded(_ st: inout VFDLabState, _ decoded: LabPacketBuilder.Decoded) {
         st.type = decoded.type
         st.colors = decoded.colors.isEmpty ? LabPacketBuilder.defaultColors(decoded.type) : decoded.colors
         st.vibEnabled = decoded.vibEnabled
@@ -491,8 +522,6 @@ extension VFDLabScreen {
         st.rawHex = decoded.rawHex
         st.framing = decoded.framing
         st.showIndex = decoded.showIndex
-        st.loadMsg = "Loaded " + decoded.type.label + " from " + source
-        return true
     }
 
     /// LabBuilderPanel.select.
@@ -578,7 +607,7 @@ extension VFDLabScreen {
     fileprivate static func loadFromHexField(_ ctx: VFDContext) {
         var st: VFDLabState = resolve(ctx)
         let before: String = st.built
-        if decodeInto(&st, st.hex, from: "hex field") {
+        if decodeInto(&st, st.hex, from: "hex field", extended: extendedOn(labUI(ctx))) {
             let after: String = st.built
             if after != before && !after.isEmpty {
                 st.preview = after
@@ -638,13 +667,6 @@ extension VFDLabScreen {
         ctx.prompt(title: title, text: value, keyboard: .hex) { (typed: String) -> Void in
             VFDLabScreen.editByte(ctx, index, typed)
         }
-    }
-
-    fileprivate static func toggleSegment(_ ctx: VFDContext, _ index: Int, _ built: String) {
-        let ui: VFDUIState = labUI(ctx)
-        let current: Int? = selectedSegment(ui, built)
-        ui.setString(VFDLabKeys.segmentHex, built)
-        ui.setInt(VFDLabKeys.segment, current == index ? -1 : index)
     }
 
     /// The tapped anatomy block, while the packet it belongs to is still the builder's.
@@ -859,6 +881,13 @@ extension VFDLabScreen {
         let st: VFDLabState = resolve(ctx)
         let built: String = st.built
         let segments: [DisneyTlv.Segment] = built.isEmpty ? [] : DisneyTlv.anatomy(built)
+        let selected: Int? = selectedSegment(ui, built)
+        var about: LabSegmentEditor.About? = nil
+        if let sel = selected, sel < segments.count {
+            about = LabSegmentEditor.about(built, index: sel)
+        }
+        let undoTo: String = ui.string(VFDLabKeys.segmentUndoTo)
+        let undoAvailable: Bool = ui.has(VFDLabKeys.segmentUndo) && !undoTo.isEmpty && undoTo == built
         let classified: ClassifiedPacket? = MagicClassifier.classify(HexUtils.canonicalHex(st.hex))
         let intervalDragging: Bool = ui.bool(VFDLabKeys.intervalDrag)
         let interval: Double = intervalValue(ctx)
@@ -869,7 +898,12 @@ extension VFDLabScreen {
             extended: extendedOn(ui),
             summary: LabPacketSummary(built),
             segments: segments,
-            selectedSegment: selectedSegment(ui, built),
+            selectedSegment: selected,
+            segmentAbout: about,
+            aboutOpen: ui.bool(VFDLabKeys.segmentAbout),
+            fieldAboutTitle: ui.string(VFDLabKeys.segmentFieldTitle),
+            fieldAbout: ui.string(VFDLabKeys.segmentFieldAbout),
+            undoAvailable: undoAvailable,
             classified: classified,
             bytes: LabPacketTools.toBytes(st.hex),
             reject: HexUtils.legacyAdvertiseRejectReason(st.hex),

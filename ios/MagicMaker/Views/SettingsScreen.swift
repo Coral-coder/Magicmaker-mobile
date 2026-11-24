@@ -289,6 +289,12 @@ struct SettingsScreen: View {
         vm.remoteLinkReady
     }
 
+    /// An Android relay (BLE or WiFi) took the change. Otherwise it is noted for the Android
+    /// relay's next link, as it was before the ESP32 took settings too.
+    private var androidRelayLinked: Bool {
+        vm.relayBackend != .esp32 && vm.remoteLinkReady
+    }
+
     private func reloadFromStore() {
         preambleMs = Double(store.getWakeupPreambleMs())
         burstMs = Double(store.getCommandBurstMs())
@@ -308,7 +314,8 @@ struct SettingsScreen: View {
         store.saveTxInterleave(on)
         if relayTakesSettings {
             vm.sendRelaySetting("set_tx_interleave", ["enabled": on])
-        } else {
+        }
+        if !androidRelayLinked {
             vm.noteRelaySettingPending("tx_interleave")
         }
     }
@@ -318,7 +325,8 @@ struct SettingsScreen: View {
         store.saveTxPowerLevel(level)
         if relayTakesSettings {
             vm.sendRelaySetting("set_tx_power", ["level": level])
-        } else {
+        }
+        if !androidRelayLinked {
             vm.noteRelaySettingPending("tx_power")
         }
     }
@@ -329,7 +337,8 @@ struct SettingsScreen: View {
         store.saveWakeupPreambleMs(ms)
         if relayTakesSettings {
             vm.setAndroidWakeupPreamble(ms)
-        } else {
+        }
+        if !androidRelayLinked {
             vm.noteRelaySettingPending("wakeup_preamble")
         }
     }
@@ -340,7 +349,8 @@ struct SettingsScreen: View {
         store.saveCommandBurstMs(ms)
         if relayTakesSettings {
             vm.setAndroidCommandBurst(ms)
-        } else {
+        }
+        if !androidRelayLinked {
             vm.noteRelaySettingPending("command_burst")
         }
     }
@@ -351,7 +361,8 @@ struct SettingsScreen: View {
         store.saveStarlightBurstMs(ms)
         if relayTakesSettings {
             vm.setAndroidStarlightBurst(ms)
-        } else {
+        }
+        if !androidRelayLinked {
             vm.noteRelaySettingPending("starlight_burst")
         }
     }
@@ -359,7 +370,7 @@ struct SettingsScreen: View {
     /// The scan filter is the iPhone's own; a linked Android relay is told too, as its relay
     /// command handler expects from this tab. The ESP32 does not scan.
     private func scanFilterChanged(_ on: Bool) {
-        if vm.relayBackend != .esp32 && vm.remoteLinkReady {
+        if androidRelayLinked {
             vm.sendRelaySetting("set_show_control_only", ["enabled": on])
         } else {
             vm.noteRelaySettingPending("show_control_only")

@@ -417,11 +417,18 @@ extension VFDSettingsScreen {
         return ctx.vm.remoteLinkReady
     }
 
+    /// An Android relay (BLE or WiFi) took the change. Otherwise it is noted for the Android
+    /// relay's next link, as it was before the ESP32 took settings too.
+    fileprivate static func androidRelayLinked(_ ctx: VFDContext) -> Bool {
+        return ctx.vm.relayBackend != .esp32 && ctx.vm.remoteLinkReady
+    }
+
     fileprivate static func setInterleave(_ ctx: VFDContext, _ on: Bool) {
         ctx.store.saveTxInterleave(on)
         if relayTakesSettings(ctx) {
             ctx.vm.sendRelaySetting("set_tx_interleave", ["enabled": on])
-        } else {
+        }
+        if !androidRelayLinked(ctx) {
             ctx.vm.noteRelaySettingPending("tx_interleave")
         }
     }
@@ -430,7 +437,8 @@ extension VFDSettingsScreen {
         ctx.store.saveTxPowerLevel(level)
         if relayTakesSettings(ctx) {
             ctx.vm.sendRelaySetting("set_tx_power", ["level": level])
-        } else {
+        }
+        if !androidRelayLinked(ctx) {
             ctx.vm.noteRelaySettingPending("tx_power")
         }
     }
@@ -439,7 +447,8 @@ extension VFDSettingsScreen {
         ctx.store.saveWakeupPreambleMs(ms)
         if relayTakesSettings(ctx) {
             ctx.vm.setAndroidWakeupPreamble(ms)
-        } else {
+        }
+        if !androidRelayLinked(ctx) {
             ctx.vm.noteRelaySettingPending("wakeup_preamble")
         }
     }
@@ -448,7 +457,8 @@ extension VFDSettingsScreen {
         ctx.store.saveCommandBurstMs(ms)
         if relayTakesSettings(ctx) {
             ctx.vm.setAndroidCommandBurst(ms)
-        } else {
+        }
+        if !androidRelayLinked(ctx) {
             ctx.vm.noteRelaySettingPending("command_burst")
         }
     }
@@ -457,14 +467,15 @@ extension VFDSettingsScreen {
         ctx.store.saveStarlightBurstMs(ms)
         if relayTakesSettings(ctx) {
             ctx.vm.setAndroidStarlightBurst(ms)
-        } else {
+        }
+        if !androidRelayLinked(ctx) {
             ctx.vm.noteRelaySettingPending("starlight_burst")
         }
     }
 
     /// The ESP32 does not scan, so only an Android relay is told.
     fileprivate static func scanFilterChanged(_ ctx: VFDContext, _ on: Bool) {
-        if ctx.vm.relayBackend != .esp32 && ctx.vm.remoteLinkReady {
+        if androidRelayLinked(ctx) {
             ctx.vm.sendRelaySetting("set_show_control_only", ["enabled": on])
         } else {
             ctx.vm.noteRelaySettingPending("show_control_only")
