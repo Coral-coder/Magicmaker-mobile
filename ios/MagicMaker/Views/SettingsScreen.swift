@@ -523,9 +523,9 @@ private struct SettingsScanFilterSection: View {
 
 // MARK: - Background
 
-/// Opt-in "Keep running in background": background location keeps the app (relay link, loops,
-/// replays, the open log) running while it is not on screen. The state line and the note say
-/// honestly what that does and does not do.
+/// Opt-in "Keep running in background": background location keeps the app running while it is
+/// not on screen and this iPhone itself sends (its own loops, the show, replays). The state line
+/// and the note say honestly what that does and does not do.
 private struct SettingsBackgroundSection: View {
     @EnvironmentObject var vm: AppViewModel
 

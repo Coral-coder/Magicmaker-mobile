@@ -130,7 +130,7 @@ struct ContentView: View {
 
     /// Every 2 s: keep the relay link up and read its status. On the WiFi relay the link state
     /// itself (`remoteLinkReady`) comes from this status read. "Keep running in background"
-    /// follows the work running (loops, replays, the link) from here too.
+    /// follows the work this iPhone runs (its own loops, the show, replays) from here too.
     private func pollRelay() {
         if !vm.relayCommandReady {
             vm.ensureRelayLink()

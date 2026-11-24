@@ -21,7 +21,7 @@
 #endif
 
 // Shown on the OLED's DEVICE page and in STATUS ("fw"). Bump it when the firmware's behaviour changes.
-#define MM_FW_VERSION "1.4"
+#define MM_FW_VERSION "1.4.1"
 // Relay protocol version in STATUS ("proto"). 2: chip-side keep-awake / loops / settings, full
 // STATUS object (the app treats a STATUS without "running" as firmware before 1.2).
 #define MM_RELAY_PROTO 2
