@@ -20,6 +20,8 @@
 # port (the dialout group on Debian/Ubuntu, uucp on Arch).
 # Board won't connect? Heltec V3: hold PRG, tap RST, release PRG. Classic: hold BOOT.
 
+# Re-run under bash if started as `sh flash.sh` (this script uses bash arrays / [[ =~ ]]).
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -105,7 +107,7 @@ find_port() {
   # Prefer a USB-UART bridge (the Heltec V3 uses a CP2102).
   for p in $ports; do
     case "$p $(describe_port "$p")" in
-      *SLAB*|*usbserial*|*wchusbserial*|*CP210*|*Silicon_Labs*|*CH340*|*CH910*|*1a86*|/dev/ttyUSB*)
+      *SLAB*|*usbserial*|*CP210*|*Silicon_Labs*|*CH340*|*CH910*|*1a86*|/dev/ttyUSB*)
         PORT="$p"; return 0 ;;
     esac
   done
@@ -194,7 +196,7 @@ detect_board() {
 # Which board a merged image is for, from its ESP image header: ESP32-S3 images have the
 # bootloader (magic 0xE9, chip id 9 at byte 12) at 0x0; classic ESP32 images have it at
 # 0x1000 (chip id 0). Prints heltec-v3, esp32, or nothing.
-hexbytes() { od -An -tx1 -j "$2" -N "$3" "$1" 2>/dev/null | tr -d ' \n'; }
+hexbytes() { { od -An -tx1 -j "$2" -N "$3" "$1" 2>/dev/null || true; } | tr -d ' \n'; }
 image_board() {
   local h0 h1
   h0="$(hexbytes "$1" 0 16)"
@@ -238,7 +240,7 @@ else
     # Private repo: resolve the asset's API URL, then fetch it as octet-stream with the token.
     url="$(curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
              "https://api.github.com/repos/$REPO/releases/tags/esp32-firmware" \
-           | python3 -c 'import json,sys; n=sys.argv[1]; print(next((a["url"] for a in json.load(sys.stdin).get("assets", []) if a.get("name") == n), ""))' "$ASSET")" || url=""
+           | python3 -c 'import json,sys; n=sys.argv[1]; print(next((a["url"] for a in json.load(sys.stdin).get("assets", []) if a.get("name") == n), ""))' "$ASSET" 2>/dev/null)" || url=""
     [ -n "$url" ] || die "Release asset $ASSET not found (bad token, or CI hasn't built it yet)."
     curl -fL -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" -o "$BIN" "$url" || true
   else

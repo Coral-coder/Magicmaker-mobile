@@ -6,9 +6,12 @@
   and flashes the matching image with esptool. That's it.
 
   Supported boards (picked automatically from the chip, or force one with -Board):
-    esp32      classic ESP32 (DevKit / WROOM / WROVER)          -> magicmaker-esp32.bin
-    heltec-v3  Heltec WiFi LoRa 32 V3 / V3.1 / V3.2 (ESP32-S3,  -> magicmaker-heltec-v3.bin
-               OLED screen; press PRG to light the screen)
+    -Board esp32      classic ESP32 (DevKit / WROOM / WROVER)   -> magicmaker-esp32.bin
+    -Board heltec-v3  Heltec WiFi LoRa 32 V3 / V3.1 / V3.2      -> magicmaker-heltec-v3.bin
+                      (ESP32-S3 + OLED; press PRG to light the screen)
+  Auto mode asks the chip (read-only): ESP32-S3 -> Heltec V3 image, classic ESP32 -> classic
+  image; any other chip (S2, C3, C6, H2) is refused. The image header is checked against the
+  board before anything is written.
 
   USAGE (PowerShell, in this folder):
     ./flash.ps1                       # auto-detect port + board, flash the matching firmware

@@ -22,16 +22,62 @@ protocol has to change — the app already knows how to drive this service.
   (on while connected / transmitting).
 - Powered from USB or a LiPo. See **Power** below.
 
+## Flashing (Windows)
+
+No toolchain needed: CI builds the firmware for both supported boards and commits one
+merged image per board next to the flasher (also attached to the `esp32-firmware` release).
+
+| Board | Image | Chip |
+|---|---|---|
+| Classic ESP32 (DevKit / WROOM / WROVER) | `magicmaker-esp32.bin` | ESP32, 4 MB flash |
+| Heltec WiFi LoRa 32 V3 / V3.1 / V3.2 | `magicmaker-heltec-v3.bin` | ESP32-S3, 8 MB flash |
+
+In PowerShell, in this folder:
+
+```powershell
+./flash.ps1                     # find the COM port, detect the board, flash the matching image
+./flash.ps1 -Board heltec-v3    # skip detection and name the board (or -Board esp32)
+./flash.ps1 -ListPorts          # just list COM ports
+./flash.ps1 -Port COM5          # force the port
+./flash.ps1 -Bin .\my.bin       # flash a local merged image instead of the prebuilt one
+./flash.ps1 -Baud 460800        # slower upload if 921600 is flaky
+```
+
+- **Auto-detect (`-Board auto`, the default):** after picking the port (USB-serial bridges
+  such as the Heltec's CP2102 are preferred) it asks the chip what it is with esptool,
+  read-only, and picks the image: **ESP32-S3 → Heltec V3**, **classic ESP32 → classic**.
+  Other chips (S2, C3, C6, H2, …) are refused with a message naming the chip. Before
+  writing it also checks the image header matches the board, so the wrong `.bin` can't be
+  flashed.
+- **esptool:** uses one on PATH or in Python if present, otherwise downloads the standalone
+  esptool v4.8.1 into `.tools/` once (no Python needed).
+- **Which image file:** `-Bin`, else the `.bin` committed here (`git pull` keeps it
+  current), else the `esp32-firmware` release. The repo is private, so for the download
+  pass `-Token ghp_…` (repo read scope) or download the asset in a browser and use `-Bin`.
+- **Won't connect?** Heltec V3: hold **PRG**, tap **RST**, release **PRG**, then rerun (if
+  you flashed that way, tap **RST** afterwards to start it). Classic ESP32: hold **BOOT**
+  while it says `Connecting...`. Close any serial monitor holding the port. Driver: Silicon
+  Labs CP210x VCP (Heltec V3, most DevKits) or WCH CH340.
+- **Heltec V3:** the screen stays dark to save battery; press **PRG** to light it.
+- If PowerShell blocks the script: `Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process`.
+
+**macOS / Linux:** `./flash.sh` does the same (`--board auto|esp32|heltec-v3`, `--port`,
+`--bin`, `--baud`, `--token`, `--list-ports`). It needs `python3` and installs esptool 4.8.1
+into `.tools/venv` on first run if no esptool is installed.
+
 ## Build & flash (Arduino IDE)
 
-1. Install the ESP32 board support (Boards Manager → "esp32" by Espressif).
+1. Install the ESP32 board support (Boards Manager → "esp32" by Espressif; CI uses 2.0.17).
 2. Install the library: **Tools → Manage Libraries → "NimBLE-Arduino"** (h2zero), ≥ 1.4.0.
-3. Open `esp32-transmitter.ino`, select your ESP32 board + port, **Upload**.
+   For the Heltec V3 also install **"U8g2"** (olikraus) for the OLED.
+3. Open `esp32-transmitter.ino`, select your ESP32 board + port, **Upload**. For the
+   Heltec, pick **Heltec WiFi LoRa 32(V3)**; the sketch detects it and enables the screen.
 
 No secrets, no Wi-Fi, no config. It just works once flashed.
 
 > Prefer PlatformIO? `platformio.ini` with `framework = arduino`,
 > `lib_deps = h2zero/NimBLE-Arduino@^1.4.1`, and build this `.ino` as `src/main.cpp`.
+> Heltec V3: `board = heltec_wifi_lora_32_V3` and add `olikraus/U8g2@2.35.30` to `lib_deps`.
 
 ## Use it with the app
 

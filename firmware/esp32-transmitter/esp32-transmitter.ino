@@ -18,10 +18,18 @@
 //   Arduino IDE: Tools -> Manage Libraries -> "NimBLE-Arduino".
 // Flash: select your ESP32 board, Upload. No secrets, no Wi-Fi.
 //
+// Heltec WiFi LoRa 32 V3 / V3.1 / V3.2: pick that board and also install "U8g2" (olikraus).
+// The build detects the board (board.h) and adds the onboard OLED, which stays dark and
+// unpowered until you press PRG (oled_ui.h). Every other board builds exactly as before.
+//
 // Power: NimBLE + 80 MHz CPU + relaxed advertising is a few mA idle — good for a
 // backpack battery. The Disney beacon only goes on air during a transmit burst.
 
 #include <NimBLEDevice.h>
+#include "board.h"
+#if MM_HELTEC_V3
+#include "oled_ui.h"
+#endif
 
 // ---- RelayProtocol contract (must match the app) -------------------------------------
 static const char* SERVICE_UUID  = "A7830001-0000-1000-8000-00805F9B34FB";
@@ -50,7 +58,14 @@ static const uint16_t BEACON_ADV_MAX  = 0x30;   // 30 ms
 static const uint16_t IDLE_ADV_MIN    = 0x140;  // 200 ms (waiting for a phone)
 static const uint16_t IDLE_ADV_MAX    = 0x280;  // 400 ms
 
-#ifdef LED_BUILTIN
+#if MM_HELTEC_V3
+// Heltec V3 OLED: lit only while you use the PRG button; dark this long after the last press.
+static const uint32_t SCREEN_ON_MS    = 10000;
+#endif
+
+#if MM_HELTEC_V3
+static const int STATUS_LED = HV3_LED_PIN;  // white LED, GPIO35
+#elif defined(LED_BUILTIN)
 static const int STATUS_LED = LED_BUILTIN;
 #else
 static const int STATUS_LED = 2;
@@ -102,10 +117,6 @@ static size_t hexToBytes(const char* hex, size_t hexLen, uint8_t* out, size_t ma
     else { out[n++] = (uint8_t)((hi << 4) | v); hi = -1; }
   }
   return n;
-}
-
-static bool startsWith(const uint8_t* b, size_t len, uint8_t a, uint8_t c) {
-  return len >= 2 && b[0] == a && b[1] == c;
 }
 
 // Starlight wand packets carry the CF9B / CF0B marker — a single burst, no band wakeup.
@@ -186,8 +197,15 @@ static void beginTransmit(const uint8_t* bytes, size_t len, uint32_t cmdMs) {
   gCmdMs = (cmdMs >= MIN_CMD_MS && cmdMs <= MAX_CMD_MS) ? cmdMs : DEFAULT_CMD_MS;
   gKeepOn = false; // the command takes the advertising slot
 
+  const bool wand = isStarlight(bytes, len);
+  const bool ping = !wand && isStandalonePing(bytes, len);
+#if MM_HELTEC_V3
+  screenNotePacket(bytes, len, gCmdMs, !(wand || ping || gKeepAwake),
+                   wand ? PACKET_WAND : (ping ? PACKET_PING : PACKET_BAND));
+#endif
+
   // Keep-awake has the band listening already: send the command alone, no wake phase.
-  if (isStarlight(bytes, len) || isStandalonePing(bytes, len) || gKeepAwake) {
+  if (wand || ping || gKeepAwake) {
     gCmdNeedsWake = false;
     startBeacon(gCmdBytes, gCmdLen);
     gPhase = TX_COMMAND;
@@ -366,6 +384,9 @@ class CatalogCallbacks : public NimBLECharacteristicCallbacks {
 
 // ---- Setup / loop --------------------------------------------------------------------
 void setup() {
+#if MM_HELTEC_V3
+  screenBegin(SCREEN_ON_MS, DEVICE_NAME); // first thing: the OLED's Vext rail off from boot
+#endif
   pinMode(STATUS_LED, OUTPUT);
   digitalWrite(STATUS_LED, LOW);
   setCpuFrequencyMhz(80); // plenty for BLE; roughly halves CPU draw vs 240 MHz.
@@ -398,5 +419,20 @@ void setup() {
 
 void loop() {
   serviceTransmit();
+#if MM_HELTEC_V3
+  screenPoll(); // PRG button, screen power + timeout, battery (only while lit)
+  if (screenFrameDue()) {
+    uint8_t txState = SCREEN_TX_IDLE;
+    uint16_t permille = 0;
+    if (gPhase != TX_IDLE) {
+      const uint32_t total = (gPhase == TX_WAKE) ? WAKE_MS : gCmdMs;
+      const int32_t left = (int32_t)(gPhaseEndMs - millis());
+      const uint32_t done = left <= 0 ? total : (total - (uint32_t)left);
+      txState = (gPhase == TX_WAKE) ? SCREEN_TX_WAKE : SCREEN_TX_SEND;
+      permille = total ? (uint16_t)((uint64_t)(done > total ? total : done) * 1000u / total) : 1000;
+    }
+    screenDraw(gConnected, txState, permille, gKeepAwake);
+  }
+#endif
   delay(2); // yield to the BLE task; keeps CPU cool and lets modem-sleep kick in.
 }

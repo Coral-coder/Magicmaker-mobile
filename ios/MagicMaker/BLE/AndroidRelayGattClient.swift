@@ -14,7 +14,9 @@ final class AndroidRelayGattClient: NSObject {
     static let statusUUID = CBUUID(string: "A7830004-0000-1000-8000-00805F9B34FB")
     static let catalogUUID = CBUUID(string: "A7830005-0000-1000-8000-00805F9B34FB")
     static let deviceName = "MagicMaker-Android"
-    static let esp32Name = "MagicMaker-ESP32"
+    /// The ESP32 transmitter's advertised name ("MM_ESP"); older firmware used "MagicMaker-ESP32".
+    static let esp32Name = "MM_ESP"
+    static let esp32Names: [String] = ["MM_ESP", "MagicMaker-ESP32"]
 
     var onStatus: ((String) -> Void)?
     var onCommandReady: (() -> Void)?
@@ -171,11 +173,13 @@ final class AndroidRelayGattClient: NSObject {
 
     // Match only the device the SELECTED backend targets, by name — the ESP32 and a standalone
     // Android relay advertise the same service UUID, so with both running we must not cross the
-    // streams: ESP32 backend links only to MagicMaker-ESP32, Android BLE only to MagicMaker-Android.
+    // streams: ESP32 backend links only to MM_ESP (or the older MagicMaker-ESP32 name), Android BLE
+    // only to MagicMaker-Android.
     private func nameMatchesBackend(_ name: String?) -> Bool {
         switch RelayBackend.load() {
         case .esp32:
-            return name?.hasPrefix(Self.esp32Name) == true
+            guard let name = name else { return false }
+            return Self.esp32Names.contains(where: { (prefix: String) -> Bool in name.hasPrefix(prefix) })
         case .androidBle:
             return name == Self.deviceName || name?.hasPrefix("MagicMaker-Android") == true
         default:
