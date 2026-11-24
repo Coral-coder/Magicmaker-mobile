@@ -1,9 +1,12 @@
 name: ESP32 Firmware
 
 # Builds the ESP32 transmitter sketch on GitHub's runners (which have full network
-# access, unlike a sandbox) and publishes a single flashable magicmaker-esp32.bin as a
-# GitHub Release. Download that .bin and flash it with flash.ps1 -Bin — no local Arduino
-# toolchain needed.
+# access, unlike a sandbox) for both supported boards and publishes one flashable,
+# merged image per board (each flashed at offset 0x0) as a GitHub Release:
+#   magicmaker-esp32.bin      classic ESP32           (4MB, bootloader at 0x1000)
+#   magicmaker-heltec-v3.bin  Heltec WiFi LoRa 32 V3  (ESP32-S3, 8MB, bootloader at 0x0)
+# flash.ps1 / flash.sh detect which board is plugged in and flash the matching image -
+# no local Arduino toolchain needed.
 
 on:
   workflow_dispatch:
@@ -11,6 +14,8 @@ on:
     branches: [main]
     paths:
       - "firmware/esp32-transmitter/**.ino"
+      - "firmware/esp32-transmitter/**.h"
+      - "firmware/esp32-transmitter/**.cpp"
       - ".github/workflows/esp32-firmware.yml"
 
 permissions:
@@ -22,7 +27,10 @@ jobs:
     env:
       ESP32_CORE: "2.0.17"
       NIMBLE_VER: "1.4.3"
-      FQBN: "esp32:esp32:esp32"
+      U8G2_VER: "2.35.30"
+      ESPTOOL_VER: "4.8.1"
+      FQBN_ESP32: "esp32:esp32:esp32"
+      FQBN_HELTEC_V3: "esp32:esp32:heltec_wifi_lora_32_V3"
       SKETCH: "firmware/esp32-transmitter"
     steps:
       - uses: actions/checkout@v4
@@ -33,32 +41,71 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/bin" sh
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Install ESP32 core + NimBLE
+      - name: Install ESP32 core + libraries + esptool
         run: |
           arduino-cli config init --overwrite
           arduino-cli config set board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core update-index
           arduino-cli core install "esp32:esp32@${ESP32_CORE}"
           arduino-cli lib install "NimBLE-Arduino@${NIMBLE_VER}"
+          # OLED driver; the sketch only uses it in the Heltec V3 build.
+          arduino-cli lib install "U8g2@${U8G2_VER}"
+          python3 -m pip install --quiet "esptool==${ESPTOOL_VER}"
 
-      - name: Compile
+      - name: Compile (classic ESP32)
         run: |
-          arduino-cli compile --fqbn "$FQBN" --output-dir build --log-level warn "$SKETCH"
+          arduino-cli compile --fqbn "$FQBN_ESP32" --output-dir build-esp32 --log-level warn "$SKETCH"
           echo "--- build outputs ---"
-          ls -la build
+          ls -la build-esp32
 
-      - name: Merge into one flashable image (flash at 0x0)
+      - name: Compile (Heltec WiFi LoRa 32 V3)
         run: |
-          python3 -m pip install --quiet esptool
-          APP=$(ls build/*.ino.bin | head -1)
-          BOOT=$(ls build/*.bootloader.bin | head -1)
-          PART=$(ls build/*.partitions.bin | head -1)
+          arduino-cli compile --fqbn "$FQBN_HELTEC_V3" --output-dir build-heltec-v3 --log-level warn "$SKETCH"
+          echo "--- build outputs ---"
+          ls -la build-heltec-v3
+
+      - name: Merge into one flashable image per board (flash at 0x0)
+        run: |
           BOOT0=$(find "$HOME/.arduino15/packages/esp32" -name boot_app0.bin | head -1)
-          echo "app=$APP boot=$BOOT part=$PART boot0=$BOOT0"
+
+          # Classic ESP32: 4MB flash, bootloader at 0x1000.
+          APP=$(ls build-esp32/*.ino.bin | head -1)
+          BOOT=$(ls build-esp32/*.bootloader.bin | head -1)
+          PART=$(ls build-esp32/*.partitions.bin | head -1)
+          echo "esp32: app=$APP boot=$BOOT part=$PART boot0=$BOOT0"
           python3 -m esptool --chip esp32 merge_bin -o magicmaker-esp32.bin \
             --flash_mode dio --flash_freq 40m --flash_size 4MB \
             0x1000 "$BOOT" 0x8000 "$PART" 0xe000 "$BOOT0" 0x10000 "$APP"
-          ls -la magicmaker-esp32.bin
+
+          # Heltec WiFi LoRa 32 V3 (ESP32-S3FN8): 8MB flash, bootloader at 0x0.
+          APP=$(ls build-heltec-v3/*.ino.bin | head -1)
+          BOOT=$(ls build-heltec-v3/*.bootloader.bin | head -1)
+          PART=$(ls build-heltec-v3/*.partitions.bin | head -1)
+          echo "heltec-v3: app=$APP boot=$BOOT part=$PART boot0=$BOOT0"
+          python3 -m esptool --chip esp32s3 merge_bin -o magicmaker-heltec-v3.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 8MB \
+            0x0 "$BOOT" 0x8000 "$PART" 0xe000 "$BOOT0" 0x10000 "$APP"
+
+          ls -la magicmaker-esp32.bin magicmaker-heltec-v3.bin
+
+      # The flashers check the same thing before writing: a merged image must carry the
+      # bootloader header (magic 0xE9 + chip id) where that chip's ROM looks for it.
+      - name: Sanity-check the images
+        run: |
+          python3 - <<'EOF'
+          import sys
+
+          def check(path, offset, chip_id, chip):
+              b = open(path, "rb").read()
+              ok = (len(b) > 100 * 1024 and b[offset] == 0xE9
+                    and (b[offset + 12] | b[offset + 13] << 8) == chip_id)
+              print(f"{path}: {len(b)} bytes, {chip} bootloader header at {offset:#x}: {'OK' if ok else 'BAD'}")
+              return ok
+
+          ok = check("magicmaker-esp32.bin", 0x1000, 0, "ESP32")
+          ok = check("magicmaker-heltec-v3.bin", 0x0, 9, "ESP32-S3") and ok
+          sys.exit(0 if ok else 1)
+          EOF
 
       - name: Publish firmware release
         uses: softprops/action-gh-release@v2
@@ -66,24 +113,30 @@ jobs:
           tag_name: esp32-firmware
           name: ESP32 firmware (latest)
           body: |
-            Prebuilt MagicMaker ESP32 transmitter firmware.
-            Flash with: ./flash.ps1   (uses the .bin committed in firmware/esp32-transmitter/)
-            (a single image flashed at offset 0x0 on a 4MB ESP32).
-          files: magicmaker-esp32.bin
+            Prebuilt MagicMaker ESP32 transmitter firmware: one merged image per board, each flashed at offset 0x0.
+            - `magicmaker-esp32.bin`: classic ESP32 (DevKit / WROOM / WROVER, 4MB flash).
+            - `magicmaker-heltec-v3.bin`: Heltec WiFi LoRa 32 V3 / V3.1 / V3.2 (ESP32-S3, 8MB flash). The OLED stays dark to save power; press PRG to light it.
+
+            Flash with `./flash.ps1` (Windows) or `./flash.sh` (macOS/Linux) from firmware/esp32-transmitter/.
+            They detect which board is plugged in and flash the matching .bin committed next to them
+            (force one with `-Board esp32` / `-Board heltec-v3`, or `--board` for flash.sh).
+          files: |
+            magicmaker-esp32.bin
+            magicmaker-heltec-v3.bin
           fail_on_unmatched_files: true
 
-      # Also commit the built .bin into the repo so a plain `git pull` delivers the firmware
-      # and flash.ps1 can flash it with no download (the repo is private). A .bin path doesn't
-      # match this workflow's .ino/workflow triggers, so this push won't loop.
-      - name: Commit prebuilt bin into the repo
+      # Also commit the built .bins into the repo so a plain `git pull` delivers the firmware
+      # and the flashers can flash it with no download (the repo is private). A .bin path
+      # doesn't match this workflow's .ino/.h/.cpp/workflow triggers, so this push won't loop.
+      - name: Commit prebuilt bins into the repo
         run: |
-          cp magicmaker-esp32.bin firmware/esp32-transmitter/magicmaker-esp32.bin
+          cp magicmaker-esp32.bin magicmaker-heltec-v3.bin firmware/esp32-transmitter/
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add firmware/esp32-transmitter/magicmaker-esp32.bin
+          git add firmware/esp32-transmitter/magicmaker-esp32.bin firmware/esp32-transmitter/magicmaker-heltec-v3.bin
           if git diff --cached --quiet; then
-            echo "prebuilt bin unchanged"
+            echo "prebuilt bins unchanged"
           else
-            git commit -m "ci: update prebuilt magicmaker-esp32.bin [skip ci]"
+            git commit -m "ci: update prebuilt ESP32 firmware (classic + Heltec V3) [skip ci]"
             git push origin HEAD:main
           fi
