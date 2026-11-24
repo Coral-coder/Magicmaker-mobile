@@ -114,8 +114,8 @@ The sketch detects the board when it is compiled (`board.h`); no build flags nee
 - Press again → next page: **STATUS → LAST PACKET → DEVICE → STATUS …** (on DEVICE the page
   turns when you let go).
 - On **DEVICE**, **hold PRG for 1 s** → the next battery capacity: 400 → 500 → 1000 → 1100 →
-  2000 → 3000 → 5000 → 400 mAh (keep holding to step again every second; the `CAP` line is
-  highlighted). The choice is saved and survives reboots.
+  2000 → 3000 → 5000 → 400 mAh (keep holding to step again every second, at most one round;
+  the `CAP` line is highlighted). The choice is saved and survives reboots.
 - It goes dark **10 s after the last press** (`SCREEN_ON_MS` at the top of the `.ino`).
 - Nothing else lights it: no boot splash, not a phone connecting, not a transmit.
 - At runtime PRG is just a button. It only selects flashing mode when held while you tap

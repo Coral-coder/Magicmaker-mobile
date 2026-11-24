@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MagicMaker ESP32 Flasher</title>
+  <meta name="description" content="Flash the MagicMaker ESP32 transmitter firmware onto a classic ESP32 or a Heltec WiFi LoRa 32 V3 from the browser.">
+  <meta name="color-scheme" content="light dark">
+  <!-- ESP Web Tools (pinned). Reads manifest.json, asks the chip what it is and writes the
+       matching merged image at offset 0: ESP32 -> classic, ESP32-S3 -> Heltec V3. -->
+  <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+  <style>
+    :root {
+      --bg: #f7f5f0;
+      --surface: #ffffff;
+      --text: #1d1b17;
+      --muted: #5f5a50;
+      --border: #e2ddd2;
+      --accent: #a35f00;
+      --accent-strong: #8a4f00;
+      --accent-text: #ffffff;
+      --accent-soft: #fbeed8;
+      --code-bg: #f0ece3;
+      --warn-bg: #fff4e0;
+      --warn-border: #f0c983;
+      /* ESP Web Tools' install dialog is always light: keep its accent dark enough on white. */
+      --md-sys-color-primary: #8a4f00;
+      --md-sys-color-on-primary: #ffffff;
+      --esp-tools-button-color: #a35f00;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #15130f;
+        --surface: #1f1c17;
+        --text: #f1ede4;
+        --muted: #b3ab9b;
+        --border: #37322a;
+        --accent: #ffb347;
+        --accent-strong: #ffc46b;
+        --accent-text: #1d1408;
+        --accent-soft: #3a2a12;
+        --code-bg: #2a261f;
+        --warn-bg: #2e2514;
+        --warn-border: #6e5424;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #15130f;
+      --surface: #1f1c17;
+      --text: #f1ede4;
+      --muted: #b3ab9b;
+      --border: #37322a;
+      --accent: #ffb347;
+      --accent-strong: #ffc46b;
+      --accent-text: #1d1408;
+      --accent-soft: #3a2a12;
+      --code-bg: #2a261f;
+      --warn-bg: #2e2514;
+      --warn-border: #6e5424;
+    }
+
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    main { max-width: 760px; margin: 0 auto; padding: 40px 16px 56px; }
+    h1 { font-size: 2rem; line-height: 1.2; margin: 4px 0 12px; letter-spacing: -0.01em; }
+    h2 { font-size: 1.2rem; margin: 0 0 12px; }
+    p { margin: 0 0 12px; }
+    a { color: var(--accent); text-underline-offset: 2px; }
+    a:hover { color: var(--accent-strong); }
+    code {
+      font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: var(--code-bg);
+      padding: 1px 5px;
+      border-radius: 4px;
+      overflow-wrap: anywhere;
+    }
+    .eyebrow {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .lede { color: var(--muted); font-size: 1.05rem; max-width: 60ch; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 16px; color: var(--muted); font-size: 0.9rem; }
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px 20px;
+      margin-top: 20px;
+    }
+    .steps { margin: 0 0 18px; padding-left: 1.3em; }
+    .card > :last-child { margin-bottom: 0; }
+    .steps li { margin-bottom: 8px; }
+    .btn {
+      appearance: none;
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 22px;
+      background: var(--accent);
+      color: var(--accent-text);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn:hover { background: var(--accent-strong); }
+    .btn:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
+    .notice {
+      background: var(--warn-bg);
+      border: 1px solid var(--warn-border);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    /* Until ESP Web Tools has loaded, show only the Connect button, not every slot. */
+    esp-web-install-button:not(:defined) [slot="unsupported"],
+    esp-web-install-button:not(:defined) [slot="not-allowed"] { display: none; }
+    .after { margin: 18px 0 0; color: var(--muted); }
+    ul.plain { margin: 0; padding-left: 1.2em; }
+    ul.plain li { margin-bottom: 8px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+    th, td { text-align: left; padding: 8px 10px 8px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    td a.img { white-space: nowrap; }
+    td .sub { display: block; color: var(--muted); font-size: 0.85em; }
+    td .md5 { font-size: 0.8rem; }
+    footer { margin-top: 28px; color: var(--muted); font-size: 0.85rem; }
+    @media (max-width: 520px) {
+      h1 { font-size: 1.6rem; }
+      main { padding-top: 28px; }
+      .card { padding: 18px 16px; }
+      .col-md5 { display: none; }
+      td a.img { white-space: normal; overflow-wrap: anywhere; }
+    }
+  header, section.card:not([aria-labelledby="files-h"]) { display:none }</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">MagicMaker &middot; ESP32 transmitter</p>
+    <h1>Web flasher</h1>
+    <p class="lede">Put the MagicMaker transmitter firmware on a classic ESP32 or a Heltec WiFi LoRa 32 V3 straight from this page. Nothing to install.</p>
+    <div class="meta">
+      <span class="badge" id="fw-version">Latest firmware</span>
+      <span>Classic ESP32 &middot; Heltec WiFi LoRa 32 V3 / V3.1 / V3.2</span>
+    </div>
+  </header>
+
+  <section class="card" aria-labelledby="install-h">
+    <h2 id="install-h">Install</h2>
+    <ol class="steps">
+      <li>Plug the board into this computer with a USB <strong>data</strong> cable.</li>
+      <li>Click <strong>Connect</strong> and pick the board's port (it shows up as <em>CP210x</em>, <em>USB to UART</em> or <em>USB Serial</em>).</li>
+      <li>Click <strong>Install MagicMaker ESP32 transmitter</strong>. The page asks the chip what it is and picks the image itself: <strong>ESP32</strong> gets the classic image, <strong>ESP32-S3</strong> the Heltec V3 image. It erases the board and writes the firmware, which takes about a minute.</li>
+    </ol>
+    <esp-web-install-button id="install" manifest="manifest.json">
+      <button slot="activate" class="btn" type="button">Connect</button>
+      <div slot="unsupported" class="notice">
+        This browser can't open USB serial ports. Open this page in <strong>Chrome</strong> or <strong>Edge</strong> on a computer (Windows, macOS, Linux or ChromeOS), or in <strong>Chrome on Android</strong> with a USB OTG adapter. Safari and every browser on iPhone or iPad can't flash a board.
+      </div>
+      <div slot="not-allowed" class="notice">
+        Flashing only works on a secure page. Open
+        <a href="https://coral-coder.github.io/Magicmaker-mobile/flasher/">coral-coder.github.io/Magicmaker-mobile/flasher</a>.
+      </div>
+    </esp-web-install-button>
+    <p class="after">When it finishes, the board restarts and advertises as <code>MM_ESP</code>. In the MagicMaker app, choose the <strong>ESP32 transmitter</strong> backend and it links by itself. On a Heltec the screen stays dark until you press <strong>PRG</strong>.</p>
+  </section>
+
+  <section class="card" aria-labelledby="where-h">
+    <h2 id="where-h">What you need</h2>
+    <ul class="plain">
+      <li><strong>Computer:</strong> Chrome or Edge on Windows, macOS, Linux or ChromeOS.</li>
+      <li><strong>Android:</strong> Chrome with a USB OTG adapter or a USB-C to micro-USB / USB-C cable from the phone to the board. Older Chrome versions on Android can't open serial ports; if the button above says your browser isn't supported, use a computer.</li>
+      <li><strong>iPhone / iPad:</strong> no browser there can reach a USB serial port. Flash the board once from a computer, then update it from the MagicMaker app over Bluetooth (below).</li>
+    </ul>
+  </section>
+
+  <section class="card" aria-labelledby="trouble-h">
+    <h2 id="trouble-h">If it won't connect</h2>
+    <ul class="plain">
+      <li><strong>Heltec V3:</strong> hold <strong>PRG</strong>, tap <strong>RST</strong>, release <strong>PRG</strong>, then click Connect again. If you flashed it this way, tap <strong>RST</strong> afterwards to start the new firmware.</li>
+      <li><strong>Classic ESP32:</strong> hold <strong>BOOT</strong> while it connects and let go once writing starts.</li>
+      <li><strong>No port in the list:</strong> install the USB driver, Silicon Labs <strong>CP210x</strong> VCP (Heltec V3 and most DevKits) or WCH <strong>CH340</strong>, then replug. Also try another cable: charge-only cables have no data wires.</li>
+      <li><strong>Port busy:</strong> close anything else using it: the Arduino IDE serial monitor, <code>flash.ps1</code> / <code>flash.sh</code>, or another tab with this page.</li>
+      <li><strong>Linux:</strong> your user needs access to the port (add it to the <code>dialout</code> group, then log out and back in).</li>
+    </ul>
+  </section>
+
+  <section class="card" aria-labelledby="ota-h">
+    <h2 id="ota-h">Update over Bluetooth from the iPhone</h2>
+    <p>A board that already runs firmware <strong>1.2 or newer</strong> can be updated from the MagicMaker iPhone app, no cable needed. The app carries the latest firmware for both boards.</p>
+    <ol class="steps">
+      <li>Link the app to the board as usual.</li>
+      <li>Press the board's button once: <strong>PRG</strong> on a Heltec V3, <strong>BOOT</strong> on a classic DevKit. For the next <strong>2 minutes</strong> the board accepts an update; nobody can update it without that press.</li>
+      <li>Start the firmware update in the app. The board checks the image, restarts into it and the app relinks. If anything goes wrong on the way, the board keeps running its current firmware.</li>
+    </ol>
+  </section>
+
+  <section class="card" aria-labelledby="files-h">
+    <h2 id="files-h">Downloads</h2>
+    <p>Merged images, flashed at offset <code>0x0</code> (bootloader, partition table and app in one file):</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Board</th><th>Image</th><th>Size</th><th class="col-md5">MD5</th></tr>
+        </thead>
+        <tbody>
+          <tr data-board="esp32">
+            <td><strong>Classic ESP32</strong><span class="sub">DevKit, WROOM, WROVER &middot; 4&nbsp;MB</span></td>
+            <td><a class="img" href="magicmaker-esp32.bin" download>magicmaker-esp32.bin</a></td>
+            <td class="num size">&ndash;</td>
+            <td class="col-md5"><code class="md5">&ndash;</code></td>
+          </tr>
+          <tr data-board="heltec-v3">
+            <td><strong>Heltec V3</strong><span class="sub">WiFi LoRa 32 V3 &middot; ESP32-S3 &middot; 8&nbsp;MB</span></td>
+            <td><a class="img" href="magicmaker-heltec-v3.bin" download>magicmaker-heltec-v3.bin</a></td>
+            <td class="num size">&ndash;</td>
+            <td class="col-md5"><code class="md5">&ndash;</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <ul class="plain" style="margin-top:16px">
+      <li><strong>Windows, one click:</strong> <a data-release="MagicMaker-Flasher-Windows.zip" href="https://github.com/Coral-coder/Magicmaker-mobile/releases/download/esp32-firmware/MagicMaker-Flasher-Windows.zip">MagicMaker-Flasher-Windows.zip</a>. Unzip it, plug the board in, double-click <code>flash.bat</code>.</li>
+      <li><strong>Everything else</strong> (app-only images for OTA, <code>firmware.json</code>): the <a href="https://github.com/Coral-coder/Magicmaker-mobile/releases/tag/esp32-firmware">esp32-firmware release</a>.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Source: <a href="https://github.com/Coral-coder/Magicmaker-mobile/tree/main/firmware/esp32-transmitter">firmware/esp32-transmitter</a>.
+    Flashing by <a href="https://esphome.github.io/esp-web-tools/">ESP Web Tools</a>.
+  </footer>
+</main>
+
+<script>
+  (function () {
+    // Always fetch the current manifest; the images it names carry ?v=<md5> cache-busters.
+    var button = document.getElementById("install");
+    button.setAttribute("manifest", "manifest.json?t=" + Date.now());
+
+    function kb(n) { return typeof n === "number" ? Math.round(n / 1024) + " KB" : "–"; }
+
+    fetch("firmware.json", { cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (fw) {
+        if (fw && typeof fw.version === "string") {
+          document.getElementById("fw-version").textContent = "Firmware " + fw.version;
+          document.title = "MagicMaker ESP32 Flasher · " + fw.version;
+        }
+        var boards = (fw && fw.boards) || {};
+        Object.keys(boards).forEach(function (id) {
+          var b = boards[id];
+          var row = document.querySelector('tr[data-board="' + id + '"]');
+          if (!row || !b) return;
+          row.querySelector(".size").textContent = kb(b.mergedSize);
+          if (typeof b.mergedMd5 === "string") {
+            row.querySelector(".md5").textContent = b.mergedMd5;
+            if (typeof b.merged === "string") {
+              row.querySelector("a.img").setAttribute("href", b.merged + "?v=" + b.mergedMd5.slice(0, 12));
+            }
+          }
+        });
+        if (fw && typeof fw.release === "string" && /^https:\/\/github\.com\//.test(fw.release)) {
+          document.querySelectorAll("a[data-release]").forEach(function (a) {
+            a.setAttribute("href", fw.release + a.getAttribute("data-release"));
+          });
+        }
+      })
+      .catch(function () { /* keep the static text; flashing still works */ });
+  })();
+</script>
+</body>
+</html>

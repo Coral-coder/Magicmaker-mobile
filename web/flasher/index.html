@@ -140,6 +140,7 @@
     th { color: var(--muted); font-weight: 600; }
     td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
     td a.img { white-space: nowrap; }
+    td .sub { display: block; color: var(--muted); font-size: 0.85em; }
     td .md5 { font-size: 0.8rem; }
     footer { margin-top: 28px; color: var(--muted); font-size: 0.85rem; }
     @media (max-width: 520px) {
@@ -147,6 +148,7 @@
       main { padding-top: 28px; }
       .card { padding: 18px 16px; }
       .col-md5 { display: none; }
+      td a.img { white-space: normal; overflow-wrap: anywhere; }
     }
   </style>
 </head>
@@ -222,13 +224,13 @@
         </thead>
         <tbody>
           <tr data-board="esp32">
-            <td>Classic ESP32 (DevKit, WROOM, WROVER; 4&nbsp;MB)</td>
+            <td><strong>Classic ESP32</strong><span class="sub">DevKit, WROOM, WROVER &middot; 4&nbsp;MB</span></td>
             <td><a class="img" href="magicmaker-esp32.bin" download>magicmaker-esp32.bin</a></td>
             <td class="num size">&ndash;</td>
             <td class="col-md5"><code class="md5">&ndash;</code></td>
           </tr>
           <tr data-board="heltec-v3">
-            <td>Heltec WiFi LoRa 32 V3 (ESP32-S3; 8&nbsp;MB)</td>
+            <td><strong>Heltec V3</strong><span class="sub">WiFi LoRa 32 V3 &middot; ESP32-S3 &middot; 8&nbsp;MB</span></td>
             <td><a class="img" href="magicmaker-heltec-v3.bin" download>magicmaker-heltec-v3.bin</a></td>
             <td class="num size">&ndash;</td>
             <td class="col-md5"><code class="md5">&ndash;</code></td>
