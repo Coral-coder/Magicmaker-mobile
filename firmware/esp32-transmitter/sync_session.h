@@ -924,7 +924,7 @@ class Session {
         if (rx_.rec.reqId == 0) {
           arm(TM_LIVE_PULL, t, T_LIVE_PULL_MS);
         } else if (pullActive_ && rx_.rec.reqId == pullReqId_) {
-          pullRecs_++;
+          if (pullRecs_ < 0xFFFFFFFFu) pullRecs_++;  // never wraps back to a matching count
           arm(TM_PAGE, t, T_PAGE_MS);
         }
         return;
@@ -1095,7 +1095,7 @@ class Session {
   bool pullActive_;
   uint8_t pullReqId_;
   uint32_t pullSince_;
-  uint16_t pullRecs_;
+  uint32_t pullRecs_;  // page RECs counted (PAGE_END count is a u8: > 255 never matches)
   uint8_t pullTries_;
   int64_t pendingHigh_;  // -1 = no pending trigger
   uint8_t limit_;

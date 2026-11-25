@@ -525,7 +525,10 @@ class MagicMakerForegroundService : Service() {
         bleScanner = BleScanner(
             onDisneyPacket = { hex, rssi, address -> onHeard(hex, rssi, address) },
             onScanFailed = { code -> restartScanDelayed(code) },
-            onEsp32Heartbeat = { hb -> mainHandler.post { onEsp32Heartbeat(hb) } },
+            onEsp32Heartbeat = { hb, address ->
+                if (address.isNotEmpty()) esp32Address = address
+                mainHandler.post { onEsp32Heartbeat(hb) }
+            },
         )
         leScanner = adapter.bluetoothLeScanner
         scanCallback = bleScanner!!.buildCallback()
@@ -1078,6 +1081,10 @@ class MagicMakerForegroundService : Service() {
 
     // ---- ESP32 battery heartbeat (top bar) ---------------------------------------------------
     private var esp32HeartbeatAt = 0L
+    /** Our own ESP32 transmitter's address, learned from its heartbeat adverts (firmware 1.4+).
+     *  Its Disney packets come from the same address: they are our own transmissions (the wand
+     *  loop, keep-awake, the iPhone's sends), so they are never recorded or auto-answered. */
+    @Volatile private var esp32Address = ""
     private val esp32HeartbeatStale = Runnable {
         if (System.currentTimeMillis() - esp32HeartbeatAt >= ESP32_HEARTBEAT_STALE_MS - 50) {
             ServiceState.update { it.copy(esp32Battery = null) }
@@ -1109,6 +1116,15 @@ class MagicMakerForegroundService : Service() {
         // show-control test, not merely "classifies", so EA/EF/E4 beacons (which classify as
         // decorative 'animations' but never drive a band) don't clutter the library.
         if (store.getShowControlOnly() && !MagicClassifier.isShowControl(hex)) {
+            ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
+            return
+        }
+        // Our own ESP32 sending (its wand loop, keep-awake or the iPhone's sends through it): shown
+        // in the live feed, but never recorded, never auto-answered. Answering it fought the
+        // iPhone's own sends on the band and made the ESP32 feel laggy with the wand loop on.
+        val ownEsp32 = esp32Address.isNotEmpty() && address.equals(esp32Address, ignoreCase = true)
+        if (ownEsp32) {
+            ServiceState.appendLive(hex, (classified?.label ?: "?") + " (ESP32)", rssi, "Heard", address, false)
             ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
             return
         }

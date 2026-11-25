@@ -110,8 +110,11 @@ final class BleCoordinator: NSObject, BleCentralDelegate {
     /// One packet on air for exactly `durationMs` through the linked relay, with the local scan
     /// paused meanwhile as in `play`. Reports false when no relay is ready (nothing is sent),
     /// when another send is still on air, or when the relay did not take the packet.
-    func send(hex: String, durationMs: Int, onComplete: @escaping (Bool) -> Void) {
-        if isTransmitting {
+    /// `supersede`: the relay replaces what it has on air with the newest write (the ESP32), so a
+    /// send still on air does not refuse this one; it is replaced, its result is dropped (its
+    /// caller has already moved on) and the scan stays paused until this one ends.
+    func send(hex: String, durationMs: Int, supersede: Bool = false, onComplete: @escaping (Bool) -> Void) {
+        if isTransmitting && !supersede {
             onStatus?("Wait — still transmitting")
             onComplete(false)
             return
@@ -124,6 +127,7 @@ final class BleCoordinator: NSObject, BleCentralDelegate {
         let shouldPause = shouldListenForDisney
         if shouldPause { central.stopScan() }
 
+        // A new number also retires the send this one replaces: its result fails the checks below.
         sendSerial += 1
         let serial = sendSerial
         activeSendSerial = serial
@@ -132,7 +136,6 @@ final class BleCoordinator: NSObject, BleCentralDelegate {
             Task { @MainActor in
                 guard let self else { return }
                 guard self.activeSendSerial == serial else { return }
-                self.activeSendSerial = 0
                 if success {
                     // The BLE link answers once the burst is over, the WiFi relay as soon as it
                     // has queued the packet. Either way the send ends when durationMs has passed.
@@ -144,7 +147,10 @@ final class BleCoordinator: NSObject, BleCentralDelegate {
                     if remainingMs > 0 {
                         try? await Task.sleep(nanoseconds: UInt64(remainingMs) * 1_000_000)
                     }
+                    // Replaced by a newer send, or this result already acted on, while waiting.
+                    guard self.activeSendSerial == serial else { return }
                 }
+                self.activeSendSerial = 0
                 self.isTransmitting = false
                 if shouldPause && self.shouldListenForDisney { self.central.startScan() }
                 onComplete(success)

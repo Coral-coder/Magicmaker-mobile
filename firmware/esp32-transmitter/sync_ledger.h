@@ -133,6 +133,10 @@ class Ledger {
     if (evicted) evicted->clear();
     if (kept) *kept = false;
     const LedgerEntry* cur = get(r.key);
+    // No stamp can beat an entry (or a previous stamp) at I64_MAX: refuse rather than emit a
+    // version that does not win (sync_ref.py fails to encode it).
+    if ((cur && cur->version.updatedAt == I64_MAX) || lastLocalStamp == I64_MAX)
+      return clockErr("stamp_overflow");
     const int64_t u = localStamp(r.nowMs, cur ? cur->version.updatedAt : 0, lastLocalStamp);
     lastLocalStamp = u;
     Body b;

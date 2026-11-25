@@ -89,7 +89,20 @@ data class SessionConfig(
     val peerKind: Int? = null,
     val tracksEvents: Boolean = false,
     val isHub: Boolean = kind == SyncConst.KIND_HUB,
-)
+) {
+    // Checked here so a bad value fails when the session is built, not at every HELLO it encodes
+    // (e.g. a device name longer than HELLO's 20 UTF-8 bytes). An empty version/name is sent as absent.
+    init {
+        require(deviceId.size == 8 && !deviceId.isAllZero()) { "deviceId must be 8 bytes, not all zero" }
+        require(kind in SyncConst.KIND_HUB..SyncConst.KIND_IOS) { "kind $kind" }
+        require(bootId in 0..0xFFFF) { "bootId must be u16" }
+        require(maxMsg in SyncConst.MAXMSG_MIN..0xFFFF) { "maxMsg must be ${SyncConst.MAXMSG_MIN}..65535" }
+        require(caps in 0..0xFFFF) { "caps must be u16" }
+        require(version == null || Utf8.encode(version).size <= 16) { "version must be at most 16 UTF-8 bytes" }
+        require(name == null || Utf8.encode(name).size <= 20) { "name must be at most 20 UTF-8 bytes" }
+        require(peerKind == null || peerKind in SyncConst.KIND_HUB..SyncConst.KIND_IOS) { "peerKind $peerKind" }
+    }
+}
 
 /**
  * Node-owned values the session reads (§14.2); the node mutates them between inputs. [peers] is
@@ -124,6 +137,10 @@ class SessionCore(val cfg: SessionConfig, val ctx: SessionCtx) {
 
     /** What the peer wants to receive on this session (HELLO / SUB). */
     var peerSubs: Int = 0
+        private set
+
+    /** Messages the session could not encode, so did not send (always 0 unless a node value is bad). */
+    var encodeFailures: Int = 0
         private set
 
     private var alike = false
@@ -180,8 +197,18 @@ class SessionCore(val cfg: SessionConfig, val ctx: SessionCtx) {
         out.add(a)
     }
 
-    private fun send(msg: SyncMsg): Bytes {
-        val b = msg.encode()
+    /**
+     * Encodes and emits [msg]. A message that does not encode (a node value out of range, e.g. a
+     * feedHigh above u32 or a negative clockMs) is counted in [encodeFailures] and not sent, as the
+     * C++ and Swift cores do, so a node bug cannot throw out of [handle] mid-transition.
+     */
+    private fun send(msg: SyncMsg): Bytes? {
+        val b = try {
+            msg.encode()
+        } catch (e: IllegalArgumentException) {
+            encodeFailures++
+            return null
+        }
         emit(SessionAction.Send(msg.type, b))
         return b
     }
@@ -334,7 +361,7 @@ class SessionCore(val cfg: SessionConfig, val ctx: SessionCtx) {
             mine != null && theirs != null && mine == theirs -> {
                 alike = true
                 val (pp, _) = proofs()
-                reply.add(MsgType.HELLO to send(helloFields(t, nonceP!!, proof = pp)))
+                send(helloFields(t, nonceP!!, proof = pp))?.let { reply.add(MsgType.HELLO to it) }
                 setState(SessionState.HELLO_X)
                 arm(SessionTimer.AUTH, t, SyncConst.T_AUTH_MS)
             }
@@ -344,17 +371,17 @@ class SessionCore(val cfg: SessionConfig, val ctx: SessionCtx) {
                 return foreign(MsgType.HELLO)
             }
             mine != null -> {
-                reply.add(MsgType.HELLO to send(helloFields(t, nonceP!!)))
-                reply.add(MsgType.JOIN to send(joinMsg(rekey = false)))
+                send(helloFields(t, nonceP!!))?.let { reply.add(MsgType.HELLO to it) }
+                send(joinMsg(rekey = false))?.let { reply.add(MsgType.JOIN to it) }
                 setState(SessionState.LINKED)
             }
             theirs != null -> {
-                reply.add(MsgType.HELLO to send(helloFields(t, nonceP!!)))
+                send(helloFields(t, nonceP!!))?.let { reply.add(MsgType.HELLO to it) }
                 setState(SessionState.HELLO_X)
                 arm(SessionTimer.AUTH, t, SyncConst.T_AUTH_MS)
             }
             else -> {
-                reply.add(MsgType.HELLO to send(helloFields(t, nonceP!!)))
+                send(helloFields(t, nonceP!!))?.let { reply.add(MsgType.HELLO to it) }
                 setState(SessionState.NOGROUP)
             }
         }
@@ -363,6 +390,11 @@ class SessionCore(val cfg: SessionConfig, val ctx: SessionCtx) {
 
     private fun peripheralAuth(t: Long, m: Auth) {
         if (central || state != SessionState.HELLO_X || !alike) return
+        // §14.5 "Peripheral receives AUTH (HELLO_X, grouped alike)": a node that left its group
+        // after the HELLO exchange (group_changed already asked for a disconnect, or has not been
+        // delivered yet) has no key to check against, so the AUTH is dropped, as the C++ port does.
+        // sync_ref.py fails here on the missing key; no vector covers it.
+        if (ctx.group == null) return
         val (_, pc) = proofs()
         if (SyncCrypto.constantTimeEquals(m.proof, pc)) {
             cancel(SessionTimer.AUTH)

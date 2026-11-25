@@ -66,6 +66,7 @@ static const int64_t U_LEGACY_ANDROID = 2;
 static const int64_t U_LEGACY_IOS = 3;
 static const int64_t U_MIN_MS = 1500000000000LL;
 static const int64_t FUTURE_BOUND_MS = 86400000LL;
+static const int64_t I64_MAX = 9223372036854775807LL;  // largest updatedAt (no signed overflow)
 
 static const uint8_t KIND_HUB = 1, KIND_ANDROID = 2, KIND_IOS = 3;
 
@@ -694,7 +695,8 @@ inline Status encodeBody(const Body& b, uint8_t* out, size_t cap, size_t* outLen
 }
 
 // The key of an invalid body, for ERR{code, refType 0x03, key}: the 0x10 TLV when it parses (the
-// last good one before a bad one). False when there is none or the TLVs do not frame.
+// last good one before a bad one). False when there is none or the TLVs do not frame. p[0..n)
+// must be the whole body: for a received REC use recErrKey() (Rec keeps at most BODY_MAX bytes).
 inline bool bodyErrKey(const uint8_t* p, size_t n, Key* out) {
   if (!tlvFramingOk(p, n, 0)) return false;
   bool found = false;
@@ -736,17 +738,21 @@ inline int compareVersions(const Version& a, const Version& b) {
 }
 
 // updatedAt of a local edit: max(now, ledger.updatedAt + 1, lastLocalStamp + 1, 1.5e12).
+// Saturates at I64_MAX instead of overflowing (an entry already at I64_MAX cannot be beaten;
+// Ledger::localEdit refuses that edit).
 inline int64_t localStamp(int64_t nowMs, int64_t ledgerUpdatedAt, int64_t lastLocalStamp) {
   int64_t u = nowMs;
-  if (ledgerUpdatedAt + 1 > u) u = ledgerUpdatedAt + 1;
-  if (lastLocalStamp + 1 > u) u = lastLocalStamp + 1;
+  if (ledgerUpdatedAt >= u) u = ledgerUpdatedAt < I64_MAX ? ledgerUpdatedAt + 1 : I64_MAX;
+  if (lastLocalStamp >= u) u = lastLocalStamp < I64_MAX ? lastLocalStamp + 1 : I64_MAX;
   if (U_MIN_MS > u) u = U_MIN_MS;
   return u;
 }
 
-// Receiver clock rule (§7): nowKnown false (hub before any member clock) skips the check.
+// Receiver clock rule (§7): nowKnown false (hub before any member clock) skips the check. A clock
+// within 24 h of I64_MAX sees nothing as future (no signed overflow).
 inline Status checkFuture(int64_t updatedAt, bool nowKnown, int64_t nowMs) {
-  if (nowKnown && updatedAt > nowMs + FUTURE_BOUND_MS) return clockErr("clock_future");
+  if (nowKnown && nowMs <= I64_MAX - FUTURE_BOUND_MS && updatedAt > nowMs + FUTURE_BOUND_MS)
+    return clockErr("clock_future");
   return statusOk();
 }
 
@@ -909,9 +915,22 @@ struct Rec {
   uint16_t bodyLen;  // collected length; > BODY_MAX means only the first BODY_MAX bytes are kept
   uint8_t body[BODY_MAX];
   Status bodyStatus;
+  // The key for ERR{code, refType 0x03, key} when the body is rejected (§11.4): the 0x10 TLV of
+  // the whole collected body, as bodyErrKey() would find it. Set by decodeMsg, so it is also
+  // right for an oversize body, of which only the first BODY_MAX bytes are kept. Use recErrKey().
+  bool hasErrKey;
+  Key errKey;
 
   bool bodyOversize() const { return bodyLen > BODY_MAX; }
 };
+
+// The key to put in ERR{BAD_MSG or CLOCK, refType 0x03, key} for a decoded REC whose body was
+// rejected (bodyStatus or the apply rule); false = send the ERR without a key.
+inline bool recErrKey(const Rec& r, Key* out) {
+  if (!r.hasErrKey) return false;
+  *out = r.errKey;
+  return true;
+}
 
 struct PageEnd {
   uint8_t reqId;
@@ -1522,6 +1541,7 @@ inline Status decodeMsg(const uint8_t* d, size_t n, Msg* m) {
   uint32_t seen = 0;  // known tags seen (all known tags are < 32)
   int prev = -1;
   size_t bodyLen = 0;
+  bool errKeyDone = false;  // a 0x10 TLV failed to decode: later ones do not count (bodyErrKey)
   for (size_t i = 1; i < n;) {
     const uint8_t tag = d[i];
     const uint8_t ln = d[i + 1];
@@ -1535,6 +1555,15 @@ inline Status decodeMsg(const uint8_t* d, size_t n, Msg* m) {
         memcpy(m->rec.body + bodyLen, v - 2, BODY_MAX - bodyLen);
       }
       bodyLen += raw;
+      if (tag == T_KEY && !errKeyDone) {
+        Key k;
+        if (decodeKey(v, ln, &k).ok()) {
+          m->rec.errKey = k;
+          m->rec.hasErrKey = true;
+        } else {
+          errKeyDone = true;
+        }
+      }
       continue;
     }
     const FieldSpec* f = findField(sp, tag);

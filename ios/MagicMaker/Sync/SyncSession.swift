@@ -194,6 +194,9 @@ final class SyncSession {
     private(set) var peer: SyncMessage?
     /// What the peer wants to receive on this session (HELLO / SUB subs).
     private(set) var peerSubs: Int64 = 0
+    /// Messages the session could not encode (always 0 unless a context value is out of range,
+    /// e.g. a feedHigh above u32).
+    private(set) var encodeFailures: Int = 0
 
     private var alike: Bool = false
     private var nonceC: [UInt8]?
@@ -288,6 +291,7 @@ final class SyncSession {
     @discardableResult
     private func send(_ type: UInt8, _ fields: [String: SyncValue]) -> [UInt8] {
         guard let b = try? SyncMessageCodec.encode(type: type, fields: fields) else {
+            encodeFailures += 1  // a bug (a field out of range): nothing is sent
             return []
         }
         emit(.send(type: type, bytes: b))
@@ -530,6 +534,13 @@ final class SyncSession {
         if isCentral || state != .helloX || !alike {
             return
         }
+        if ctx.group == nil {
+            // The node left its group without telling this session (group_changed): do what
+            // group_changed would have done instead of judging the proof (sync_ref.py has no key
+            // here; no vector covers it).
+            disconnect(.leftGroup)
+            return
+        }
         if let pr = proofs(), let got = m.bytes("proof"), SyncGroupAuth.constantTimeEqual(got, pr.c) {
             cancel(.auth)
             authed(t)
@@ -756,10 +767,10 @@ final class SyncSession {
         if !state.isAuthedPlus {
             return
         }
-        data(t, m)
+        onData(t, m)
     }
 
-    private func data(_ t: Int64, _ m: SyncMessage) {
+    private func onData(_ t: Int64, _ m: SyncMessage) {
         let ps: SyncPeerState = currentPeerState()
         switch m.type {
         case SyncMsgType.pull:

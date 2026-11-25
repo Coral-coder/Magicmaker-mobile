@@ -94,17 +94,25 @@ class Bytes private constructor(private val b: ByteArray) : Comparable<Bytes> {
 
         fun zero(n: Int): Bytes = Bytes(ByteArray(n))
 
-        /** Hex (either case, no separators) -> bytes. */
+        /** Hex (ASCII 0-9 A-F a-f, no separators) -> bytes. */
         fun fromHex(s: String): Bytes {
             require(s.length % 2 == 0) { "odd hex length" }
             val out = ByteArray(s.length / 2)
             for (i in out.indices) {
-                val hi = Character.digit(s[2 * i], 16)
-                val lo = Character.digit(s[2 * i + 1], 16)
+                val hi = hexDigit(s[2 * i])
+                val lo = hexDigit(s[2 * i + 1])
                 require(hi >= 0 && lo >= 0) { "bad hex digit in \"$s\"" }
                 out[i] = ((hi shl 4) or lo).toByte()
             }
             return Bytes(out)
+        }
+
+        // Not Character.digit: that also accepts non-ASCII digits and fullwidth letters.
+        private fun hexDigit(c: Char): Int = when (c) {
+            in '0'..'9' -> c - '0'
+            in 'A'..'F' -> c - 'A' + 10
+            in 'a'..'f' -> c - 'a' + 10
+            else -> -1
         }
 
         /** A big-endian u64 as 8 bytes. */

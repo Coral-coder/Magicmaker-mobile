@@ -606,6 +606,93 @@ void checkApply(const Value& v) {
 }
 
 // ---- messages ------------------------------------------------------------------------------------
+// C++-local regression (no shared vector has a REC body over BODY_MAX): Rec keeps only the first
+// BODY_MAX body bytes, but the ERR key must come from the whole collected body, as in sync_ref.py
+// (expectations below computed with it). Group "local.recErrKey" is not a vectors.json group.
+void checkRecErrKeyOversize() {
+  auto tlv = [](Bytes& b, uint8_t tag, const Bytes& val) {
+    b.push_back(tag);
+    b.push_back((uint8_t)val.size());
+    b.insert(b.end(), val.begin(), val.end());
+  };
+  const Bytes kShow = unhex("008301E100E90C00010F4D575A940705488BB0");
+  const Bytes kAnim = unhex("008301E100E90600220F5C57B0");
+  const Bytes kWand = unhex("018301CF0B00C020224EAC7807866F1D");
+  const Bytes kBadNs = unhex("058301E100E90C00010F4D575A940705488BB0");
+  const Bytes up1 = unhex("0100000000000000");
+  const Bytes n255(255, 'n'), n200(200, 'n'), n160(160, 'n'), n100(100, 'n'), k100(100, 'k'), k3(3, 'k');
+  struct Case {
+    const char* name;
+    Bytes body;
+    size_t wantLen;
+    const char* wantReason;
+    const char* wantKey;  // NULL = no key
+  };
+  std::vector<Case> cases;
+  {
+    Case c = {"key first, oversize", Bytes(), 390, "oversize", "008301E100E90C00010F4D575A940705488BB0"};
+    tlv(c.body, 0x10, kShow);
+    tlv(c.body, 0x11, up1);
+    tlv(c.body, 0x16, n255);
+    tlv(c.body, 0x17, k100);
+    cases.push_back(c);
+  }
+  {
+    Case c = {"key past the kept 360 bytes", Bytes(), 422, "oversize", "018301CF0B00C020224EAC7807866F1D"};
+    tlv(c.body, 0x16, n200);
+    tlv(c.body, 0x16, n200);
+    tlv(c.body, 0x10, kWand);
+    cases.push_back(c);
+  }
+  {
+    Case c = {"bad key first, oversize", Bytes(), 401, "oversize", NULL};
+    tlv(c.body, 0x10, kBadNs);
+    tlv(c.body, 0x10, kShow);
+    tlv(c.body, 0x16, n255);
+    tlv(c.body, 0x16, n100);
+    cases.push_back(c);
+  }
+  {
+    Case c = {"last good key, oversize", Bytes(), 395, "oversize", "008301E100E90600220F5C57B0"};
+    tlv(c.body, 0x10, kShow);
+    tlv(c.body, 0x10, kAnim);
+    tlv(c.body, 0x16, n255);
+    tlv(c.body, 0x16, n100);
+    cases.push_back(c);
+  }
+  {
+    Case c = {"exactly 360 bytes", Bytes(), 360, "duplicate", "008301E100E90C00010F4D575A940705488BB0"};
+    tlv(c.body, 0x10, kShow);
+    tlv(c.body, 0x11, up1);
+    tlv(c.body, 0x16, n160);
+    tlv(c.body, 0x16, n160);
+    tlv(c.body, 0x17, k3);
+    cases.push_back(c);
+  }
+  for (const Case& c : cases) {
+    const std::string n = std::string("local.recErrKey ") + c.name;
+    Bytes m = unhex("03010409000000020102");  // REC seq 9, reqId 2
+    m.insert(m.end(), c.body.begin(), c.body.end());
+    Msg d;
+    const Status s = decodeMsg(m.data(), m.size(), &d);
+    bool good = expectStr(s.ok() ? "ok" : s.reason, "ok", n + " envelope");
+    if (s.ok()) {
+      good = expectInt(c.body.size(), (int64_t)c.wantLen, n + " body length") && good;
+      good = expectInt(d.rec.bodyLen, (int64_t)c.wantLen, n + " bodyLen") && good;
+      good = expectStr(d.rec.bodyStatus.ok() ? "" : d.rec.bodyStatus.reason, c.wantReason, n + " reason") && good;
+      Key k;
+      const bool has = recErrKey(d.rec, &k);
+      uint8_t kb[1 + PACKET_MAX];
+      good = expectStr(has ? hex(kb, encodeKey(k, kb)) : "none", c.wantKey ? c.wantKey : "none", n + " key") && good;
+      Key k2;  // the raw-body helper on the whole body agrees
+      const bool has2 = bodyErrKey(c.body.data(), c.body.size(), &k2);
+      good = expectStr(has2 ? hex(kb, encodeKey(k2, kb)) : "none", c.wantKey ? c.wantKey : "none",
+                       n + " bodyErrKey") && good;
+    }
+    if (good) ok("local.recErrKey");
+  }
+}
+
 void checkMessages(const Value& v) {
   for (const auto& c : v["messages"].a) {
     const std::string n = c["name"].asStr();
@@ -657,11 +744,15 @@ void checkMessages(const Value& v) {
                        c["bodyError"].asStr(), "bodyError " + n) && good;
       good = expectEq(msgToJson(d), c["fields"], "fields " + n) && good;
       Key k;
-      const bool hasKey = bodyErrKey(d.rec.body, d.rec.bodyLen, &k);
+      const bool hasKey = recErrKey(d.rec, &k);
       good = expectEq(hasKey ? keyToJson(k) : vnull(), c["errKey"], "errKey " + n) && good;
+      Key kb;
+      const bool hasKeyB = !d.rec.bodyOversize() && bodyErrKey(d.rec.body, d.rec.bodyLen, &kb);
+      good = expectEq(hasKeyB ? keyToJson(kb) : vnull(), c["errKey"], "bodyErrKey " + n) && good;
     }
     if (good) ok("messageBadBody");
   }
+  checkRecErrKeyOversize();
   for (const auto& c : v["messageIgnored"].a) {
     Bytes h = unhex(c["hex"].asStr());
     Msg d;
@@ -1169,6 +1260,146 @@ void checkSessions(const Value& v) {
   }
 }
 
+// ---- C++-local robustness checks (not vectors: sync_ref.py has no defined result here) ---------------
+// Group "local.robustness". Run under ASan/UBSan, so a signed overflow fails the build's run too.
+void checkRobustness() {
+  bool good = true;
+  // localStamp / checkFuture at the int64 edge: saturate, never overflow.
+  good = expectInt(localStamp(0, I64_MAX, 0), I64_MAX, "localStamp ledger at max") && good;
+  good = expectInt(localStamp(0, I64_MAX - 1, 0), I64_MAX, "localStamp ledger at max-1") && good;
+  good = expectInt(localStamp(0, 0, I64_MAX), I64_MAX, "localStamp last at max") && good;
+  good = expectInt(localStamp(I64_MAX, 5, 7), I64_MAX, "localStamp now at max") && good;
+  good = expectStr(errCodeName(checkFuture(I64_MAX, true, I64_MAX).code), "OK", "future, clock at max") && good;
+  good = expectStr(errCodeName(checkFuture(I64_MAX, true, I64_MAX - FUTURE_BOUND_MS).code), "OK",
+                   "future, exactly +24 h at max") && good;
+  good = expectStr(errCodeName(checkFuture(I64_MAX, true, I64_MAX - FUTURE_BOUND_MS - 1).code), "CLOCK",
+                   "future, +24 h + 1 at max") && good;
+
+  // A USER record at I64_MAX accepted while the clock is unknown cannot be beaten: the local edit
+  // is refused (no overflowed stamp, lastLocalStamp untouched).
+  {
+    Ledger led;
+    Body b;
+    clearBody(&b);
+    Bytes pk = unhex("8301E100E90C00010F4D575A940705488BB0");
+    b.key = makeKey(NS_LIB, pk.data(), pk.size());
+    b.updatedAt = I64_MAX;
+    b.hasOrigin = true;
+    b.origin = id8("4A1D0B5E77C2903F");
+    b.flags = FLAG_USER_EDITED;
+    std::memcpy(b.label, "Max", 3);
+    b.labelLen = 3;
+    b.hasCategory = true;
+    b.category = CAT_SHOW;
+    b.hasPlace = true;
+    b.place = PLACE_LIBRARY;
+    uint8_t buf[BODY_MAX];
+    size_t n = 0;
+    good = expectStr(encodeBody(b, buf, sizeof(buf), &n).ok() ? "ok" : "fail", "ok", "encode max body") && good;
+    LedgerEntry e;
+    std::vector<Key> ev;
+    good = expectStr(applyStatusName(led.applyRemote(buf, n, id8("0100246F28AE52C6"), false, 0, &e, &ev)), "ACCEPT",
+                     "apply max body, clock unknown") && good;
+    EditRequest r = makeEdit(CLS_USER, b.key, 1796000000000LL, id8("A1B2C3D4E5F60718"));
+    r.hasLabel = true;
+    r.label = (const uint8_t*)"New";
+    r.labelLen = 3;
+    r.hasCategory = true;
+    r.category = CAT_SHOW;
+    r.hasPlace = true;
+    r.place = PLACE_LIBRARY;
+    bool kept = true;
+    const Status s = led.localEdit(r, &e, &kept, &ev);
+    good = expectStr(s.ok() ? "ok" : s.reason, "stamp_overflow", "edit over a max entry") && good;
+    good = expectInt(led.lastLocalStamp, 0, "lastLocalStamp after a refused edit") && good;
+    good = expectInt(led.get(b.key)->version.updatedAt, I64_MAX, "entry kept") && good;
+  }
+
+  // Page REC counting never wraps: 65,536 page RECs then PAGE_END{count 0} is a failed page
+  // (re-PULL, no commit), as in sync_ref.py (an unbounded count).
+  {
+    SessionConfig cc, pc;
+    std::memset(&cc, 0, sizeof(cc));
+    std::memset(&pc, 0, sizeof(pc));
+    cc.role = ROLE_CENTRAL;
+    cc.deviceId = id8("A1B2C3D4E5F60718");
+    cc.kind = KIND_IOS;
+    cc.maxMsg = PHONE_MAXMSG;
+    cc.caps = CAPS_IOS;
+    cc.peerKind = KIND_HUB;
+    pc.role = ROLE_PERIPHERAL;
+    pc.deviceId = id8("0100246F28AE52C6");
+    pc.kind = KIND_HUB;
+    pc.maxMsg = HUB_MAXMSG;
+    pc.caps = CAPS_HUB;
+    pc.isHub = true;
+    TestNode cn, pn;
+    const Value gid = Value::str(hex(groupIdOf(reinterpret_cast<const uint8_t*>("0123456789ABCDEF")))),
+                gkey = Value::str(hex(reinterpret_cast<const uint8_t*>("0123456789ABCDEF"), 16));
+    cn.setGroup(gid, gkey);
+    pn.setGroup(gid, gkey);
+    cn.dbId = id8("1111111111111111");
+    pn.dbId = id8("2222222222222222");
+    pn.feedHigh = 5;
+    for (int i = 0; i < 4; i++) {
+      cn.nonces.push_back(id8("10000000000000" + std::to_string(10 + i)));
+      pn.nonces.push_back(id8("20000000000000" + std::to_string(10 + i)));
+    }
+    Session c, p;
+    c.attach(&cc, &cn);
+    p.attach(&pc, &pn);
+    auto sends = [](const ActionList& l) {
+      std::vector<Bytes> out;
+      for (size_t i = 0; i < l.size(); i++)
+        if (l[i].kind == ACT_SEND) out.push_back(Bytes(l.bytes(l[i]), l.bytes(l[i]) + l[i].len));
+      return out;
+    };
+    p.linkUp(0, 185);
+    std::vector<Bytes> toP = sends(c.linkUp(0, 185)), toC;
+    Bytes pull;
+    for (int round = 0; round < 4 && (!toP.empty() || !toC.empty()); round++) {
+      std::vector<Bytes> nextP, nextC;
+      for (const Bytes& m : toP) {
+        auto o = sends(p.rx(1, m.data(), m.size()));
+        nextC.insert(nextC.end(), o.begin(), o.end());
+      }
+      for (const Bytes& m : toC) {
+        auto o = sends(c.rx(1, m.data(), m.size()));
+        for (const Bytes& x : o)
+          if (x[0] == MSG_PULL) pull = x;
+        nextP.insert(nextP.end(), o.begin(), o.end());
+      }
+      toP.swap(nextP);
+      toC.swap(nextC);
+      if (!pull.empty()) break;
+    }
+    good = expectStr(sessionStateName(c.state()), "SYNCING", "pair reaches SYNCING") && good;
+    Msg pm;
+    if (pull.empty() || !decodeMsg(pull.data(), pull.size(), &pm).ok()) {
+      fail("local.robustness PULL", "none", "a PULL");
+      good = false;
+    } else {
+      const uint8_t rid = pm.pull.reqId;
+      Bytes rec = unhex("03010401000000020100");
+      rec[9] = rid;
+      const Bytes body = unhex("1013008301E100E90C00010F4D575A940705488BB011080100000000000000");
+      rec.insert(rec.end(), body.begin(), body.end());
+      for (uint32_t i = 0; i < 65536u; i++) c.rx(2, rec.data(), rec.size());
+      Bytes pe = unhex("04010100020405000000030100040405000000050100");  // PAGE_END{.., count 0}
+      pe[3] = rid;
+      const ActionList& out = c.rx(3, pe.data(), pe.size());
+      bool commit = false, repull = false;
+      for (size_t i = 0; i < out.size(); i++) {
+        if (out[i].kind == ACT_COMMIT) commit = true;
+        if (out[i].kind == ACT_SEND && out[i].msgType == MSG_PULL) repull = true;
+      }
+      good = expectStr(commit ? "commit" : "no commit", "no commit", "65,536 RECs then count 0") && good;
+      good = expectStr(repull ? "re-PULL" : "none", "re-PULL", "65,536 RECs then count 0: page failed") && good;
+    }
+  }
+  if (good) ok("local.robustness");
+}
+
 // ---- transcripts -------------------------------------------------------------------------------------
 struct LinkInfo {
   std::string central, peripheral;
@@ -1440,6 +1671,7 @@ int main(int argc, char** argv) {
     checkRouting(v);
     checkEvents(v);
     checkSessions(v);
+    checkRobustness();
     const auto ts = listTranscripts(dir + "/transcripts");
     if (ts.empty()) fail("transcripts", "none found", dir + "/transcripts/*.json");
     for (const auto& p : ts) checkTranscript(p);

@@ -41,18 +41,23 @@ data class RecordKey(val ns: Int, val packet: Bytes) : Comparable<RecordKey> {
             return RecordKey(ns, packet)
         }
 
-        /** `"<ns>:<HEX>"` -> key, or null when malformed. */
+        /**
+         * `"<ns>:<HEX>"` -> key, or null unless [s] is exactly a canonical key string (decimal ns
+         * 0 or 1, uppercase hex of a valid packet). Strict, so one key never has two map keys.
+         */
         fun parseKeyString(s: String): RecordKey? {
             val i = s.indexOf(':')
             if (i <= 0) return null
             val ns = s.substring(0, i).toIntOrNull() ?: return null
-            return try {
+            if (ns !in 0..255) return null // Bytes.of would wrap 256 to ns 0
+            val key = try {
                 decode(Bytes.of(ns) + Bytes.fromHex(s.substring(i + 1)))
             } catch (e: SyncException) {
-                null
+                return null
             } catch (e: IllegalArgumentException) {
-                null
+                return null
             }
+            return key.takeIf { it.keyString == s } // rejects "00:", "+0:", lowercase hex
         }
     }
 }

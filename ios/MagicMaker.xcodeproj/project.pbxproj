@@ -7,6 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		8C3262DDB64E82AAEA82B9E0 /* SyncSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 293FF8F0543F300FF1A2E26B /* SyncSession.swift */; };
+		ADB0BB9643E6A178036C00D6 /* SyncLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64064B66CE776C73479194D5 /* SyncLedger.swift */; };
+		FB58352CEAE7D859148A9ECA /* SyncRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89A3CFCB16AB9A01F76F884B /* SyncRouting.swift */; };
+		49B59DFC5D24AC926762EE5B /* SyncEvents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C24FE32DC685351C0A69CB /* SyncEvents.swift */; };
+		C81AECFAA232519337847DF1 /* SyncFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 083852C31A4D547953ED301E /* SyncFrames.swift */; };
+		3FBD6931BB74369625732D4D /* SyncMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE30D1218071BB579D999FC6 /* SyncMessages.swift */; };
+		DBD64AE77E2B3DE5A3D74623 /* SyncRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24E30AC899BCF5DE57B353A4 /* SyncRecord.swift */; };
+		812D60DD1E273BBBA111635C /* SyncText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68A2A32D9AF0EE9FA4AB9561 /* SyncText.swift */; };
+		C6C64D4AABF13AD719369CF9 /* SyncCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDD3F9EDD1D92155F49C5E84 /* SyncCrypto.swift */; };
+		527663300EF63568420DACF2 /* SyncConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5664C4714A500C9E8DD38B69 /* SyncConstants.swift */; };
+		586BF1A6D7D85127208C14B8 /* SyncBytes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F16890B159979FC0A13374 /* SyncBytes.swift */; };
 		53132E3ABF5AD13DC9AF32DF /* magicmaker-esp32-app.bin in Resources */ = {isa = PBXBuildFile; fileRef = 15545B59E5519AFAFE12A246 /* magicmaker-esp32-app.bin */; };
 		F33C09BEE5F201A0A040DCD4 /* magicmaker-heltec-v3-app.bin in Resources */ = {isa = PBXBuildFile; fileRef = A037E4FEE03150F0595EAEE0 /* magicmaker-heltec-v3-app.bin */; };
 		4B5CE1811418F5F442994F36 /* FirmwareUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E56DE67FB4B3B004B3B6251 /* FirmwareUpdater.swift */; };
@@ -86,6 +97,17 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		293FF8F0543F300FF1A2E26B /* SyncSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSession.swift; sourceTree = "<group>"; };
+		64064B66CE776C73479194D5 /* SyncLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncLedger.swift; sourceTree = "<group>"; };
+		89A3CFCB16AB9A01F76F884B /* SyncRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRouting.swift; sourceTree = "<group>"; };
+		E4C24FE32DC685351C0A69CB /* SyncEvents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncEvents.swift; sourceTree = "<group>"; };
+		083852C31A4D547953ED301E /* SyncFrames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncFrames.swift; sourceTree = "<group>"; };
+		FE30D1218071BB579D999FC6 /* SyncMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncMessages.swift; sourceTree = "<group>"; };
+		24E30AC899BCF5DE57B353A4 /* SyncRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRecord.swift; sourceTree = "<group>"; };
+		68A2A32D9AF0EE9FA4AB9561 /* SyncText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncText.swift; sourceTree = "<group>"; };
+		DDD3F9EDD1D92155F49C5E84 /* SyncCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCrypto.swift; sourceTree = "<group>"; };
+		5664C4714A500C9E8DD38B69 /* SyncConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConstants.swift; sourceTree = "<group>"; };
+		F6F16890B159979FC0A13374 /* SyncBytes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBytes.swift; sourceTree = "<group>"; };
 		15545B59E5519AFAFE12A246 /* magicmaker-esp32-app.bin */ = {isa = PBXFileReference; lastKnownFileType = file; path = "magicmaker-esp32-app.bin"; sourceTree = "<group>"; };
 		A037E4FEE03150F0595EAEE0 /* magicmaker-heltec-v3-app.bin */ = {isa = PBXFileReference; lastKnownFileType = file; path = "magicmaker-heltec-v3-app.bin"; sourceTree = "<group>"; };
 		0E56DE67FB4B3B004B3B6251 /* FirmwareUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirmwareUpdater.swift; sourceTree = "<group>"; };
@@ -173,6 +195,24 @@
 				A037E4FEE03150F0595EAEE0 /* magicmaker-heltec-v3-app.bin */,
 			);
 			path = Firmware;
+			sourceTree = "<group>";
+		};
+		547B8F755AA0185CE79D4662 /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				293FF8F0543F300FF1A2E26B /* SyncSession.swift */,
+				64064B66CE776C73479194D5 /* SyncLedger.swift */,
+				89A3CFCB16AB9A01F76F884B /* SyncRouting.swift */,
+				E4C24FE32DC685351C0A69CB /* SyncEvents.swift */,
+				083852C31A4D547953ED301E /* SyncFrames.swift */,
+				FE30D1218071BB579D999FC6 /* SyncMessages.swift */,
+				24E30AC899BCF5DE57B353A4 /* SyncRecord.swift */,
+				68A2A32D9AF0EE9FA4AB9561 /* SyncText.swift */,
+				DDD3F9EDD1D92155F49C5E84 /* SyncCrypto.swift */,
+				5664C4714A500C9E8DD38B69 /* SyncConstants.swift */,
+				F6F16890B159979FC0A13374 /* SyncBytes.swift */,
+			);
+			path = Sync;
 			sourceTree = "<group>";
 		};
 		F709DDD741EE34A3DD7624AC /* VFD */ = {
@@ -284,6 +324,7 @@
 			children = (
 				D2CDF6A19DE7C7BA815EF076 /* Firmware */,
 				F709DDD741EE34A3DD7624AC /* VFD */,
+				547B8F755AA0185CE79D4662 /* Sync */,
 				3E37DEFFC05D2AC1FAC1C8F2 /* Assets.xcassets */,
 				8602255608055BB152278E8A /* MagicMakerApp.swift */,
 				9D434489A5D76027E15694FC /* BLE */,
@@ -393,6 +434,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8C3262DDB64E82AAEA82B9E0 /* SyncSession.swift in Sources */,
+				ADB0BB9643E6A178036C00D6 /* SyncLedger.swift in Sources */,
+				FB58352CEAE7D859148A9ECA /* SyncRouting.swift in Sources */,
+				49B59DFC5D24AC926762EE5B /* SyncEvents.swift in Sources */,
+				C81AECFAA232519337847DF1 /* SyncFrames.swift in Sources */,
+				3FBD6931BB74369625732D4D /* SyncMessages.swift in Sources */,
+				DBD64AE77E2B3DE5A3D74623 /* SyncRecord.swift in Sources */,
+				812D60DD1E273BBBA111635C /* SyncText.swift in Sources */,
+				C6C64D4AABF13AD719369CF9 /* SyncCrypto.swift in Sources */,
+				527663300EF63568420DACF2 /* SyncConstants.swift in Sources */,
+				586BF1A6D7D85127208C14B8 /* SyncBytes.swift in Sources */,
 				4B5CE1811418F5F442994F36 /* FirmwareUpdater.swift in Sources */,
 				EE511A1BEA9DE1A7FFC11D62 /* FirmwareCatalog.swift in Sources */,
 				E44A266C036A56361A611FB3 /* LabSegmentEditorSheet.swift in Sources */,

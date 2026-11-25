@@ -179,6 +179,8 @@ final class AndroidRelayGattClient: NSObject {
     private var lockedRelayId: UUID?
     private weak var activeCentral: CBCentralManager?
     private var broadcastingUntil: Date?
+    /// Numbers each TX write, so the end-of-burst timer of a send a newer one replaced does nothing.
+    private var txWriteSerial = 0
     // When we last made forward progress (started a connect, linked, or dropped). Used to detect a
     // link that got wedged (e.g. connected but never finished char discovery) so a periodic caller
     // can force a clean retry instead of the user having to kill and reopen the app.
@@ -533,16 +535,52 @@ final class AndroidRelayGattClient: NSObject {
         }
     }
 
-    func sendRemoteCommandJson(_ body: [String: Any], onComplete: @escaping ([String: Any]?) -> Void) {
+    /// `coalesceKind`: a command that sets one state outright (an ESP32 loop or keep-awake). While
+    /// the last command queued is one of the same kind that has not started, this one replaces its
+    /// body instead of queueing a second write and reply read; both callers get this one's reply.
+    func sendRemoteCommandJson(
+        _ body: [String: Any],
+        coalesceKind: String? = nil,
+        onComplete: @escaping ([String: Any]?) -> Void
+    ) {
         guard isCommandReady, !otaBusy else {
             onComplete(nil)
             return
         }
+        if let coalesceKind, let waiting = tailCommand, waiting.kind == coalesceKind, !waiting.started {
+            waiting.body = body
+            waiting.completions.append(onComplete)
+            return
+        }
+        let command = QueuedCommand(kind: coalesceKind, body: body, completion: onComplete)
         enqueueGatt { [weak self] in
-            self?.runCommandJson(body) { json in
-                onComplete(json)
+            command.started = true
+            guard let self else { return }
+            if self.tailCommand === command { self.tailCommand = nil }
+            self.runCommandJson(command.body) { [weak self] json in
+                for done in command.completions {
+                    done(json)
+                }
                 self?.completeGattOperation()
             }
+        }
+        // Queued behind other work: a newer command of its kind may still replace it.
+        if coalesceKind != nil && !command.started {
+            tailCommand = command
+        }
+    }
+
+    /// A command in the GATT queue, with everyone waiting for its reply.
+    private final class QueuedCommand {
+        let kind: String?
+        var body: [String: Any]
+        var completions: [([String: Any]?) -> Void]
+        var started = false
+
+        init(kind: String?, body: [String: Any], completion: @escaping ([String: Any]?) -> Void) {
+            self.kind = kind
+            self.body = body
+            self.completions = [completion]
         }
     }
 
@@ -707,7 +745,7 @@ final class AndroidRelayGattClient: NSObject {
             onComplete(nil)
             return
         }
-        enqueueGatt { [weak self] in
+        enqueueGatt(background: true) { [weak self] in
             self?.runStatusRead { status in
                 onComplete(status)
                 self?.completeGattOperation()
@@ -738,18 +776,40 @@ final class AndroidRelayGattClient: NSObject {
     private var pendingCommandReadUseCatalog = false
     private var isStatusReadBlocked = false
     private let maxCommandReadAttempts = 5
-    private var gattQueue: [() -> Void] = []
-    private var gattBusy = false
 
-    private func enqueueGatt(_ start: @escaping () -> Void) {
-        gattQueue.append(start)
+    /// One GATT operation waiting its turn. A status poll is `background`: any other operation
+    /// (a command the user gave, a catalog read) goes ahead of polls still waiting, so a poll
+    /// holds it up for at most the read already in flight.
+    private struct GattOp {
+        let background: Bool
+        let start: () -> Void
+    }
+    private var gattQueue: [GattOp] = []
+    private var gattBusy = false
+    /// The last command queued that a newer one of its kind may replace (`coalesceKind`); nil
+    /// once it starts or anything but a poll is queued after it.
+    private var tailCommand: QueuedCommand?
+
+    private func enqueueGatt(background: Bool = false, _ start: @escaping () -> Void) {
+        let op = GattOp(background: background, start: start)
+        if background {
+            gattQueue.append(op)
+        } else {
+            tailCommand = nil
+            if let firstPoll = gattQueue.firstIndex(where: { (queued: GattOp) -> Bool in queued.background }) {
+                gattQueue.insert(op, at: firstPoll)
+            } else {
+                gattQueue.append(op)
+            }
+        }
         pumpGattQueue()
     }
 
     private func pumpGattQueue() {
         guard !gattBusy, !gattQueue.isEmpty else { return }
         gattBusy = true
-        gattQueue.removeFirst()()
+        let op: GattOp = gattQueue.removeFirst()
+        op.start()
     }
 
     private func completeGattOperation() {
@@ -863,6 +923,7 @@ final class AndroidRelayGattClient: NSObject {
         isStatusReadBlocked = false
         gattBusy = false
         gattQueue.removeAll()
+        tailCommand = nil
     }
 
     private func disconnectRelay(central: CBCentralManager) {
@@ -901,19 +962,43 @@ final class AndroidRelayGattClient: NSObject {
             finishPending(success: false, onComplete: onComplete)
             return
         }
+        txWriteSerial += 1
+        let serial: Int = txWriteSerial
         pendingCompletion = onComplete
-        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
+        let writeType: CBCharacteristicWriteType = transmitWriteType(characteristic, on: peripheral, length: data.count)
         broadcastingUntil = Date().addingTimeInterval(Double(durationMs) / 1000 + 1.0)
         peripheral.writeValue(data, for: characteristic, type: writeType)
         onStatus?("Android broadcasting — hold phone near MagicBand")
         DispatchQueue.main.asyncAfter(deadline: .now() + Double(durationMs) / 1000 + 0.5) { [weak self] in
             guard let self else { return }
+            guard self.txWriteSerial == serial else {
+                // A newer write replaced this send (the ESP32 takes the newest): only this send's
+                // own caller hears that it ended; the newer send's state is left alone.
+                onComplete(true)
+                return
+            }
             self.broadcastingUntil = nil
             self.finishPending(success: true, onComplete: onComplete)
             if self.txCharacteristic == nil, self.relay == nil {
                 self.scanCoordinator?.resumeScanAfterRelayConnect(restartDisneyScan: false)
             }
         }
+    }
+
+    /// How a TX write goes out. To the ESP32 it is a write without response when the packet fits
+    /// one: an ATT command needs no request slot, so it is not held behind a STATUS read in
+    /// flight (the 2 s poll, a command's reply; long while a loop runs), as a write request is —
+    /// ATT allows one request at a time. The Android relay keeps the write with response.
+    private func transmitWriteType(_ characteristic: CBCharacteristic, on peripheral: CBPeripheral, length: Int) -> CBCharacteristicWriteType {
+        let properties: CBCharacteristicProperties = characteristic.properties
+        if !properties.contains(.write) { return .withoutResponse }
+        guard RelayBackend.load() == .esp32,
+              properties.contains(.writeWithoutResponse),
+              peripheral.canSendWriteWithoutResponse,
+              length <= peripheral.maximumWriteValueLength(for: .withoutResponse) else {
+            return .withResponse
+        }
+        return .withoutResponse
     }
 
     private func finishPending(success: Bool, onComplete: ((Bool) -> Void)? = nil) {

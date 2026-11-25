@@ -147,8 +147,11 @@ final class AppViewModel: ObservableObject {
                 return
             }
             // The ESP32 clamps a TX write to 60...12000 ms (0 means its default for the packet).
-            let onAirMs: Int = self.relayBackend == .esp32 ? max(durationMs, 60) : durationMs
-            self.ble.send(hex: hex, durationMs: onAirMs, onComplete: completion)
+            let esp32: Bool = self.relayBackend == .esp32
+            let onAirMs: Int = esp32 ? max(durationMs, 60) : durationMs
+            // The ESP32 replaces what it has on air with the newest write, so a send the TX
+            // engine cut short (relayTakesNewestSend) is superseded rather than waited for.
+            self.ble.send(hex: hex, durationMs: onAirMs, supersede: esp32, onComplete: completion)
         }
         tx.radioBurst = { [weak self] hex, durationMs, completion in
             guard let self else {
@@ -164,6 +167,10 @@ final class AppViewModel: ObservableObject {
             self?.scan.scanActive ?? false
         }
         tx.relayRunsLoops = { [weak self] in
+            self?.relayBackend == .esp32
+        }
+        // A TX write to the ESP32 takes the air at once whatever it is sending (newest wins).
+        tx.relayTakesNewestSend = { [weak self] in
             self?.relayBackend == .esp32
         }
         tx.relayLoopChanged = { [weak self] loop, enabled, hex, label, intervalMs in
@@ -848,10 +855,24 @@ final class AppViewModel: ObservableObject {
         default: name = action
         }
         let on: Bool = params["enabled"] as? Bool ?? false
-        remote.sendCommand(action, params: params, central: ble.bleCentral) { [weak self] ok in
+        var body: [String: Any] = params
+        body["action"] = action
+        // Each of these sets one state outright, so one still waiting for the link is replaced by
+        // a newer one of its kind (quick colour taps while the wand loop runs cost one command).
+        ble.bleCentral.relayGatt.sendRemoteCommandJson(body, coalesceKind: action) { [weak self] json in
             Task { @MainActor in
-                self?.statusMessage = ok ? "ESP32 \(name) \(on ? "ON" : "OFF")" : "ESP32 \(action) failed"
-                self?.refreshAndroidRemote()
+                guard let self else { return }
+                let ok: Bool = json?["ok"] as? Bool == true
+                self.statusMessage = ok ? "ESP32 \(name) \(on ? "ON" : "OFF")" : "ESP32 \(action) failed"
+                // The reply is read from STATUS: the chip's whole status after this command
+                // (firmware 1.2+). Taking it saves a second long read of the link while a loop runs.
+                if let json, json["running"] != nil {
+                    let status = AndroidRemoteStatus.parse(json)
+                    self.androidRemote = status
+                    self.esp32StatusRead(status)
+                } else {
+                    self.refreshAndroidRemote()
+                }
             }
         }
     }

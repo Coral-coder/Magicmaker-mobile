@@ -103,6 +103,10 @@ final class TxEngine: ObservableObject {
     /// True when the selected relay runs the TX and wand loops itself (the ESP32): this engine then
     /// keeps their switches, packets and intervals for the UI and never times their bursts.
     var relayRunsLoops: () -> Bool = { false }
+    /// True when the relay replaces whatever it has on air with a newer send (the ESP32: the
+    /// newest wins). A manual send then ends the send in progress (an auto-response, a show burst,
+    /// an earlier tap) at once instead of waiting out its time on air and the relay's lead.
+    var relayTakesNewestSend: () -> Bool = { false }
     /// Hands a loop change to that relay; `hex` is nil when no packet is picked.
     var relayLoopChanged: ((_ loop: RelayLoop, _ enabled: Bool, _ hex: String?, _ label: String, _ intervalMs: Int) -> Void)?
     /// Label the relay reported for a loop packet this iPhone does not have.
@@ -158,6 +162,11 @@ final class TxEngine: ObservableObject {
     private var sendSerial = 0
     private var openSendSerial = 0
     private var sendWatchdog: Task<Void, Never>?
+    // The send on air until its `done` has been called: its serial, its `done`, and the wait
+    // after the relay's answer (the relay's lead). `cutLiveSend` ends it early.
+    private var liveSendSerial = 0
+    private var liveSendDone: ((String?) -> Void)?
+    private var liveSendHold: Task<Void, Never>?
 
     private enum BurstKind {
         case starlight
@@ -274,7 +283,8 @@ final class TxEngine: ObservableObject {
     // MARK: - Single sends
 
     /// One packet, ahead of anything queued. Its time on air follows the kind of packet and the
-    /// timing settings.
+    /// timing settings. With a relay that takes the newest send (the ESP32) it does not wait for
+    /// the send on air either (see `enqueueRadioWork`).
     func transmit(hex: String, label: String) {
         let txHex = HexUtils.canonicalHex(hex)
         let starlight = HexUtils.isStarlightPacket(txHex)
@@ -299,7 +309,8 @@ final class TxEngine: ObservableObject {
             .manual,
             status: starlight ? "Wand TX…" : "TX…",
             onCompleteStatus: keepAwakeOn() ? "Keeping band awake" : doneStatus,
-            // A tap supersedes whatever is queued, so it goes out as soon as the air is free.
+            // A tap supersedes whatever is queued, so it goes out as soon as the air is free
+            // (at once when the relay takes the newest send).
             preempt: true,
             send: { [weak self] done in
                 guard let self else { return }
@@ -498,6 +509,8 @@ final class TxEngine: ObservableObject {
     // MARK: - Wand loop
 
     func setStarlightLoop(enabled: Bool, packetId: Int64?, intervalMs: Int?) {
+        // The colour the running loop sends now, before this call changes it.
+        let loopHexBefore: String? = starlightLoopEnabled ? starlightLoopHex() : nil
         if let packetId, starlightLoopPacketId != packetId {
             starlightLoopPacketId = packetId
             relayWandLabel = nil
@@ -515,10 +528,18 @@ final class TxEngine: ObservableObject {
                     refreshLoopLabels()
                     return
                 }
+                // A new colour for a loop that runs: the relay lets a loop burst already on air
+                // finish in the old colour, but puts a send on air at once (the newest wins), so
+                // the colour is also sent now, as a tap on the TX tab does while its loop runs.
+                let sendNow: Bool = starlightLoopEnabled && hex != loopHexBefore && radioReady()
                 stopTxLoop()
                 stopRandomShow()
                 if !starlightLoopEnabled { starlightLoopEnabled = true }
-                relayLoopChanged?(.wand, true, hex, currentStarlightLoopLabel(), starlightIntervalMs)
+                let label: String = currentStarlightLoopLabel()
+                if sendNow {
+                    transmit(hex: hex, label: label)
+                }
+                relayLoopChanged?(.wand, true, hex, label, starlightIntervalMs)
             } else {
                 stopStarlightLoop()
             }
@@ -981,7 +1002,10 @@ final class TxEngine: ObservableObject {
     // MARK: - Radio queue
 
     /// Sends are serialised: the one in progress finishes before the next starts. A manual
-    /// send (`preempt`) drops the queued backlog and goes next.
+    /// send (`preempt`) drops the queued backlog and goes next. With a relay that takes the
+    /// newest send (the ESP32 replaces what it has on air at once), it does not wait for the
+    /// job in progress either: that job's packet on air is ended now, so the job finishes (a
+    /// stack stops after it) and the manual send is handed to the relay on this same turn.
     private func enqueueRadioWork(
         _ tag: JobTag,
         preempt: Bool,
@@ -998,6 +1022,10 @@ final class TxEngine: ObservableObject {
         // Told only now, so anything a dropped job puts back lands behind the new work.
         for job in dropped {
             job.onDropped?()
+        }
+        // After the new work is queued, so whatever the cut job puts back lands behind it too.
+        if preempt && txRunning && relayTakesNewestSend() {
+            cutLiveSend()
         }
         drainRadioQueue()
     }
@@ -1081,10 +1109,11 @@ final class TxEngine: ObservableObject {
         }
     }
 
-    /// Hands one packet to the relay and waits for its burst to end. `done` always arrives on
-    /// a later turn of the main actor: nil when the packet went out, otherwise why it did not.
-    /// `fixedMs` puts the packet on air for exactly that long (replay); without it the time
-    /// follows the kind of packet.
+    /// Hands one packet to the relay and waits for its burst to end. `done` arrives on a later
+    /// turn of the main actor: nil when the packet went out, otherwise why it did not. The one
+    /// exception is a manual send to a relay that takes the newest send (`cutLiveSend`), which
+    /// calls it with nil at once. `fixedMs` puts the packet on air for exactly that long (replay);
+    /// without it the time follows the kind of packet.
     private func sendPacket(_ hex: String, durationMs fixedMs: Int? = nil, raw: Bool = false, _ done: @escaping (String?) -> Void) {
         let canonical = HexUtils.canonicalHex(hex)
         if let reason = HexUtils.legacyAdvertiseRejectReason(canonical) {
@@ -1103,6 +1132,10 @@ final class TxEngine: ObservableObject {
         sendSerial += 1
         let serial = sendSerial
         openSendSerial = serial
+        liveSendHold?.cancel()
+        liveSendHold = nil
+        liveSendSerial = serial
+        liveSendDone = done
         sendWatchdog?.cancel()
         let watchdogNs = UInt64(max(durationMs, 0) + TxEngine.sendWatchdogMs) * 1_000_000
         sendWatchdog = Task { @MainActor [weak self] in
@@ -1110,7 +1143,7 @@ final class TxEngine: ObservableObject {
             if Task.isCancelled { return }
             guard let self, self.openSendSerial == serial else { return }
             self.openSendSerial = 0
-            done(TxEngine.sendFailedStatus)
+            self.endLiveSend(serial, failure: TxEngine.sendFailedStatus)
         }
         let sender: (String, Int, @escaping (Bool) -> Void) -> Void
         if raw, let burst = radioBurst {
@@ -1124,11 +1157,47 @@ final class TxEngine: ObservableObject {
             self.sendWatchdog?.cancel()
             self.sendWatchdog = nil
             if sent {
-                self.finishSend(done, failure: nil, afterMs: holdMs)
+                self.holdLiveSend(serial, failure: nil, afterMs: holdMs)
             } else {
-                self.finishSend(done, failure: TxEngine.sendFailedStatus, afterMs: 0)
+                self.holdLiveSend(serial, failure: TxEngine.sendFailedStatus, afterMs: 0)
             }
         }
+    }
+
+    /// The relay answered the live send: its `done` follows after `afterMs` (the relay's lead),
+    /// on a later turn of the main actor.
+    private func holdLiveSend(_ serial: Int, failure: String?, afterMs: Int) {
+        guard liveSendSerial == serial else { return }
+        let waitNs = UInt64(max(afterMs, 0)) * 1_000_000
+        liveSendHold?.cancel()
+        liveSendHold = Task { @MainActor [weak self] in
+            if waitNs > 0 {
+                try? await Task.sleep(nanoseconds: waitNs)
+            }
+            if Task.isCancelled { return }
+            self?.endLiveSend(serial, failure: failure)
+        }
+    }
+
+    /// Calls the live send's `done`, once.
+    private func endLiveSend(_ serial: Int, failure: String?) {
+        guard liveSendSerial == serial, let done = liveSendDone else { return }
+        liveSendSerial = 0
+        liveSendDone = nil
+        liveSendHold = nil
+        done(failure)
+    }
+
+    /// Ends the live send now, as if its burst were over: the relay is about to replace it with
+    /// a newer send. Its late answer, watchdog and hold are dropped. Nothing when no send is live.
+    private func cutLiveSend() {
+        let serial: Int = liveSendSerial
+        if serial == 0 { return }
+        openSendSerial = 0
+        sendWatchdog?.cancel()
+        sendWatchdog = nil
+        liveSendHold?.cancel()
+        endLiveSend(serial, failure: nil)
     }
 
     private func finishSend(_ done: @escaping (String?) -> Void, failure: String?, afterMs: Int) {

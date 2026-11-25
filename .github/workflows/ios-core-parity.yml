@@ -10,9 +10,16 @@ name: iOS core parity
 #   vfd      compiles the Foundation-only VFD theme core (ios/MagicMaker/VFD: glyphs, frame buffer,
 #            widgets) with ios/VFDCheck/main.swift and replays tools/vfd/golden/ops.txt, which must
 #            give tools/vfd/golden/expected.txt (what the Python preview renderer draws).
+#   sync     compiles the Foundation-only SYNC codec (ios/MagicMaker/Sync: record/message codecs,
+#            framing, SHA-256/HMAC, ledger, events, routing, session state machine) with
+#            ios/SyncCheck/main.swift and checks it against tools/sync/vectors.json and the golden
+#            transcripts in tools/sync/transcripts (what tools/sync/sync_ref.py computes).
 #
 # Regenerate the VFD golden files after changing tools/vfd/vfd.py or widgets.py:
 #   python3 tools/vfd/golden.py
+#
+# Regenerate the sync vectors and transcripts after changing tools/sync/sync_ref.py:
+#   python3 tools/sync/gen_vectors.py
 #
 # Regenerate the vectors after changing the Android core:
 #   cd tools/parity && ../../android/gradlew --no-daemon -q run
@@ -31,6 +38,9 @@ on:
       - "ios/MagicMaker/VFD/**"
       - "ios/VFDCheck/**"
       - "tools/vfd/**"
+      - "ios/MagicMaker/Sync/**"
+      - "ios/SyncCheck/**"
+      - "tools/sync/**"
       - ".github/workflows/ios-core-parity.yml"
   workflow_dispatch:
 
@@ -233,3 +243,79 @@ jobs:
             exit 1
           fi
           grep -E "^VFD:" /tmp/vfd-run.log >> "$GITHUB_STEP_SUMMARY" || true
+
+  sync:
+    name: Swift sync codec matches the shared vectors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      # Same helper as the parity job: the first 60 problem lines in at most 8 ::error:: commands.
+      - name: Annotation helper
+        run: |
+          cat > /tmp/annotate.sh <<'EOF'
+          #!/usr/bin/env bash
+          # usage: annotate.sh <title> <file with one problem per line>
+          head -n 60 "$2" | awk -v title="$1" '
+            {
+              gsub(/%/, "%25")
+              gsub(/\r/, "%0D")
+              block = (count % 8 == 0) ? $0 : block "%0A" $0
+              count++
+              if (count % 8 == 0) { printf "::error title=%s::%s\n", title, block; block = "" }
+            }
+            END { if (count % 8 != 0) printf "::error title=%s::%s\n", title, block }
+          '
+          EOF
+          chmod +x /tmp/annotate.sh
+
+      # That the committed vectors and transcripts are current (gen_vectors.py --check) and pass the
+      # Python model harness is checked by the "vectors" job of .github/workflows/sync-vectors.yml.
+
+      # Every Sync file is listed: they are one module, and a new file must be added here on purpose
+      # (and to ios/MagicMaker.xcodeproj). Swift 5 mode, as in the app target.
+      - name: Compile the Swift sync codec with the vector checker
+        run: |
+          set -o pipefail
+          if ! swiftc -O -swift-version 5 -o /tmp/synccheck \
+            ios/MagicMaker/Sync/SyncBytes.swift \
+            ios/MagicMaker/Sync/SyncConstants.swift \
+            ios/MagicMaker/Sync/SyncCrypto.swift \
+            ios/MagicMaker/Sync/SyncEvents.swift \
+            ios/MagicMaker/Sync/SyncFrames.swift \
+            ios/MagicMaker/Sync/SyncLedger.swift \
+            ios/MagicMaker/Sync/SyncMessages.swift \
+            ios/MagicMaker/Sync/SyncRecord.swift \
+            ios/MagicMaker/Sync/SyncRouting.swift \
+            ios/MagicMaker/Sync/SyncSession.swift \
+            ios/MagicMaker/Sync/SyncText.swift \
+            ios/SyncCheck/main.swift 2>&1 | tee /tmp/sync-compile.log
+          then
+            grep -E "error:" /tmp/sync-compile.log > /tmp/sync-problems.txt || true
+            if [ ! -s /tmp/sync-problems.txt ]; then
+              tail -n 60 /tmp/sync-compile.log > /tmp/sync-problems.txt
+            fi
+            /tmp/annotate.sh "Swift sync codec does not compile on Linux" /tmp/sync-problems.txt
+            exit 1
+          fi
+
+      # On a mismatch: the checker's summary, then its first MISMATCH lines. A checker that died
+      # before its summary (a trap) gets the end of its output instead.
+      - name: Check the Swift sync codec against the vectors and transcripts
+        run: |
+          set -o pipefail
+          if ! /tmp/synccheck tools/sync 2>&1 | tee /tmp/sync-run.log
+          then
+            grep -E "^SYNC:" /tmp/sync-run.log > /tmp/sync-problems.txt || true
+            if [ ! -s /tmp/sync-problems.txt ]; then
+              echo "SYNC: the checker stopped before its summary; the end of its output:" > /tmp/sync-problems.txt
+              tail -n 20 /tmp/sync-run.log >> /tmp/sync-problems.txt
+            fi
+            grep -E "^MISMATCH " /tmp/sync-run.log | cut -c1-400 | head -n 40 >> /tmp/sync-problems.txt || true
+            /tmp/annotate.sh "Swift sync codec differs from tools/sync" /tmp/sync-problems.txt
+            exit 1
+          fi
+          grep -E "^(NOTE|SYNC):" /tmp/sync-run.log >> "$GITHUB_STEP_SUMMARY" || true

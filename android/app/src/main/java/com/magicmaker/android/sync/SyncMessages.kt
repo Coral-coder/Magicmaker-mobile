@@ -215,13 +215,20 @@ internal object MsgCodec {
                 v
             }
             FType.PACKET -> x as Bytes
-            FType.KEY -> (x as RecordKey).encode()
+            FType.KEY -> {
+                val k = x as RecordKey
+                require(k.ns in 0..255) { "${spec.name}: ns ${k.ns}" } // Bytes.of would wrap it
+                k.encode()
+            }
             FType.LINK -> {
                 val l = x as HbLink
+                require(l.peerId.size == 8) { "link peerId must be 8 bytes" }
+                require(l.peerKind in 0..255 && l.flags in 0..255) { "link peerKind/flags must be u8" }
                 l.peerId + Bytes.of(l.peerKind, l.flags)
             }
             FType.EVTWM -> {
                 val w = x as EvtWm
+                require(w.origin.size == 8) { "evtWm origin must be 8 bytes" }
                 w.origin + Bytes.le(w.epoch, 4, false) + Bytes.le(w.seq, 4, false)
             }
             else -> throw AssertionError(t)
@@ -278,6 +285,7 @@ internal object MsgCodec {
     /**
      * Canonical encoding: tags ascending, repeatable tags consecutive in list order, an optional
      * field omitted when absent or equal to its default; REC body bytes verbatim after the envelope.
+     * The result is checked with [decode]; IllegalArgumentException when it would not decode.
      */
     fun encode(mtype: Int, fields: Map<String, Any?>): Bytes {
         val specs = SPECS[mtype] ?: throw IllegalArgumentException("unknown message type $mtype")
@@ -298,8 +306,20 @@ internal object MsgCodec {
             if (!spec.mand && spec.default != null && (x as Number).toLong() == spec.default) continue
             w.tlv(spec.tag, encodeValue(spec, x))
         }
-        if (mtype == MsgType.REC) w.bytes(fields[BODY] as Bytes)
-        return w.toBytes()
+        val body = if (mtype == MsgType.REC) fields[BODY] as Bytes else null
+        if (body != null) w.bytes(body)
+        val out = w.toBytes()
+        // Never emit what a receiver rejects: ranges (PULL reqId 1..255, HB battPct, ...), cross-field
+        // rules (EVT fix all-or-none, seenBy on a page REC, JOIN groupId non-zero) and a REC body
+        // made of anything but body TLVs fail here (IllegalArgumentException, a caller bug) instead
+        // of on the peer as ERR BAD_MSG. A REC whose body is merely invalid (§11.4) still encodes.
+        val back = try {
+            decode(out).second
+        } catch (e: SyncException) {
+            throw IllegalArgumentException("${MsgType.name(mtype)} does not encode to a valid message (${e.reason})")
+        }
+        require(body == null || back!![BODY] == body) { "REC body must be body TLVs (0x10..0x1F) only" }
+        return out
     }
 }
 
@@ -314,7 +334,10 @@ sealed class SyncMsg {
     /** The generic field map of this message (what the spec-driven codec encodes). */
     internal abstract fun toFields(): Map<String, Any?>
 
-    /** Canonical encoding (§10). */
+    /**
+     * Canonical encoding (§10). IllegalArgumentException when a field is out of its wire width or
+     * range, or the message would fail the receiver's decoder (a caller bug; nothing is emitted).
+     */
     fun encode(): Bytes = MsgCodec.encode(type, toFields())
 
     /** A message type v1 does not know: ignored silently (counted), never answered. */
