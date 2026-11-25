@@ -6,26 +6,33 @@ import SwiftUI
 
 // MARK: - New Wand list
 
-/// One New Wand code: its last 2 bytes on the left, its custom name or colour on the right.
+/// One New Wand code: its last 2 bytes on the left, its custom name or colour on the right, then
+/// the Apple Watch star.
 private struct WandCodeRow: View {
     let key: String
     let name: String
     let selected: Bool
+    let starred: Bool
     let onTap: () -> Void
     let onLongPress: () -> Void
+    let onStar: () -> Void
 
     init(
         key: String,
         name: String,
         selected: Bool,
+        starred: Bool,
         onTap: @escaping () -> Void,
-        onLongPress: @escaping () -> Void
+        onLongPress: @escaping () -> Void,
+        onStar: @escaping () -> Void
     ) {
         self.key = key
         self.name = name
         self.selected = selected
+        self.starred = starred
         self.onTap = onTap
         self.onLongPress = onLongPress
+        self.onStar = onStar
     }
 
     var body: some View {
@@ -50,8 +57,9 @@ private struct WandCodeRow: View {
                     .foregroundStyle(selected ? MMTheme.cyan : MMTheme.textDim)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                // Its 36 pt tap area sets the row's height (the text had 8 pt above and below).
+                FavoriteStarButton(on: starred, action: onStar)
             }
-            .padding(.vertical, 8)
             Rectangle()
                 .fill(MMTheme.panelLine)
                 .frame(height: 0.5)
@@ -60,30 +68,38 @@ private struct WandCodeRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: Text(starred ? "Remove from watch" : "Add to watch")) {
+            onStar()
+        }
     }
 }
 
 /// Android `NewWandList`: the scrollable New Wand codes, each keyed by its last 2 bytes. Tap
-/// sends; a long press renames.
+/// sends; a long press renames; the star adds the code to the Apple Watch favourites.
 private struct WandCodeList: View {
     let packets: [MagicPacket]
     let selectedId: Int64
     let names: [String: String]
     let onSelect: (MagicPacket) -> Void
     let onLongPress: (MagicPacket) -> Void
+    let onStar: (MagicPacket) -> Void
+    /// The stars follow every favourites change.
+    @ObservedObject private var favorites: WatchFavoritesStore = WatchFavoritesStore.shared
 
     init(
         packets: [MagicPacket],
         selectedId: Int64,
         names: [String: String],
         onSelect: @escaping (MagicPacket) -> Void,
-        onLongPress: @escaping (MagicPacket) -> Void
+        onLongPress: @escaping (MagicPacket) -> Void,
+        onStar: @escaping (MagicPacket) -> Void
     ) {
         self.packets = packets
         self.selectedId = selectedId
         self.names = names
         self.onSelect = onSelect
         self.onLongPress = onLongPress
+        self.onStar = onStar
     }
 
     var body: some View {
@@ -119,8 +135,10 @@ private struct WandCodeList: View {
             key: WandCodeList.key(packet.hex),
             name: displayName(packet),
             selected: packet.id == selectedId,
+            starred: favorites.isStarred(hex: packet.hex),
             onTap: { onSelect(packet) },
-            onLongPress: { onLongPress(packet) }
+            onLongPress: { onLongPress(packet) },
+            onStar: { onStar(packet) }
         )
     }
 
@@ -160,12 +178,16 @@ struct WandScreen: View {
     @State private var editQuick: Bool = false
     @State private var quickLabelDraft: String = ""
     @State private var quickHexDraft: String = ""
+    /// Apple Watch favourites: the stars follow every change.
+    @ObservedObject private var favorites: WatchFavoritesStore = WatchFavoritesStore.shared
+    @State private var favoritesFull: Bool = false
 
     init() {}
 
     var body: some View {
         screen
             .confirmDelete($deleteRequest)
+            .favoritesFullAlert($favoritesFull)
     }
 
     private var screen: some View {
@@ -210,6 +232,8 @@ struct WandScreen: View {
                 packets: library,
                 displayColorIndex: vm.wandDisplayColorIndex,
                 onDelete: { packet in askDeleteColor(packet) },
+                isStarred: { packet in favorites.isStarred(hex: packet.hex) },
+                onStar: { packet in toggleStar(hex: packet.hex, label: packet.label, source: WatchFavorite.Source.wandColor) },
                 onTransmit: { packet in transmitColor(packet) }
             )
         }
@@ -221,7 +245,8 @@ struct WandScreen: View {
             selectedId: selectedId,
             names: vm.newWandNames,
             onSelect: { packet in transmitColor(packet) },
-            onLongPress: { packet in beginRename(packet) }
+            onLongPress: { packet in beginRename(packet) },
+            onStar: { packet in toggleStar(hex: packet.hex, label: newWandLabel(packet), source: WatchFavorite.Source.newWand) }
         )
         .alert("RENAME CODE", isPresented: renamePresented, presenting: renameTarget) { target in
             TextField("Name", text: $renameText)
@@ -268,6 +293,8 @@ struct WandScreen: View {
                 .textInputAutocapitalization(.characters)
             Button("SAVE") {
                 vm.setWandQuick(label: quickLabelDraft, hex: quickHexDraft)
+                // A starred quick button: its watch favourite follows the new code.
+                favorites.followQuick(label: vm.wandQuickLabel, hex: vm.wandQuickHex)
             }
             Button("CANCEL", role: .cancel) { }
         }
@@ -296,9 +323,19 @@ struct WandScreen: View {
         .buttonStyle(.plain)
     }
 
+    /// The quick button and its Apple Watch star (the favourite follows the button).
+    private var quickButton: some View {
+        HStack(spacing: 4) {
+            quickButtonFace
+            FavoriteStarButton(on: favorites.isQuickStarred) {
+                toggleQuickStar()
+            }
+        }
+    }
+
     /// Programmable quick button (the New Wand "Off" code until reprogrammed), shown in both
     /// wand modes. Tap sends it; a long press reprograms its label and code.
-    private var quickButton: some View {
+    private var quickButtonFace: some View {
         Text(vm.wandQuickLabel.uppercased())
             .font(MMTheme.techLabel())
             .foregroundStyle(MMTheme.textPrimary)
@@ -465,6 +502,31 @@ struct WandScreen: View {
                 intervalMs: TxLoopInterval.milliseconds(seconds)
             )
         }
+    }
+
+    // MARK: Apple Watch stars
+
+    /// A colour's or code's watch star: adds it to the favourites, or removes it.
+    private func toggleStar(hex: String, label: String, source: String) {
+        if !favorites.toggle(hex: hex, label: label, source: source) {
+            favoritesFull = true
+        }
+    }
+
+    /// The quick button's watch star (its favourite follows the button when reprogrammed).
+    private func toggleQuickStar() {
+        vm.reloadWandQuickIfChanged()
+        if !favorites.toggleQuick(label: vm.wandQuickLabel, hex: vm.wandQuickHex) {
+            favoritesFull = true
+        }
+    }
+
+    /// A New Wand code's favourite label: its custom name, or else its own label.
+    private func newWandLabel(_ packet: MagicPacket) -> String {
+        if let custom = vm.newWandNames[packet.hex.uppercased()], !custom.isEmpty {
+            return custom
+        }
+        return packet.label
     }
 
     // MARK: Editing

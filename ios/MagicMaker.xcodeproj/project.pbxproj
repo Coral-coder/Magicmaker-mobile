@@ -94,7 +94,46 @@
 		D4E5F60718293A4B5C6D7E9 /* WiFiJoiner.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5F60718293A4B5C6D7E8FA /* WiFiJoiner.swift */; };
 		F60718293A4B5C6D7E8FB0 /* PairingQRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0718293A4B5C6D7E8FB011 /* PairingQRScannerView.swift */; };
 		F664819506FB77F20D176969 /* AndroidRelayGattClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 213E2CED2AADA68CBCBE83FC /* AndroidRelayGattClient.swift */; };
+		817EBF527C416A53A2829FD0 /* WatchProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D42E6EEB3BC6BCA4A1E69757 /* WatchProtocol.swift */; };
+		90BFC40551937363F078850A /* WatchProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D42E6EEB3BC6BCA4A1E69757 /* WatchProtocol.swift */; };
+		74925FBFC78E1945A4032523 /* WatchFavoritesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8969EC385BE0032044B5C3EF /* WatchFavoritesStore.swift */; };
+		B3B244288A3F41E141FE3D9D /* WatchBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 041DBA328C62BE5BABF8845B /* WatchBridge.swift */; };
+		EE11107754741EB68E06FDB9 /* WatchContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A3E74B82DED0737F1280693 /* WatchContextBuilder.swift */; };
+		81C8C6871830127BD795FB7E /* WatchFavoritesSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BB1A711CF2E856800C5BFD2 /* WatchFavoritesSection.swift */; };
+		65C737D3563E91F83CA4F215 /* VFDWatchSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7870F104C69C7A0414B07826 /* VFDWatchSection.swift */; };
+		D0C0E8C5851B34372A7E34F4 /* MagicMakerWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 835EA6CE2DF495DD1231B081 /* MagicMakerWatchApp.swift */; };
+		026784F3262946B4254267A5 /* WatchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67ABDD1E69DB2AE3EAAA9EF5 /* WatchModel.swift */; };
+		142B074827A08A2637C8644D /* WatchTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56136E2027AA163C088CB969 /* WatchTheme.swift */; };
+		B5CA52CD78D06DBACA0D9D5D /* FavoritesPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2644CE864766E178E9B429F /* FavoritesPage.swift */; };
+		98ABDC39B297EE8664137AE2 /* StatusPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 733F438D70E22C68BE9DC1B7 /* StatusPage.swift */; };
+		E166C8FD62E3AEE471D96C0A /* StopPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E7BC2E0D7482AAC2F91F77F /* StopPage.swift */; };
+		B3D5430841513E7206678593 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 05004E7006D02C6B797383A8 /* Assets.xcassets */; };
+		2C057B9229DCEF16401CF86F /* MagicMakerWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 29A8E8578F064480110EDA68 /* MagicMakerWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		8A08B6A9C615D4C03FCDEF79 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2A3216FC15416A36C0A4E386 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 06B0450173F659BB8BEDE66B;
+			remoteInfo = MagicMakerWatch;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		0CD277682464D3C5D3FED787 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				2C057B9229DCEF16401CF86F /* MagicMakerWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		293FF8F0543F300FF1A2E26B /* SyncSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSession.swift; sourceTree = "<group>"; };
@@ -185,7 +224,32 @@
 		DBAD0117D0BA807379D558E4 /* BleCentral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BleCentral.swift; sourceTree = "<group>"; };
 		E5F60718293A4B5C6D7E8FA /* WiFiJoiner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiJoiner.swift; sourceTree = "<group>"; };
 		EA6EB75A746632BB6EDE3608 /* MagicMaker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MagicMaker.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D42E6EEB3BC6BCA4A1E69757 /* WatchProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchProtocol.swift; sourceTree = "<group>"; };
+		8969EC385BE0032044B5C3EF /* WatchFavoritesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchFavoritesStore.swift; sourceTree = "<group>"; };
+		041DBA328C62BE5BABF8845B /* WatchBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchBridge.swift; sourceTree = "<group>"; };
+		5A3E74B82DED0737F1280693 /* WatchContextBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchContextBuilder.swift; sourceTree = "<group>"; };
+		7BB1A711CF2E856800C5BFD2 /* WatchFavoritesSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchFavoritesSection.swift; sourceTree = "<group>"; };
+		7870F104C69C7A0414B07826 /* VFDWatchSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VFDWatchSection.swift; sourceTree = "<group>"; };
+		835EA6CE2DF495DD1231B081 /* MagicMakerWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MagicMakerWatchApp.swift; sourceTree = "<group>"; };
+		67ABDD1E69DB2AE3EAAA9EF5 /* WatchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchModel.swift; sourceTree = "<group>"; };
+		56136E2027AA163C088CB969 /* WatchTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchTheme.swift; sourceTree = "<group>"; };
+		A2644CE864766E178E9B429F /* FavoritesPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesPage.swift; sourceTree = "<group>"; };
+		733F438D70E22C68BE9DC1B7 /* StatusPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusPage.swift; sourceTree = "<group>"; };
+		2E7BC2E0D7482AAC2F91F77F /* StopPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StopPage.swift; sourceTree = "<group>"; };
+		05004E7006D02C6B797383A8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AF6688EF49A0E2B2A5946E53 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		29A8E8578F064480110EDA68 /* MagicMakerWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MagicMakerWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B95A5EF8ED998CABFD3687B1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		D2CDF6A19DE7C7BA815EF076 /* Firmware */ = {
@@ -307,6 +371,7 @@
 			isa = PBXGroup;
 			children = (
 				D2E59D43C42A37462916EFF2 /* MagicMaker */,
+				D4CA0B53AD7C708933E91824 /* MagicMakerWatch */,
 				BCD5F8E0C3C3CFFE02C70C05 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -315,6 +380,7 @@
 			isa = PBXGroup;
 			children = (
 				EA6EB75A746632BB6EDE3608 /* MagicMaker.app */,
+				29A8E8578F064480110EDA68 /* MagicMakerWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -332,6 +398,7 @@
 				B82F0ED1387D3E7164DC7CEE /* Data */,
 				76F0CB789C650CC0FE1CCC8C /* ViewModels */,
 				D60F6761176E2BF5F64C2883 /* Views */,
+				C80108D6A3FAE36362A16F0F /* Watch */,
 			);
 			path = MagicMaker;
 			sourceTree = "<group>";
@@ -362,6 +429,34 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		C80108D6A3FAE36362A16F0F /* Watch */ = {
+			isa = PBXGroup;
+			children = (
+				D42E6EEB3BC6BCA4A1E69757 /* WatchProtocol.swift */,
+				8969EC385BE0032044B5C3EF /* WatchFavoritesStore.swift */,
+				041DBA328C62BE5BABF8845B /* WatchBridge.swift */,
+				5A3E74B82DED0737F1280693 /* WatchContextBuilder.swift */,
+				7BB1A711CF2E856800C5BFD2 /* WatchFavoritesSection.swift */,
+				7870F104C69C7A0414B07826 /* VFDWatchSection.swift */,
+			);
+			path = Watch;
+			sourceTree = "<group>";
+		};
+		D4CA0B53AD7C708933E91824 /* MagicMakerWatch */ = {
+			isa = PBXGroup;
+			children = (
+				835EA6CE2DF495DD1231B081 /* MagicMakerWatchApp.swift */,
+				67ABDD1E69DB2AE3EAAA9EF5 /* WatchModel.swift */,
+				56136E2027AA163C088CB969 /* WatchTheme.swift */,
+				A2644CE864766E178E9B429F /* FavoritesPage.swift */,
+				733F438D70E22C68BE9DC1B7 /* StatusPage.swift */,
+				2E7BC2E0D7482AAC2F91F77F /* StopPage.swift */,
+				05004E7006D02C6B797383A8 /* Assets.xcassets */,
+				AF6688EF49A0E2B2A5946E53 /* Info.plist */,
+			);
+			path = MagicMakerWatch;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -371,16 +466,37 @@
 			buildPhases = (
 				2BF90069A1A664C242D84B98 /* Sources */,
 				389A67AE3EA3A60BB85E4FE5 /* Resources */,
+				0CD277682464D3C5D3FED787 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				8E7F78114BBAA8843CD233BE /* PBXTargetDependency */,
 			);
 			name = MagicMaker;
 			packageProductDependencies = (
 			);
 			productName = MagicMaker;
 			productReference = EA6EB75A746632BB6EDE3608 /* MagicMaker.app */;
+			productType = "com.apple.product-type.application";
+		};
+		06B0450173F659BB8BEDE66B /* MagicMakerWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 96336B2F7114D988C695E8D6 /* Build configuration list for PBXNativeTarget "MagicMakerWatch" */;
+			buildPhases = (
+				A4CB0D4FA8D8DD633CA7C569 /* Sources */,
+				B95A5EF8ED998CABFD3687B1 /* Frameworks */,
+				E17D14D38F8339D2872F49B6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MagicMakerWatch;
+			packageProductDependencies = (
+			);
+			productName = MagicMakerWatch;
+			productReference = 29A8E8578F064480110EDA68 /* MagicMakerWatch.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -392,6 +508,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
+					06B0450173F659BB8BEDE66B = {
+						CreatedOnToolsVersion = 26.0;
+						ProvisioningStyle = Automatic;
+					};
 					F03ACAACE3467165F70A0E9B = {
 						ProvisioningStyle = Automatic;
 					};
@@ -412,6 +532,7 @@
 			projectRoot = "";
 			targets = (
 				F03ACAACE3467165F70A0E9B /* MagicMaker */,
+				06B0450173F659BB8BEDE66B /* MagicMakerWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -424,6 +545,14 @@
 				53132E3ABF5AD13DC9AF32DF /* magicmaker-esp32-app.bin in Resources */,
 				F33C09BEE5F201A0A040DCD4 /* magicmaker-heltec-v3-app.bin in Resources */,
 				0051E14CCE3250E47ED71C12 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E17D14D38F8339D2872F49B6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B3D5430841513E7206678593 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -518,10 +647,38 @@
 				644CF3770FD5346280CE69BD /* RelayBackend.swift in Sources */,
 				A1A2A3A4B5C6D7E8F9012345 /* StarlightWandView.swift in Sources */,
 				0C5BBFD07F367DBC7D8F271F /* StarlightSerial.swift in Sources */,
+				817EBF527C416A53A2829FD0 /* WatchProtocol.swift in Sources */,
+				74925FBFC78E1945A4032523 /* WatchFavoritesStore.swift in Sources */,
+				B3B244288A3F41E141FE3D9D /* WatchBridge.swift in Sources */,
+				EE11107754741EB68E06FDB9 /* WatchContextBuilder.swift in Sources */,
+				81C8C6871830127BD795FB7E /* WatchFavoritesSection.swift in Sources */,
+				65C737D3563E91F83CA4F215 /* VFDWatchSection.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A4CB0D4FA8D8DD633CA7C569 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				90BFC40551937363F078850A /* WatchProtocol.swift in Sources */,
+				D0C0E8C5851B34372A7E34F4 /* MagicMakerWatchApp.swift in Sources */,
+				026784F3262946B4254267A5 /* WatchModel.swift in Sources */,
+				142B074827A08A2637C8644D /* WatchTheme.swift in Sources */,
+				B5CA52CD78D06DBACA0D9D5D /* FavoritesPage.swift in Sources */,
+				98ABDC39B297EE8664137AE2 /* StatusPage.swift in Sources */,
+				E166C8FD62E3AEE471D96C0A /* StopPage.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		8E7F78114BBAA8843CD233BE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 06B0450173F659BB8BEDE66B /* MagicMakerWatch */;
+			targetProxy = 8A08B6A9C615D4C03FCDEF79 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		10D154679100C14DFB63D40C /* Debug */ = {
@@ -707,6 +864,70 @@
 			};
 			name = Release;
 		};
+		42AF6563619A5C463028B565 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 21;
+				DEVELOPMENT_TEAM = 9BQDEVHKJZ;
+				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_PREVIEWS = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MagicMakerWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MagicMaker;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = Com.lightwave.mmios;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.3.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Com.lightwave.mmios.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		13FC2F9BBF590DC497235855 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 21;
+				DEVELOPMENT_TEAM = 9BQDEVHKJZ;
+				ENABLE_DEBUG_DYLIB = NO;
+				ENABLE_PREVIEWS = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MagicMakerWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MagicMaker;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = Com.lightwave.mmios;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.3.0;
+				PRODUCT_BUNDLE_IDENTIFIER = Com.lightwave.mmios.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -724,6 +945,15 @@
 			buildConfigurations = (
 				71D54149D90F2A76E16AB45D /* Debug */,
 				BC7E2CEF36BB3E81DB7D6F7D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		96336B2F7114D988C695E8D6 /* Build configuration list for PBXNativeTarget "MagicMakerWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				42AF6563619A5C463028B565 /* Debug */,
+				13FC2F9BBF590DC497235855 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

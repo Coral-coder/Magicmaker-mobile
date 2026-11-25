@@ -301,6 +301,9 @@ struct TxScreen: View {
     @State private var deleteRequest: DeleteRequest? = nil
     @State private var categoryRequest: CategoryPickRequest? = nil
     @State private var renameRequest: RenameRequest? = nil
+    /// Apple Watch favourites: the row stars follow every change.
+    @ObservedObject private var favorites: WatchFavoritesStore = WatchFavoritesStore.shared
+    @State private var favoritesFull: Bool = false
 
     init() {}
 
@@ -310,6 +313,7 @@ struct TxScreen: View {
             .confirmDelete($deleteRequest)
             .categoryPicker($categoryRequest)
             .renamePrompt($renameRequest)
+            .favoritesFullAlert($favoritesFull)
     }
 
     private var screen: some View {
@@ -534,7 +538,10 @@ struct TxScreen: View {
             subtitle: row.subtitle,
             selected: row.packet.id == selectedTxId,
             onTap: { selectPacket(row.packet) },
-            onLongPress: { showActions(for: row.packet) }
+            onLongPress: { showActions(for: row.packet) },
+            star: PacketRowStar(on: favorites.isStarred(hex: row.packet.hex)) {
+                toggleStar(row.packet)
+            }
         )
         .packetSwipeActions(
             onDelete: { askDelete(row.packet) },
@@ -644,6 +651,13 @@ struct TxScreen: View {
     }
 
     // MARK: Row actions
+
+    /// The row's watch star: adds the packet to the Apple Watch favourites, or removes it.
+    private func toggleStar(_ packet: MagicPacket) {
+        if !favorites.toggle(hex: packet.hex, label: packet.label, source: WatchFavorite.Source.library) {
+            favoritesFull = true
+        }
+    }
 
     /// Android `PacketActionSheet` for a library packet.
     private func showActions(for packet: MagicPacket) {

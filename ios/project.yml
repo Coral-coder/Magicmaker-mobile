@@ -14,6 +14,9 @@ targets:
   MagicMaker:
     type: application
     platform: iOS
+    dependencies:
+      # Embedded in MagicMaker.app/Watch ("Embed Watch Content").
+      - target: MagicMakerWatch
     sources:
       - path: MagicMaker
         excludes:
@@ -55,3 +58,35 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ENABLE_DEBUG_DYLIB: NO
         ENABLE_PREVIEWS: NO
+  # The Apple Watch app (docs/WATCH_APP.md). Added to project.pbxproj by tools/add_watch_target.py.
+  MagicMakerWatch:
+    type: application
+    platform: watchOS
+    deploymentTarget: "10.0"
+    sources:
+      - path: MagicMakerWatch
+        excludes:
+          - Info.plist
+      # The iPhone <-> watch protocol, compiled into both targets.
+      - path: MagicMaker/Watch/WatchProtocol.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: Com.lightwave.mmios.watchkitapp
+        # Set by the TestFlight workflow with the iPhone target's: they must be equal.
+        MARKETING_VERSION: "1.3.0"
+        CURRENT_PROJECT_VERSION: "21"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_DEBUG_DYLIB: NO
+        ENABLE_PREVIEWS: NO
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: MagicMakerWatch/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: MagicMaker
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown"
+        INFOPLIST_KEY_WKCompanionAppBundleIdentifier: Com.lightwave.mmios
+        INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp: NO
+        OTHER_LDFLAGS: ""
+        SKIP_INSTALL: YES
+        SUPPORTED_PLATFORMS: "watchos watchsimulator"
+        TARGETED_DEVICE_FAMILY: "4"

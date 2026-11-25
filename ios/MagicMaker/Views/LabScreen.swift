@@ -25,6 +25,9 @@ struct LabScreen: View {
     /// The builder appears only after the saved packet has been read, so it decodes the right one.
     @State private var loaded: Bool = false
     @State private var deleteRequest: DeleteRequest? = nil
+    /// Apple Watch favourites: the preset stars follow every change.
+    @ObservedObject private var favorites: WatchFavoritesStore = WatchFavoritesStore.shared
+    @State private var favoritesFull: Bool = false
 
     init() {}
 
@@ -45,6 +48,7 @@ struct LabScreen: View {
         }
         .background(MMTheme.navy)
         .confirmDelete($deleteRequest)
+        .favoritesFullAlert($favoritesFull)
         .onAppear {
             reloadFromStore()
         }
@@ -208,7 +212,9 @@ struct LabScreen: View {
                 ForEach(presets) { preset in
                     LabPresetRow(
                         preset: preset,
+                        starred: favorites.isStarred(hex: preset.hex),
                         onLoad: { loadPreset(preset) },
+                        onStar: { toggleStar(preset) },
                         onDelete: { askDelete(preset) }
                     )
                 }
@@ -282,6 +288,13 @@ struct LabScreen: View {
         label = preset.label
         store.saveLabHex(preset.hex)
         store.saveLabLabel(preset.label)
+    }
+
+    /// The preset's watch star: adds it to the Apple Watch favourites, or removes it.
+    private func toggleStar(_ preset: MagicPacket) {
+        if !favorites.toggle(hex: preset.hex, label: preset.label, source: WatchFavorite.Source.labPreset) {
+            favoritesFull = true
+        }
     }
 
     private func askDelete(_ preset: MagicPacket) {
@@ -672,15 +685,20 @@ private struct LabRandomShowSection: View {
 
 // MARK: - My presets row
 
-/// One user preset: tap to load it into the Lab, the bin to delete it.
+/// One user preset: tap to load it into the Lab, the star for the Apple Watch, the bin to delete it.
 private struct LabPresetRow: View {
     let preset: MagicPacket
+    let starred: Bool
     let onLoad: () -> Void
+    let onStar: () -> Void
     let onDelete: () -> Void
 
-    init(preset: MagicPacket, onLoad: @escaping () -> Void, onDelete: @escaping () -> Void) {
+    init(preset: MagicPacket, starred: Bool, onLoad: @escaping () -> Void, onStar: @escaping () -> Void,
+         onDelete: @escaping () -> Void) {
         self.preset = preset
+        self.starred = starred
         self.onLoad = onLoad
+        self.onStar = onStar
         self.onDelete = onDelete
     }
 
@@ -691,6 +709,7 @@ private struct LabPresetRow: View {
                     presetText
                 }
                 .buttonStyle(.plain)
+                FavoriteStarButton(on: starred, action: onStar)
                 Button(action: onDelete) {
                     Image(systemName: "trash")
                         .font(.system(size: 13))

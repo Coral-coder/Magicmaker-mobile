@@ -617,6 +617,9 @@ final class VFDDisplayView: UIView {
         subs.append(watch(inputs.scan.objectWillChange))
         subs.append(watch(inputs.tx.objectWillChange))
         subs.append(watch(inputs.settings.objectWillChange))
+        // Apple Watch stars, renames and reorders, and the watch link line (SETTINGS).
+        subs.append(watch(WatchFavoritesStore.shared.objectWillChange))
+        subs.append(watch(WatchBridge.shared.objectWillChange))
         subscriptions = subs
     }
 

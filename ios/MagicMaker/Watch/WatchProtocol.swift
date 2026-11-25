@@ -23,6 +23,13 @@ enum WatchProtocol {
     static let keyVia: String = "via"
     static let keyError: String = "error"
     static let keyLabel: String = "label"
+    /// watch -> iPhone, optional: when the watch sent the request (its clock, Unix seconds).
+    static let keySentAt: String = "sentAt"
+
+    /// A favourite that reaches the iPhone this long after the tap is not sent: the watch gives
+    /// up on a reply after 30 s, so a band lighting up later would be a surprise. A paired
+    /// watch's clock follows the iPhone's, far closer than this.
+    static let lateSendSeconds: Double = 20
 
     static let opSend: String = "send"
     static let opStopPrograms: String = "stop_programs"
@@ -218,11 +225,14 @@ struct WatchRequest {
     var version: Int
     var op: String
     var id: String?
+    /// When the watch sent it (watch clock, Unix seconds); nil from a peer that does not send it.
+    var sentAt: Double?
 
     init(op: String, id: String? = nil) {
         self.version = WatchProtocol.version
         self.op = op
         self.id = id
+        self.sentAt = Date().timeIntervalSince1970
     }
 
     init?(dictionary d: [String: Any]) {
@@ -230,12 +240,20 @@ struct WatchRequest {
         self.version = WatchProtocol.versionOf(d)
         self.op = op
         self.id = d[WatchProtocol.keyId] as? String
+        self.sentAt = d[WatchProtocol.keySentAt] as? Double
     }
 
     func dictionary() -> [String: Any] {
         var d: [String: Any] = [WatchProtocol.keyVersion: version, WatchProtocol.keyOp: op]
         if let id { d[WatchProtocol.keyId] = id }
+        if let sentAt { d[WatchProtocol.keySentAt] = sentAt }
         return d
+    }
+
+    /// Seconds from the watch's send to `now` on this device's clock; nil without `sentAt`.
+    func age(now: Date = Date()) -> Double? {
+        guard let sentAt else { return nil }
+        return now.timeIntervalSince1970 - sentAt
     }
 }
 

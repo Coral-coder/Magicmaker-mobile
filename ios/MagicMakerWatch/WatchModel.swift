@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import WatchConnectivity
 import WatchKit
@@ -69,6 +70,12 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     /// A per-row token: a timer clears a row only if nothing newer was set on it meanwhile.
     private var rowTokens: [String: Int] = [:]
     private var tokenSeq: Int = 0
+    /// iPhone time of the reply that left a row on air or queued: only a lastSend taken after it
+    /// is that send's result. An older one is an earlier tap's, still in the iPhone's contexts.
+    private var pendingSince: [String: Double] = [:]
+    /// The newest lastSend per favourite: the context carrying it can overtake the reply that
+    /// said on air (they travel separately).
+    private var latestSends: [String: WatchSendResult] = [:]
 
     override init() {
         super.init()
@@ -180,11 +187,10 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
 
     /// The watch-side error texts of docs/WATCH_APP.md 3.3.
     nonisolated static func errorText(_ error: Error) -> String {
-        let ns: NSError = error as NSError
-        guard ns.domain == WCErrorDomain, let code: WCError.Code = WCError.Code(rawValue: ns.code) else {
-            return "IPHONE ERROR \(ns.code)"
+        guard let wc: WCError = error as? WCError else {
+            return "IPHONE ERROR \((error as NSError).code)"
         }
-        switch code {
+        switch wc.code {
         case .messageReplyTimedOut:
             return "NO REPLY — OPEN MAGICMAKER ON IPHONE"
         case .notReachable:
@@ -192,7 +198,7 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         case .companionAppNotInstalled:
             return "INSTALL MAGICMAKER ON IPHONE"
         default:
-            return "IPHONE ERROR \(ns.code)"
+            return "IPHONE ERROR \(wc.code.rawValue)"
         }
     }
 
@@ -216,11 +222,9 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
             setRow(key, .result(ok: true, text: reply.via.isEmpty ? "✓ SENT" : "✓ VIA " + reply.via, isFinal: true))
             WatchHaptic.play(.success)
         case WatchProtocol.stateOnAir:
-            setRow(key, .result(ok: true, text: "ON AIR" + via, isFinal: false))
-            WatchHaptic.play(.start)
+            setPending(key, "ON AIR" + via, since: reply.context?.at)
         case WatchProtocol.stateQueued:
-            setRow(key, .result(ok: true, text: "QUEUED" + via, isFinal: false))
-            WatchHaptic.play(.start)
+            setPending(key, "QUEUED" + via, since: reply.context?.at)
         case WatchProtocol.stateLoop:
             setRow(key, .result(ok: true, text: "LOOP" + via, isFinal: true))
             WatchHaptic.play(.success)
@@ -239,6 +243,17 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     // MARK: - Rows
+
+    /// On air or queued on the iPhone: the final result follows as a lastSend, which may already
+    /// have arrived. `since` is the reply's iPhone time.
+    private func setPending(_ key: String, _ text: String, since: Double?) {
+        setRow(key, .result(ok: true, text: text, isFinal: false))
+        pendingSince[key] = since ?? 0
+        WatchHaptic.play(.start)
+        if let early: WatchSendResult = latestSends[key] {
+            applyLastSend(early)
+        }
+    }
 
     private func setRow(_ key: String, _ state: WatchRowState) {
         tokenSeq += 1
@@ -295,6 +310,9 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
             updatedAt = c.at
         }
         if let result: WatchSendResult = c.lastSend {
+            if (latestSends[result.id]?.at ?? -1) < result.at {
+                latestSends[result.id] = result
+            }
             applyLastSend(result)
         }
         if changed { saveCache() }
@@ -310,6 +328,8 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     /// The final result of a send whose reply said on air or queued.
     private func applyLastSend(_ r: WatchSendResult) {
         guard case .result(_, _, let isFinal)? = rows[r.id], !isFinal else { return }
+        // Taken before this row went on air: the result of an earlier tap of the same favourite.
+        guard r.at >= (pendingSince[r.id] ?? 0) else { return }
         guard watchSecondsSince(r.at) < 60 else { return }
         if r.ok {
             setRow(r.id, .result(ok: true, text: r.via.isEmpty ? "✓ SENT" : "✓ VIA " + r.via, isFinal: true))

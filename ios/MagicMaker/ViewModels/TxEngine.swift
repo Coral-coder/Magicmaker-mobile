@@ -75,6 +75,9 @@ final class TxEngine: ObservableObject {
     static let notLinkedStatus = "No relay linked — nothing sent"
     /// Status shown when the relay did not take a packet.
     static let sendFailedStatus = "Transmit failed — check relay"
+    /// Given to a manual send's completion when a newer manual send or stopAll took it out of
+    /// the queue before it ran (the Apple Watch reports it).
+    static let droppedStatus = "Not sent — replaced by a newer send or STOP"
 
     private static let minIntervalMs = 500
     private static let maxIntervalMs = 60_000
@@ -284,8 +287,10 @@ final class TxEngine: ObservableObject {
 
     /// One packet, ahead of anything queued. Its time on air follows the kind of packet and the
     /// timing settings. With a relay that takes the newest send (the ESP32) it does not wait for
-    /// the send on air either (see `enqueueRadioWork`).
-    func transmit(hex: String, label: String) {
+    /// the send on air either (see `enqueueRadioWork`). `completion` (the Apple Watch) gets nil
+    /// once the packet went out and its burst ended, otherwise why it did not, also when a newer
+    /// manual send or stopAll drops it from the queue; called once, on the main actor.
+    func transmit(hex: String, label: String, completion: ((String?) -> Void)? = nil) {
         let txHex = HexUtils.canonicalHex(hex)
         let starlight = HexUtils.isStarlightPacket(txHex)
         if starlight {
@@ -312,9 +317,16 @@ final class TxEngine: ObservableObject {
             // A tap supersedes whatever is queued, so it goes out as soon as the air is free
             // (at once when the relay takes the newest send).
             preempt: true,
+            // No-op without a completion, so the send behaves exactly as before.
+            onDropped: {
+                completion?(TxEngine.droppedStatus)
+            },
             send: { [weak self] done in
                 guard let self else { return }
-                self.sendPacket(txHex, durationMs: nil, done)
+                self.sendPacket(txHex, durationMs: nil) { (failure: String?) -> Void in
+                    done(failure)
+                    completion?(failure)
+                }
             },
             afterComplete: { [weak self] in
                 guard let self else { return }

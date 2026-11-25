@@ -65,6 +65,8 @@ struct SettingsScreen: View {
                     .padding(.top, 8)
                 SettingsBackgroundSection()
                     .padding(.top, 8)
+                SettingsWatchSection()
+                    .padding(.top, 8)
                 SettingsFirmwareSection(updater: vm.firmware)
                     .padding(.top, 8)
                 aboutLine

@@ -27,11 +27,9 @@ open MagicMaker.xcodeproj
 
 The repo includes a ready-to-open **Xcode project** (`MagicMaker.xcodeproj`). You do not need XcodeGen.
 
-If you change source files and need to refresh the project file:
-
-```bash
-python3 tools/generate_xcode_project.py
-```
+To add a source file, add it in Xcode (or with a small script that edits `project.pbxproj` in
+place, as `tools/add_watch_target.py` does). Do **not** run `tools/generate_xcode_project.py`:
+it is out of date and would drop both targets' real file lists.
 
 1. Select your **iPhone** as the run destination (not Simulator — BLE requires a real device)  
 2. **Signing & Capabilities** → enable your team  
@@ -66,6 +64,18 @@ certificate and profiles. The secrets (`APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUE
 repo uses; copy them here with its **Actions → Share secrets** workflow (repos:
 `Magicmaker-mobile`). The app record in App Store Connect is `Com.lightwave.mmios`, capital C:
 Apple matches bundle IDs case-sensitively, so keep that spelling.
+
+## Apple Watch
+
+The archive embeds a watchOS 10 app (`MagicMakerWatch/`, bundle ID
+`Com.lightwave.mmios.watchkitapp`, same version and build as the iPhone app). It sends starred
+packets and shows the status of the ESP32, the Android relay and the iPhone. See
+`docs/WATCH_APP.md`.
+
+- **Install:** on the iPhone, open the **Watch** app → **Available Apps** → MagicMaker → Install.
+- **Favourites:** star packets on TX, WAND (colours, New Wand codes, the quick button) and LAB
+  MY PRESETS. Manage them in **SETTINGS → APPLE WATCH** (both themes).
+- The watch talks to the iPhone over WatchConnectivity; the iPhone does the sending.
 
 ## Park checklist
 

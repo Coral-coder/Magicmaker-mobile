@@ -2802,26 +2802,33 @@ extension VFDLabScreen {
         return y + VFDW.gap
     }
 
-    /// LabPresetRow: label (text, uppercased) and hex, the bin on the right (its own tap), a
-    /// dotted divider. Returns the next row's r.
+    /// LabPresetRow: label (text, uppercased) and hex, the Apple Watch star and the bin on the
+    /// right (each its own tap), a dotted divider. Returns the next row's r.
     fileprivate static func presetRow(_ ctx: VFDContext, _ fb: VFDFrameBuffer, _ preset: MagicPacket,
                                       _ c: Int, _ r: Int, _ w: Int) -> Int {
         let binX: Int = c + w - VFDLabGeo.trashW - 4
+        let starX: Int = binX - 4 - VFDStar.size - 8
         let y: Int = r + 3
         let end: Int = y + VFDW.line + 7 + 3
         if !rowVisible(fb, r, end + 1 - r) {
             return end + 1
         }
-        let limit: Int = binX - 6 - c - 2
+        let limit: Int = starX - 6 - c - 2
         let upperLabel: String = VFDW.upper(preset.label)
         fb.textFit(c + 2, y, upperLabel, limit, .small, VFDInk.text)
         fb.textFit(c + 2, y + VFDW.line, preset.hex, limit, .small, VFDInk.highlight)
+        VFDStar.draw(fb, starX, y + 5, on: WatchFavoritesStore.shared.isStarred(hex: preset.hex))
         trash(fb, binX, y + 5, VFDInk.dim)
         fb.hline(c, end, w, VFDInk.dim, step: 2)
         let item: MagicPacket = preset
-        VFDW.tap(fb, c, r, binX - 4 - c, end - r, "preset:" + upperLabel,
+        VFDW.tap(fb, c, r, starX - 4 - c, end - r, "preset:" + upperLabel,
                  action: { VFDLabScreen.loadPreset(ctx, item) },
                  long: { VFDLabScreen.presetMenu(ctx, item) })
+        VFDW.tap(fb, starX - 4, r, binX - starX, end - r, "preset:star:" + upperLabel,
+                 action: {
+                     VFDWatchSection.toggleStar(ctx, hex: item.hex, label: item.label,
+                                                source: WatchFavorite.Source.labPreset)
+                 })
         VFDW.tap(fb, binX - 4, r, c + w - binX + 4, end - r, "preset:delete:" + upperLabel,
                  action: { VFDLabScreen.askDelete(ctx, item) })
         return end + 1

@@ -361,21 +361,24 @@ enum VFDTxScreen: VFDScreen {
     }
 
     /// PacketRow + packetSwipeActions: tap sends, hold opens the menu, swipe left deletes,
-    /// swipe right recategorizes.
+    /// swipe right recategorizes; the Apple Watch star in the last VFDStar.colW cells (its own
+    /// tap, on top of the row's).
     fileprivate static func drawRow(_ ctx: VFDContext, _ ui: VFDUIState, _ st: VFDTxState, _ fb: VFDFrameBuffer,
                         _ row: VFDTxRow, y: Int) {
         let L: VFDLayout = ctx.L
         let packet: MagicPacket = row.packet
         let withSwatches: Bool = !row.swatches.isEmpty
+        // The row is narrower by the star column (row heights do not depend on the width).
+        let rowW: Int = L.width - VFDStar.colW
         if withSwatches {
             // The subtitle line (VFDW.packetRow's rows): after "CATEGORY · " the true-colour
             // swatches of the named colours, then the names, dim like the rest of the line.
             let hexRows: Int = packet.hex.isEmpty ? 0 : VFDW.line
             let sy: Int = y + 3 + hexRows + VFDW.line
             let x0: Int = L.left + 2 + VFDText.length(VFDW.upper(row.lead)) * VFDW.adv
-            VFDTxSwatches.draw(fb, x0, sy, row.swatches, VFDW.upper(row.colorNames), L.left + L.width, VFDInk.dim)
+            VFDTxSwatches.draw(fb, x0, sy, row.swatches, VFDW.upper(row.colorNames), L.left + rowW, VFDInk.dim)
         }
-        VFDW.packetRow(fb, L, L.left, y, L.width, packet.label, packet.hex,
+        let end: Int = VFDW.packetRow(fb, L, L.left, y, rowW, packet.label, packet.hex,
                        subtitle: withSwatches ? row.lead : row.subtitle,
                        selected: packet.id == st.selectedId, hexColor: VFDInk.dim,
                        action: {
@@ -390,6 +393,15 @@ enum VFDTxScreen: VFDScreen {
                        swipeRight: {
                            VFDTxScreen.askRecategorize(ctx, packet)
                        })
+        let starX: Int = L.left + rowW
+        VFDStar.draw(fb, starX + 3, y + 3, on: WatchFavoritesStore.shared.isStarred(hex: packet.hex))
+        VFDW.tap(fb, starX, y, VFDStar.colW, end - y, "star:" + VFDW.upper(packet.label), action: {
+            VFDWatchSection.toggleStar(ctx, hex: packet.hex, label: packet.label, source: WatchFavorite.Source.library)
+        })
+        // The dotted divider (row end - 1) continues under the star column, same parity.
+        var dx: Int = starX
+        if VFDMath.floorMod(dx - L.left, 2) == 1 { dx += 1 }
+        fb.hline(dx, end - 1, L.left + L.width - dx, VFDInk.dim, step: 2)
     }
 
     /// "NO TX LIBRARY — RUN RX SESSION", centred in the list area.

@@ -30,6 +30,8 @@ struct PacketRow: View {
     let selected: Bool
     let onTap: () -> Void
     let onLongPress: (() -> Void)?
+    /// The Apple Watch star at the row's right edge (its own tap; it never sends).
+    let star: PacketRowStar?
 
     @State private var flash: Bool = false
 
@@ -41,7 +43,8 @@ struct PacketRow: View {
         tag: String? = nil,
         selected: Bool = false,
         onTap: @escaping () -> Void,
-        onLongPress: (() -> Void)? = nil
+        onLongPress: (() -> Void)? = nil,
+        star: PacketRowStar? = nil
     ) {
         self.label = label
         self.hex = hex
@@ -51,6 +54,7 @@ struct PacketRow: View {
         self.selected = selected
         self.onTap = onTap
         self.onLongPress = onLongPress
+        self.star = star
     }
 
     var body: some View {
@@ -83,6 +87,9 @@ struct PacketRow: View {
             }
             textLines
             Spacer(minLength: 0)
+            if let star {
+                FavoriteStarButton(on: star.on, action: star.toggle)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)
@@ -96,6 +103,7 @@ struct PacketRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+        .modifier(PacketRowStarAccessibility(star: star))
     }
 
     private var textLines: some View {
@@ -148,6 +156,29 @@ struct PacketRow: View {
             flash = false
         }
         onTap()
+    }
+}
+
+/// A packet row's Apple Watch star (docs/WATCH_APP.md 2.3): filled when the packet is a watch
+/// favourite; `toggle` stars or unstars it.
+struct PacketRowStar {
+    let on: Bool
+    let toggle: () -> Void
+}
+
+/// The combined row element gets the star as a named action.
+private struct PacketRowStarAccessibility: ViewModifier {
+    let star: PacketRowStar?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let star {
+            content.accessibilityAction(named: Text(star.on ? "Remove from watch" : "Add to watch")) {
+                star.toggle()
+            }
+        } else {
+            content
+        }
     }
 }
 

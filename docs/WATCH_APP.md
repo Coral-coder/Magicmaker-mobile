@@ -352,6 +352,16 @@ Property-list types only. The structured parts are JSON (`JSONEncoder`, `.sorted
   favourites + theme + status + lastSend, with `at` left out and `phone.lastHeardAt` rounded down
   to 30 s. A park full of repeating packets therefore pushes when the heard **label** changes,
   not on every packet.
+- **Telemetry waits.** When the only change is telemetry, the push waits until 60 s after the
+  last one (`telemetrySpacingSeconds`). Telemetry here means values that move by themselves: the
+  ESP32's battery %, mV, runtime and uptime, which are new on every 2 s STATUS read, and the
+  iPhone's battery, TX line, last heard packet and replay step. Otherwise a linked board would
+  push every 2 s for as long as the iPhone app is open. A second digest with these values blanked
+  decides this. It keeps whether each value is present, so link states, programs, charging,
+  scan, AUTO and a board's first battery reading still push within 2 s. STATUS on the watch asks
+  for a fresh snapshot every 10 s while it is shown.
+- With no watch app to push to (not activated, not paired, not installed), a change schedules
+  nothing.
 - Only when `activationState == .activated && isPaired && isWatchAppInstalled`.
   `sessionWatchStateDidChange` triggers a push, so the first install gets data.
   `updateApplicationContext` errors are ignored (the next change retries).
@@ -367,9 +377,15 @@ Requests (`sendMessage(_:replyHandler:errorHandler:)`; the watch sends **only** 
 
 | Request | Meaning |
 |---|---|
-| `["v": 1, "op": "send", "id": "<favourite id>"]` | transmit that favourite (§4.2) |
+| `["v": 1, "op": "send", "id": "<favourite id>", "sentAt": Double]` | transmit that favourite (§4.2) |
 | `["v": 1, "op": "stop_programs"]` | stop keep-awake, TX loop, wand loop, random show, replay (§4.3) |
 | `["v": 1, "op": "refresh"]` | re-read the relay, reply with a fresh full context (§4.4) |
+
+Every request carries the optional `sentAt`: the watch's clock, in Unix seconds, when it was
+sent. A **send** that reaches the iPhone more than `WatchProtocol.lateSendSeconds` (20 s) after
+it was sent is refused with `ARRIVED LATE — NOT SENT, TAP AGAIN`. The watch gives up on a reply
+after 30 s, so a band lighting up after that would surprise the user. A paired watch's clock
+follows the iPhone's. A request without `sentAt` is not checked.
 
 Reply (always exactly one):
 
@@ -397,8 +413,12 @@ relay linked).
 `lastSend` (`WatchSendResult {id, ok, state, via, error, label, at}`) is set only for
 **watch-originated** sends whose reply went out before the final result (`on_air`, `queued`).
 When the result arrives it is set and the context is pushed **immediately**. The watch applies it
-to the row with that id if the row is still waiting and `at` is under 60 s old. Then it plays the
-final haptic.
+to the row with that id if the row is still waiting, `at` is under 60 s old and `at` is not
+before the iPhone time (`at`) of the reply that left the row waiting. Then it plays the final
+haptic. That last check matters because the iPhone keeps the last `lastSend` in every context.
+Without it, an earlier tap's result could finish a newer tap of the same favourite. The context
+can also overtake the `on_air` reply, since the two travel separately. So the watch keeps the
+newest `lastSend` for each favourite and checks it when a row starts waiting.
 
 **Error texts** (uppercase, short; the bridge maps them):
 
@@ -407,11 +427,12 @@ final haptic.
 | favourite id unknown (removed meanwhile) | `FAVORITE REMOVED ON IPHONE` (reply also carries the new favourites) |
 | protocol `v` differs | `UPDATE MAGICMAKER ON IPHONE AND WATCH` |
 | firmware transfer running | `ESP32 FIRMWARE UPDATE RUNNING` |
-| Bluetooth off / denied on a BLE backend | `vm.scan.bluetoothStatus.uppercased()` (e.g. `TURN ON BLUETOOTH`) |
+| send more than 20 s after the tap (`sentAt`) | `ARRIVED LATE — NOT SENT, TAP AGAIN` |
+| Bluetooth off / denied on a BLE backend | `vm.scan.bluetoothStatus.uppercased()` (e.g. `TURN ON BLUETOOTH`), at once; `BLUETOOTH UNAVAILABLE` (also the value before the radio first reports, as on a launch by this message) only after the link wait |
 | relay not linked after the link wait | `vm.remoteLinkHint.uppercased()`, else `NO RELAY LINKED` |
 | `TxEngine.notLinkedStatus` | `NO RELAY LINKED` |
 | `TxEngine.sendFailedStatus` | `RELAY DID NOT SEND IT` |
-| `TxEngine.droppedStatus` (§4.6) | `REPLACED BY A NEWER SEND` |
+| `TxEngine.droppedStatus` (§4.6) | `REPLACED BY A NEWER SEND OR STOP` |
 | `HexUtils.legacyAdvertiseRejectReason` | that text, uppercased, ≤ 48 chars |
 | watch: not reachable | `IPHONE NOT REACHABLE` (never sent) |
 | watch: `WCError.messageReplyTimedOut` | `NO REPLY — OPEN MAGICMAKER ON IPHONE` |
@@ -463,6 +484,13 @@ enum WatchProtocol {
     static let keyVia: String = "via"
     static let keyError: String = "error"
     static let keyLabel: String = "label"
+    /// watch -> iPhone, optional: when the watch sent the request (its clock, Unix seconds).
+    static let keySentAt: String = "sentAt"
+
+    /// A favourite that reaches the iPhone this long after the tap is not sent: the watch gives
+    /// up on a reply after 30 s, so a band lighting up later would be a surprise. A paired
+    /// watch's clock follows the iPhone's, far closer than this.
+    static let lateSendSeconds: Double = 20
 
     static let opSend: String = "send"
     static let opStopPrograms: String = "stop_programs"
@@ -658,11 +686,14 @@ struct WatchRequest {
     var version: Int
     var op: String
     var id: String?
+    /// When the watch sent it (watch clock, Unix seconds); nil from a peer that does not send it.
+    var sentAt: Double?
 
     init(op: String, id: String? = nil) {
         self.version = WatchProtocol.version
         self.op = op
         self.id = id
+        self.sentAt = Date().timeIntervalSince1970
     }
 
     init?(dictionary d: [String: Any]) {
@@ -670,12 +701,20 @@ struct WatchRequest {
         self.version = WatchProtocol.versionOf(d)
         self.op = op
         self.id = d[WatchProtocol.keyId] as? String
+        self.sentAt = d[WatchProtocol.keySentAt] as? Double
     }
 
     func dictionary() -> [String: Any] {
         var d: [String: Any] = [WatchProtocol.keyVersion: version, WatchProtocol.keyOp: op]
         if let id { d[WatchProtocol.keyId] = id }
+        if let sentAt { d[WatchProtocol.keySentAt] = sentAt }
         return d
+    }
+
+    /// Seconds from the watch's send to `now` on this device's clock; nil without `sentAt`.
+    func age(now: Date = Date()) -> Double? {
+        guard let sentAt else { return nil }
+        return now.timeIntervalSince1970 - sentAt
     }
 }
 
@@ -809,14 +848,19 @@ after a pending `lastSend`, with a 20 s ceiling). It follows this order:
 handleSend(id, reply):
   fav = WatchFavoritesStore.shared.favorite(id)         else reply failed FAVORITE REMOVED ON IPHONE
                                                           (+ favorites, status, theme)
+  if arrival age (now - sentAt, taken on arrival) > 20 s  reply failed ARRIVED LATE — NOT SENT, TAP AGAIN
   if vm.firmware.isBusy                                   reply failed ESP32 FIRMWARE UPDATE RUNNING
-  if vm.relayBackend.usesBleRelayLink && vm.scan.bluetoothStatus != "Bluetooth ready"
+  if vm.relayBackend.usesBleRelayLink && bluetoothStatus is neither "Bluetooth ready" nor
+     "Bluetooth unavailable" (the value until the radio first reports: a launch by this message)
                                                           reply failed <bluetoothStatus uppercased>
   deadline = receivedAt + 7 s
   waitForLink(vm, until: min(receivedAt + 4 s, deadline)):
       every 250 ms check vm.remoteLinkReady; every 1 s: vm.ensureRelayLink(), and on Wi-Fi
       vm.refreshAndroidRemote() (the Wi-Fi link state comes from that status read)
-  if !vm.remoteLinkReady                                  reply failed <remoteLinkHint uppercased or NO RELAY LINKED>
+  if already replied (iOS ended the background time: NO REPLY went out)   send nothing; return
+  if !vm.remoteLinkReady                                  reply failed <bluetoothStatus uppercased if a BLE
+                                                          backend's radio is not ready, else remoteLinkHint
+                                                          uppercased or NO RELAY LINKED>
   via = viaName(vm.relayBackend)
   (hex, label) = fav.source == wandQuick
         ? { vm.reloadWandQuickIfChanged(); store.followQuick(vm.wandQuickLabel, vm.wandQuickHex);
@@ -858,24 +902,35 @@ finish(failure):
   status), and the relay-echo filter (`isRelayEcho`) works unchanged, because the send is an
   ordinary `TxEngine` job.
 - A second watch tap on another favourite preempts the first one's queued job, exactly like two
-  iPhone taps. The first then gets `REPLACED BY A NEWER SEND`.
+  iPhone taps. The first then gets `REPLACED BY A NEWER SEND OR STOP`.
 
 ### 4.3 `stop_programs`
 
 ```swift
+let linked: Bool = await waitForLink(vm, until: receivedAt + 4 s)
 let report: AndroidRemoteStatus? = vm.androidRemote          // read before stopping
 let relayRunsLoops: Bool = vm.relayBackend == .esp32
 let txWas: Bool = vm.tx.txLoopEnabled
 let wandWas: Bool = vm.tx.starlightLoopEnabled
+// No STATUS read yet: what the relay runs is unknown.
+let unknown: Bool = report == nil && (linked || relayRunsLoops)
 vm.tx.stopAll()      // iPhone timers, random show, replay, queue; tells the ESP32 about loops it knew of
-if vm.keepAwakeActive || report?.keepAwake == true { vm.setKeepAwake(false) }
-if report?.txLoopEnabled == true && !(relayRunsLoops && txWas) { vm.setAndroidTxLoop(enabled: false) }
-if report?.starlightLoopEnabled == true && !(relayRunsLoops && wandWas) { vm.setAndroidStarlightLoop(enabled: false) }
+if vm.keepAwakeActive || report?.keepAwake == true || unknown { vm.setKeepAwake(false) }
+if (report?.txLoopEnabled == true || unknown) && !(relayRunsLoops && txWas) { vm.setAndroidTxLoop(enabled: false) }
+if (report?.starlightLoopEnabled == true || unknown) && !(relayRunsLoops && wandWas) { vm.setAndroidStarlightLoop(enabled: false) }
 ```
 
 The two `setAndroid…Loop(enabled: false)` calls also cover a loop started on the Android phone
 itself, and an ESP32 loop the iPhone had not adopted yet. Both route to `sendEsp32Program` for
 the ESP32. AUTO stays armed: it is not a program.
+
+**`unknown`** covers the case where the iPhone has no STATUS yet: this message launched the app,
+the link has only just come up, or the ESP32 is away (its status is cleared when the link drops).
+The ESP32 keeps keep-awake and its loops running through iPhone restarts. Without this, STOP
+after a cold launch would report `STOPPED` while the board went on transmitting. So all three
+are told to stop: the ESP32 now, or on its next link (`sendEsp32Program` keeps one command of
+each kind), and a linked Android relay at once. An Android relay that is not linked is not
+asked, because the command would only fail.
 
 Reply: `ok: true, state: stopped`. The `error` text is a note:
 
@@ -1038,8 +1093,11 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
   - `sessionCompanionAppInstalledDidChange`: set `companionInstalled`.
 - **`apply(_ c: WatchContext)`**: ignore if `c.at < updatedAt - 1` (an older snapshot arriving
   late). Otherwise take each non-nil part, set `updatedAt = c.at`, and save the cache. For
-  `lastSend`: if `rows[id]` is `.result(final: false)` and `now - at < 60`, set
-  `.result(ok:, text:, final: true)` and play `.success` / `.failure`.
+  `lastSend`: keep it as the newest for its id (`latestSends`). If `rows[id]` is
+  `.result(final: false)`, `at >= pendingSince[id]` and `now - at < 60`, set
+  `.result(ok:, text:, final: true)` and play `.success` / `.failure`. `pendingSince[id]` is the
+  iPhone `at` of the `on_air` / `queued` reply, recorded when the row starts waiting. At that
+  point `latestSends[id]` is checked too, in case the result's context arrived first (§3.3).
 - **`send(_ f: WatchFavorite)`**: ignore if `rows[f.id] == .sending`. Without
   `activationState == .activated && isReachable`: row `IPHONE NOT REACHABLE`, `.failure`, done
   (no send, no queue). Otherwise `.click`, `.sending`, and
@@ -1230,14 +1288,16 @@ PBXTargetDependency section yet. The script creates them in Xcode's alphabetical
 
 ```
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 CODE_SIGN_STYLE = Automatic;
-CURRENT_PROJECT_VERSION = <iPhone target's, now 20>;
+CURRENT_PROJECT_VERSION = <iPhone target's, now 21>;
 DEVELOPMENT_TEAM = <iPhone target's, 9BQDEVHKJZ>;
 ENABLE_DEBUG_DYLIB = NO;
 ENABLE_PREVIEWS = NO;
 GENERATE_INFOPLIST_FILE = YES;
 INFOPLIST_FILE = MagicMakerWatch/Info.plist;
 INFOPLIST_KEY_CFBundleDisplayName = MagicMaker;
+INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 INFOPLIST_KEY_WKCompanionAppBundleIdentifier = Com.lightwave.mmios;
 INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
 LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks");
@@ -1252,6 +1312,9 @@ TARGETED_DEVICE_FAMILY = 4;
 WATCHOS_DEPLOYMENT_TARGET = 10.0;
 ```
 
+- `ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME` (the catalog's `AccentColor`, amber) and the
+  portrait / upside-down orientations are Xcode's watch-app template defaults, added when the
+  target was applied.
 - The script reads `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`, `DEVELOPMENT_TEAM` and
   `PRODUCT_BUNDLE_IDENTIFIER` from the iPhone target at run time, because CI may have bumped them.
   Every `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` line in the file then agrees, and the CI's
@@ -1344,16 +1407,21 @@ can be added later if wanted; CI never uses it.
    `CURRENT_PROJECT_VERSION`, `ENABLE_DEBUG_DYLIB` and `ENABLE_PREVIEWS` overrides: applying them
    to both targets is exactly right (versions in step).
 
-2. **Before Archive**, make sure a watchOS simulator runtime exists. `actool` compiles a watchOS
-   asset catalog against one, and a runner image may lack it:
+2. **Before Archive**, make sure a watchOS simulator runtime for the SDK's major.minor exists
+   (26.1 SDK: watchOS 26.1 or 26.1.x). `actool` compiles a watchOS asset catalog against one, a
+   runner image may lack it, and an older runtime alone (when a newer Xcode is selected) is not
+   enough. Unavailable runtimes do not count; a failed download only warns:
 
    ```yaml
    - name: watchOS platform (asset catalog compiler)
      run: |
-       if xcrun simctl list runtimes 2>/dev/null | grep -q 'watchOS'; then
-         echo "watchOS runtime present"
+       sdk=$(xcrun --sdk watchos --show-sdk-version 2>/dev/null || true)
+       sdk_re=$(printf '%s' "$sdk" | sed 's/\./\\./g')
+       runtimes=$(xcrun simctl list runtimes 2>/dev/null | grep -v 'unavailable' || true)
+       if [ -n "$sdk" ] && grep -qE "^watchOS ${sdk_re}[ .]" <<< "$runtimes"; then
+         echo "watchOS $sdk simulator runtime present"
        else
-         xcodebuild -downloadPlatform watchOS
+         xcodebuild -downloadPlatform watchOS || echo "::warning::Couldn't download the watchOS platform"
        fi
    ```
 
@@ -1444,6 +1512,10 @@ TestFlight shows one build with an Apple Watch app.
 | 13 | Change the VFD base colour to GREEN | watch inks turn green at once |
 | 14 | VFD theme on; a watch tap wakes the suspended app; the app is later killed and relaunched | the app still opens in the VFD theme (launch guard cleared, §4.1) |
 | 15 | iPad | SETTINGS shows NOT AVAILABLE ON THIS DEVICE; no crash |
+| 16 | ESP32 keep-awake (or a loop) running; iOS has ended the iPhone app; watch STOP PROGRAMS | STOPPED · VIA ESP32, and the board really stops (keep-awake / loop off are sent although the iPhone had read no STATUS yet) |
+| 17 | 12 s band burst: tap A (ON AIR, then ✓), wait, tap A again | the second tap stays ON AIR until its own result; it is not finished early by the first tap's result |
+| 18 | iPhone app open, ESP32 linked, watch app closed, 5 min | the watch gets a context about once a minute, not every 2 s (uptime and battery alone wait 60 s); a link drop or a program change still arrives within ~2 s |
+| 19 | iPhone app ended by iOS, ESP32 on, watch tap | the reply is never `BLUETOOTH UNAVAILABLE` while the radio is starting: it waits for the link (success, or the link hint after 4 s) |
 
 ---
 
@@ -1490,7 +1562,8 @@ TestFlight shows one build with an Apple Watch app.
 ## Appendix A: `ios/tools/add_watch_target.py`
 
 Tested against the current `project.pbxproj` (with the sync workflow's `Sync/*` entries):
-`--check` verifies, the first run adds 42 objects, the second refuses.
+`--check` verifies, the first run adds 42 objects, the second refuses. Saved as `ios/tools/add_watch_target.py` and applied
+(the file below is that script).
 
 ```python
 #!/usr/bin/env python3
@@ -1802,6 +1875,7 @@ def main():
     def cfg(oid, name):
         s = [
             "ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;",
+            "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;",
             "CODE_SIGN_STYLE = Automatic;",
             "CURRENT_PROJECT_VERSION = %s;" % build,
             "DEVELOPMENT_TEAM = %s;" % team,
@@ -1810,6 +1884,7 @@ def main():
             "GENERATE_INFOPLIST_FILE = YES;",
             "INFOPLIST_FILE = MagicMakerWatch/Info.plist;",
             "INFOPLIST_KEY_CFBundleDisplayName = MagicMaker;",
+            "INFOPLIST_KEY_UISupportedInterfaceOrientations = \"UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown\";",
             "INFOPLIST_KEY_WKCompanionAppBundleIdentifier = %s;" % ios_bundle,
             "INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;",
             "LD_RUNPATH_SEARCH_PATHS = (\n\t\t\t\t\t\"$(inherited)\",\n\t\t\t\t\t\"@executable_path/Frameworks\",\n\t\t\t\t);",
@@ -1964,7 +2039,8 @@ def verify(original, text, ID, ios_target, ios_bundle):
     for c in objs[watch["buildConfigurationList"]]["buildConfigurations"]:
         bs = objs[c]["buildSettings"]
         if bs["PRODUCT_BUNDLE_IDENTIFIER"] != ios_bundle + WATCH_BUNDLE_SUFFIX or bs["SDKROOT"] != "watchos" \
-                or bs["INFOPLIST_KEY_WKCompanionAppBundleIdentifier"] != ios_bundle:
+                or bs["INFOPLIST_KEY_WKCompanionAppBundleIdentifier"] != ios_bundle \
+                or bs.get("SKIP_INSTALL") != "YES":
             raise SystemExit("watch build settings wrong")
     # Every MARKETING_VERSION / CURRENT_PROJECT_VERSION line agrees (the CI sed rewrites them all).
     for key in ("MARKETING_VERSION", "CURRENT_PROJECT_VERSION"):

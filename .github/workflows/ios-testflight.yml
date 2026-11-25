@@ -18,6 +18,10 @@
 # also checked against what App Store Connect already has, so a build uploaded by hand from
 # Xcode never collides.
 #
+# The archive embeds the watch app (ios/MagicMakerWatch, bundle id
+# Com.lightwave.mmios.watchkitapp); docs/WATCH_APP.md. Its version and build lines in
+# project.pbxproj are rewritten together with the iPhone target's.
+#
 # Signing is automatic ("cloud signing"): the App Store Connect API key lets Xcode create and
 # use the distribution certificate and profiles, so no profiles are stored here.
 # Secrets (repository secrets, copied from the ePTT repo by its "Share secrets" workflow):
@@ -191,8 +195,30 @@ jobs:
           sudo xcode-select -s "$xcode/Contents/Developer"
           xcodebuild -version
 
+      # actool compiles the watch app's asset catalog against a watchOS simulator runtime, and a
+      # runner image may lack one (Xcode 26 ships none). Download it only when it is missing.
+      # The runtime must match the SDK's major.minor (26.1 SDK: watchOS 26.1 or 26.1.x): with only
+      # an older runtime (a newer Xcode picked above) actool fails with "No simulator runtime
+      # version ... available to use with watchsimulator SDK".
+      - name: watchOS platform (asset catalog compiler)
+        run: |
+          sdk=$(xcrun --sdk watchos --show-sdk-version 2>/dev/null || true)
+          sdk_re=$(printf '%s' "$sdk" | sed 's/\./\\./g')
+          runtimes=$(xcrun simctl list runtimes 2>/dev/null | grep -v 'unavailable' || true)
+          if [ -n "$sdk" ] && grep -qE "^watchOS ${sdk_re}[ .]" <<< "$runtimes"; then
+            echo "watchOS $sdk simulator runtime present"
+          else
+            echo "No watchOS ${sdk:-?} simulator runtime; downloading the watchOS platform"
+            printf '%s\n' "$runtimes"
+            xcodebuild -downloadPlatform watchOS || echo "::warning::Couldn't download the watchOS platform; actool may fail on the watch asset catalog"
+          fi
+
       # ENABLE_DEBUG_DYLIB / ENABLE_PREVIEWS off, as in tools/build_device.sh: a device build that
       # links the debug dylib crashes at launch.
+      # No PRODUCT_BUNDLE_IDENTIFIER here: a setting on the command line applies to EVERY target,
+      # so the embedded watch app would get the iPhone's id and the build would fail. Each target
+      # sets its own in project.pbxproj (Com.lightwave.mmios, Com.lightwave.mmios.watchkitapp).
+      # The settings below apply to both targets, which keeps their versions in step.
       - name: Archive
         run: |
           mkdir -p build
@@ -203,7 +229,6 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             ENABLE_DEBUG_DYLIB=NO ENABLE_PREVIEWS=NO \
             MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             archive > build/xcodebuild.log 2>&1 || {
@@ -228,6 +253,27 @@ jobs:
               exit 1
             }
             tail -60 build/xcodebuild.log
+
+      # One app in the archive (the watch target has SKIP_INSTALL = YES), the watch app embedded
+      # in MagicMaker.app/Watch, and its ids and numbers what App Store Connect expects.
+      - name: Check the embedded watch app
+        run: |
+          apps="build/$SCHEME.xcarchive/Products/Applications"
+          app="$apps/MagicMaker.app"
+          watch="$app/Watch/MagicMakerWatch.app"
+          count=$(ls "$apps" | wc -l | tr -d ' ')
+          [ "$count" = "1" ] || { echo "::error::The archive holds $count apps (the watch target needs SKIP_INSTALL = YES)"; ls "$apps"; exit 1; }
+          [ -d "$watch" ] || { echo "::error::No watch app at MagicMaker.app/Watch/MagicMakerWatch.app"; exit 1; }
+          get() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Info.plist" 2>/dev/null; }
+          fail() { echo "::error::Watch app: $1"; exit 1; }
+          [ "$(get "$app" CFBundleIdentifier)" = "$BUNDLE_ID" ] || fail "iPhone app bundle id is $(get "$app" CFBundleIdentifier)"
+          [ "$(get "$watch" CFBundleIdentifier)" = "$BUNDLE_ID.watchkitapp" ] || fail "bundle id $(get "$watch" CFBundleIdentifier)"
+          [ "$(get "$watch" WKCompanionAppBundleIdentifier)" = "$BUNDLE_ID" ] || fail "companion id $(get "$watch" WKCompanionAppBundleIdentifier)"
+          [ "$(get "$watch" WKApplication)" = "true" ] || fail "WKApplication missing"
+          [ "$(get "$watch" CFBundleVersion)" = "$(get "$app" CFBundleVersion)" ] || fail "build number differs from the iPhone app"
+          [ "$(get "$watch" CFBundleShortVersionString)" = "$(get "$app" CFBundleShortVersionString)" ] || fail "version differs from the iPhone app"
+          [ "$(get "$watch" CFBundleVersion)" = "$BUILD_NUMBER" ] || fail "build number $(get "$watch" CFBundleVersion), expected $BUILD_NUMBER"
+          echo "Watch app: $(get "$watch" CFBundleIdentifier) $(get "$watch" CFBundleShortVersionString) ($(get "$watch" CFBundleVersion))"
 
       - name: Upload to TestFlight
         if: env.UPLOAD == 'true'
@@ -271,10 +317,15 @@ jobs:
           if [ "$GITHUB_REF_TYPE" != "branch" ]; then branch=main; fi
           git fetch origin "$branch"
           git checkout -B "$branch" "origin/$branch"
+          # Every line, so the iPhone and watch targets (Debug and Release) stay in step: App Store
+          # Connect rejects a watch app whose version or build differs from the iPhone app's.
           sed -i '' -E "s/^([[:space:]]*MARKETING_VERSION = )[^;]*;/\1$VERSION;/" "$PROJECT/project.pbxproj"
           sed -i '' -E "s/^([[:space:]]*CURRENT_PROJECT_VERSION = )[^;]*;/\1$BUILD_NUMBER;/" "$PROJECT/project.pbxproj"
           sed -i '' -E "s/^([[:space:]]*MARKETING_VERSION: ).*/\1\"$VERSION\"/" project.yml
           sed -i '' -E "s/^([[:space:]]*CURRENT_PROJECT_VERSION: ).*/\1\"$BUILD_NUMBER\"/" project.yml
+          stale=$( { grep -E '^[[:space:]]*MARKETING_VERSION = ' "$PROJECT/project.pbxproj" | grep -vF "MARKETING_VERSION = $VERSION;" || true; \
+                     grep -E '^[[:space:]]*CURRENT_PROJECT_VERSION = ' "$PROJECT/project.pbxproj" | grep -vF "CURRENT_PROJECT_VERSION = $BUILD_NUMBER;" || true; } )
+          if [ -n "$stale" ]; then echo "::error::Version lines left unchanged in project.pbxproj: $stale"; exit 1; fi
           git add "$PROJECT/project.pbxproj" project.yml
           if git diff --cached --quiet; then exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \

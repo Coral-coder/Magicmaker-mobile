@@ -5,7 +5,8 @@ import SwiftUI
 /// BASE COLOUR with the stored colour's hex on its label row and a true-colour swatch in every
 /// chip; CUSTOM opens the system colour picker in a sheet), TRANSMISSION SETTINGS (folds, under
 /// the standard screen's preference key: relay note, TX MODE switch, BROADCAST STRENGTH, the WAKE
-/// SLICE / COMMAND BURST / STARLIGHT WAND sliders), SCAN FILTER, BACKGROUND, BOARD FIRMWARE (the
+/// SLICE / COMMAND BURST / STARLIGHT WAND sliders), SCAN FILTER, BACKGROUND, APPLE WATCH (the watch
+/// favourites, Watch/VFDWatchSection.swift), BOARD FIRMWARE (the
 /// ESP32's firmware and its Bluetooth update, FirmwareUpdater) and ABOUT.
 @MainActor
 enum VFDSettingsScreen: VFDScreen {
@@ -29,6 +30,7 @@ enum VFDSettingsScreen: VFDScreen {
         y = transmission(ctx, c, y, w)
         y = scanFilter(ctx, c, y, w)
         y = background(ctx, c, y, w)
+        y = VFDWatchSection.draw(ctx, c, y, w)
         y = firmware(ctx, c, y, w)
         y = about(ctx, c, y, w)
         return y

@@ -69,6 +69,11 @@ struct StarlightWandView: View {
     private let emptyText: String
     private let sendAt: (Int) -> Void
     private let deleteAt: ((Int) -> Void)?
+    /// The Apple Watch star of the colour the picker shows (the iPhone's own colours only).
+    private let starredAt: ((Int) -> Bool)?
+    private let starAt: ((Int) -> Void)?
+    /// The star follows every favourites change.
+    @ObservedObject private var favorites: WatchFavoritesStore = WatchFavoritesStore.shared
 
     @State private var selectedIndex = 0
     @State private var glowColorIndex = defaultGlowIndex
@@ -98,15 +103,19 @@ struct StarlightWandView: View {
             }
         }
         self.deleteAt = nil
+        self.starredAt = nil
+        self.starAt = nil
     }
 
     /// The iPhone's own learned colours. With `onDelete` the picker also offers to delete the
-    /// colour it shows.
+    /// colour it shows; with `onStar` it shows the Apple Watch star of that colour.
     init(
         packets: [MagicPacket],
         displayColorIndex: Int,
         sendEnabled: Bool = true,
         onDelete: ((MagicPacket) -> Void)? = nil,
+        isStarred: ((MagicPacket) -> Bool)? = nil,
+        onStar: ((MagicPacket) -> Void)? = nil,
         onTransmit: @escaping (MagicPacket) -> Void
     ) {
         var list: [StarlightWandEntry] = []
@@ -132,6 +141,25 @@ struct StarlightWandView: View {
             }
         } else {
             self.deleteAt = nil
+        }
+        if let starredHandler = isStarred {
+            self.starredAt = { index in
+                if index >= 0 && index < all.count {
+                    return starredHandler(all[index])
+                }
+                return false
+            }
+        } else {
+            self.starredAt = nil
+        }
+        if let starHandler = onStar {
+            self.starAt = { index in
+                if index >= 0 && index < all.count {
+                    starHandler(all[index])
+                }
+            }
+        } else {
+            self.starAt = nil
         }
     }
 
@@ -233,6 +261,12 @@ struct StarlightWandView: View {
                 menuItems
             } label: {
                 pickerLabel
+            }
+
+            if let starAt, selectedEntry != nil {
+                FavoriteStarButton(on: starredAt?(selectedIndex) ?? false) {
+                    starAt(selectedIndex)
+                }
             }
 
             MMPrimaryButton(title: "SEND", enabled: sendEnabled && selectedEntry != nil) {

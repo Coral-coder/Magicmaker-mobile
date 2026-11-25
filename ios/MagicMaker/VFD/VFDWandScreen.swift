@@ -312,13 +312,13 @@ enum VFDWandScreen: VFDScreen {
     }
 
     /// StarlightWandView.pickerRow: the menu label box (glow swatch, colour name, middle-truncated
-    /// code, up/down chevrons) and SEND (96 pt wide).
+    /// code, up/down chevrons), the Apple Watch star of the colour shown, and SEND (96 pt wide).
     fileprivate static func pickerRow(_ ctx: VFDContext, _ ui: VFDUIState, _ st: VFDWandState,
                                       _ fb: VFDFrameBuffer, _ c: Int, _ r: Int, _ w: Int) {
         let h: Int = VFDWandScreen.pickH
         let sendW: Int = VFDWandScreen.cells(ctx, 96)
         let gap: Int = 6
-        let bw: Int = w - sendW - gap
+        let bw: Int = w - sendW - gap - VFDStar.boxW - gap
         fb.box(c, r, bw, h, VFDInk.dim)
         let swatch: UInt8 = fb.rgb(VFDColors.starlightGlow(st.glowIndex))
         VFDWandScreen.ledDot(fb, c + 5, r + 4 + 1, swatch)
@@ -335,7 +335,16 @@ enum VFDWandScreen: VFDScreen {
         fb.tap(c, r, bw, h, name: "menu:COLOR", action: {
             VFDWandScreen.colorMenu(ctx, ui)
         })
-        let sx: Int = c + bw + gap
+        // The star of the colour shown (none while the library is empty).
+        let starX: Int = c + bw + gap
+        if st.pickIndex >= 0 && st.pickIndex < st.library.count {
+            let starred: Bool = WatchFavoritesStore.shared.isStarred(hex: st.library[st.pickIndex].hex)
+            VFDStar.box(fb, starX, r, VFDStar.boxW, h, on: starred)
+            fb.tap(starX, r, VFDStar.boxW, h, name: "button:STAR", action: {
+                VFDWandScreen.toggleShownStar(ctx, ui)
+            })
+        }
+        let sx: Int = starX + VFDStar.boxW + gap
         let sw: Int = c + w - sx
         let sendX: Int = sx + VFDMath.floorDiv(sw - VFDText.width("SEND"), 2)
         if !st.library.isEmpty {
@@ -485,16 +494,23 @@ enum VFDWandScreen: VFDScreen {
             let nameRow: Int = ky + VFDMath.floorDiv(ascent - 7, 2)
             // The code's palette colour as a 5 x 5 true-colour dot before its name (the name stays).
             let dotRoom: Int = 5 + 4
-            let shownName: String = VFDText.fit(nm, c + w - nx - dotRoom)
+            let shownName: String = VFDText.fit(nm, c + w - nx - dotRoom - VFDStar.colW)
             let nameInk: UInt8 = sel ? VFDInk.highlight : VFDInk.dim
-            let nameStart: Int = target.textRight(c + w - 1, nameRow, shownName, .small, nameInk)
+            let nameStart: Int = target.textRight(c + w - 1 - VFDStar.colW, nameRow, shownName, .small, nameInk)
             let dotRGB: VFDRGB = VFDColors.starlightGlow(VFDWandScreen.codeColorIndex(packet.hex))
             VFDWandScreen.ledDot(target, nameStart - dotRoom, nameRow + 1, target.rgb(dotRGB))
+            // The Apple Watch star in the last colW cells of the name row.
+            VFDStar.draw(target, c + w - VFDStar.colW + 3, nameRow, on: WatchFavoritesStore.shared.isStarred(hex: packet.hex))
             target.hline(c, yy + rowH - 1, w, VFDInk.dim, step: 2)
             target.tap(c, yy, w, rowH, name: "code:" + key, action: {
                 VFDWandScreen.transmitColor(ctx, ui, packet)
             }, long: {
                 VFDWandScreen.beginRename(ctx, packet)
+            })
+            // After the row's tap, so it is on top.
+            let starLabel: String = (custom?.isEmpty == false) ? (custom ?? packet.label) : packet.label
+            target.tap(c + w - VFDStar.colW, yy, VFDStar.colW, rowH, name: "code:star:" + key, action: {
+                VFDWatchSection.toggleStar(ctx, hex: packet.hex, label: starLabel, source: WatchFavorite.Source.newWand)
             })
             yy += rowH
             i += 1
@@ -520,11 +536,19 @@ enum VFDWandScreen: VFDScreen {
                              VFDWandScreen.setMode(ctx, ui, index == 1)
                          })
 
-        // Programmable quick button: tap sends it, a long press reprograms it.
-        y = VFDW.button(fb, L, c, y, w, VFDWandScreen.quickLabel(ctx.vm), name: "button:QUICK", action: {
+        // Programmable quick button: tap sends it, a long press reprograms it; its Apple Watch
+        // star on the right (the favourite follows the button).
+        let quickTop: Int = y
+        let quickW: Int = w - VFDStar.boxW - 4
+        y = VFDW.button(fb, L, c, y, quickW, VFDWandScreen.quickLabel(ctx.vm), name: "button:QUICK", action: {
             VFDWandScreen.sendQuick(ctx)
         }, long: {
             VFDWandScreen.editQuick(ctx)
+        })
+        let quickStarX: Int = c + quickW + 4
+        VFDStar.box(fb, quickStarX, quickTop, VFDStar.boxW, VFDW.ctrlH, on: WatchFavoritesStore.shared.isQuickStarred)
+        VFDW.tap(fb, quickStarX, quickTop, VFDStar.boxW, VFDW.ctrlH, "button:QUICK STAR", action: {
+            VFDWatchSection.toggleQuickStar(ctx)
         })
 
         // LOOP (disabled without a selected colour)
@@ -610,6 +634,9 @@ enum VFDWandScreen: VFDScreen {
                        ctx.prompt(title: "QUICK BUTTON", message: "Hex (8301...)", text: hexDraft,
                                   keyboard: .hex, onDone: { (hex: String) in
                                       vm.setWandQuick(label: label, hex: hex)
+                                      // A starred quick button: its watch favourite follows.
+                                      WatchFavoritesStore.shared.followQuick(label: vm.wandQuickLabel,
+                                                                             hex: vm.wandQuickHex)
                                   })
                    })
     }
@@ -692,6 +719,16 @@ enum VFDWandScreen: VFDScreen {
         let current = VFDWandScreen.picker(ctx, ui, entries)
         let next: Int = (current.index + 1) % entries.count
         VFDWandScreen.pick(ctx, ui, entries, next)
+    }
+
+    /// The picker row's star: the colour shown, added to or removed from the watch favourites.
+    fileprivate static func toggleShownStar(_ ctx: VFDContext, _ ui: VFDUIState) {
+        let entries: [MagicPacket] = VFDWandScreen.library(ctx.store, newWand: false)
+        if entries.isEmpty { return }
+        let current = VFDWandScreen.picker(ctx, ui, entries)
+        if current.index < 0 || current.index >= entries.count { return }
+        let packet: MagicPacket = entries[current.index]
+        VFDWatchSection.toggleStar(ctx, hex: packet.hex, label: packet.label, source: WatchFavorite.Source.wandColor)
     }
 
     /// StarlightWandView.sendSelected: the pulse, then WandScreen.transmitColor.
