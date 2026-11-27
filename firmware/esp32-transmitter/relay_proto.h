@@ -370,6 +370,7 @@ enum RelayAction : uint8_t {
   RELAY_ACT_CATALOG,          // empty library: ok + "items":[]
   RELAY_ACT_POWER_OFF,        // deep sleep until RST (EN); needs "confirm":true
   RELAY_ACT_SET_CUTOFF,       // low-battery cutoff level (boards with a battery reader)
+  RELAY_ACT_SET_RADIO_SLEEP,  // BLE modem sleep on/off (Heltec V3 builds with it; applies at boot)
   RELAY_ACT_UNSUPPORTED,      // library, auto rules, scan filter, live-feed edits, Wi-Fi pairing
 };
 
@@ -379,7 +380,7 @@ struct RelayActionName {
 };
 
 // Every action name and alias the Android relay accepts (RelayCommands.execute), plus the board's
-// own power actions (power_off, set_low_cutoff: ESP32 only).
+// own power actions (power_off, set_low_cutoff, set_radio_sleep: ESP32 only).
 static const RelayActionName RELAY_ACTIONS[] = {
     {"transmit", RELAY_ACT_TRANSMIT},
     {"tx", RELAY_ACT_TRANSMIT},
@@ -453,6 +454,9 @@ static const RelayActionName RELAY_ACTIONS[] = {
     {"set_low_cutoff", RELAY_ACT_SET_CUTOFF},
     {"low_cutoff", RELAY_ACT_SET_CUTOFF},
     {"set_cutoff", RELAY_ACT_SET_CUTOFF},
+    {"set_radio_sleep", RELAY_ACT_SET_RADIO_SLEEP},
+    {"radio_sleep", RELAY_ACT_SET_RADIO_SLEEP},
+    {"set_bt_sleep", RELAY_ACT_SET_RADIO_SLEEP},
 };
 
 static inline uint8_t relayActionFor(const char* lowerName) {
@@ -477,6 +481,7 @@ enum RelayCmdType : uint8_t {
   RELAY_CMD_SET_INTERLEAVE,  // en
   RELAY_CMD_POWER_OFF,       // -
   RELAY_CMD_SET_CUTOFF,      // ms = cutoff mV (0 = off, 3200 / 3300 / 3400)
+  RELAY_CMD_SET_RADIO_SLEEP, // en (saved; the board restarts when the radio has to change)
 };
 
 enum : uint8_t {
@@ -506,11 +511,13 @@ struct RelayReply {
 
 // What the NimBLE task remembers to validate a command without asking loop(): whether a loop
 // packet was ever given (set_*_loop enabled:true without one is refused), and whether this board
-// reads a battery (set_low_cutoff is refused without one).
+// reads a battery (set_low_cutoff is refused without one), and whether this build has BLE modem
+// sleep (set_radio_sleep is refused without it).
 struct RelayShadow {
   bool haveTxLoopPacket;
   bool haveWandLoopPacket;
   bool hasBattery;
+  bool hasRadioSleep;
 };
 
 static inline void relayReplyOk(RelayReply& r) {
@@ -739,6 +746,22 @@ static inline bool relayParseCommand(const char* s, size_t n, const RelayShadow&
       return true;
     }
 
+    case RELAY_ACT_SET_RADIO_SLEEP: {
+      if (!sh.hasRadioSleep) {  // classic ESP32, or a Heltec image linked without the wrap
+        relayReplyError(r, "unsupported");
+        return false;
+      }
+      // "enabled" must be given as a bool: a missing or odd value never changes the radio.
+      const bool on = relayBoolParam(s, n, "enabled", true);
+      if (on != relayBoolParam(s, n, "enabled", false)) {
+        relayReplyError(r, "bad enabled");
+        return false;
+      }
+      c.type = RELAY_CMD_SET_RADIO_SLEEP;
+      c.en = on;
+      return true;
+    }
+
     case RELAY_ACT_UNSUPPORTED:
       relayReplyError(r, "unsupported");
       return false;
@@ -784,6 +807,10 @@ static inline bool relayParseTransmitWrite(const char* s, size_t n, ChipCmd& c) 
 }
 
 // ---- STATUS ---------------------------------------------------------------------------------
+// STATUS "radioSleep" (only while the BLE modem-sleep setting is off): 0 = the user turned it off,
+// 2 = the board did (it crashed, or links kept failing, with modem sleep on). On: no key ("btSleep").
+enum : uint8_t { RELAY_RSOFF_NONE = 0, RELAY_RSOFF_USER = 1, RELAY_RSOFF_AUTO = 2 };
+
 enum RelayProgram : uint8_t { RELAY_PROG_NONE = 0, RELAY_PROG_KEEP_AWAKE, RELAY_PROG_TX_LOOP, RELAY_PROG_WAND_LOOP };
 
 // Everything a STATUS read reports, copied out of loop() under a lock (plain data only).
@@ -805,6 +832,7 @@ struct RelaySnapshot {
   uint8_t  bytes[RELAY_PACKET_MAX];
   char     label[RELAY_LABEL_MAX + 1];  // the running loop's label ("" = none)
   bool     btSleep;      // diagnostic: BLE modem sleep is on (btsleep.h)
+  uint8_t  radioSleepOff; // diagnostic: why the modem-sleep setting is OFF (RELAY_RSOFF_*); 0 = no key
   uint32_t advMaxUs;     // diagnostic: longest advertising restart, us (0: no key; MM_DEBUG_TIMING)
 };
 
@@ -871,7 +899,8 @@ static inline void relayPutIfFits(RelayOut& o, const char* part) {
 }
 
 // The STATUS value: the last command's reply merged with the chip's state. Essential short fields
-// first, then the running program's hex and label, then the diagnostics (conn, btSleep, advMaxUs).
+// first, then the running program's hex and label, then the diagnostics (conn, btSleep, radioSleep,
+// advMaxUs).
 // `cap` >= 512; the result stays <= RELAY_STATUS_LIMIT bytes: the diagnostics are left out first,
 // then the label, then the hex, when they would not fit. Returns the length. No printf: this runs
 // on the NimBLE task's small stack.
@@ -974,6 +1003,8 @@ static inline size_t relayFormatStatus(const RelaySnapshot& s, const RelayReply&
     relayPutIfFits(o, part);
   }
   if (s.btSleep) relayPutIfFits(o, ",\"btSleep\":true");
+  if (s.radioSleepOff == RELAY_RSOFF_USER) relayPutIfFits(o, ",\"radioSleep\":0");
+  if (s.radioSleepOff == RELAY_RSOFF_AUTO) relayPutIfFits(o, ",\"radioSleep\":2");
   if (s.advMaxUs > 0) {
     d.len = 0;
     part[0] = '\0';

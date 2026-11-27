@@ -38,10 +38,11 @@ struct Parsed {
   RelayReply r;
 };
 
-Parsed cmd(const std::string& json, bool hasBattery = true) {
+Parsed cmd(const std::string& json, bool hasBattery = true, bool hasRadioSleep = true) {
   RelayShadow sh;
   std::memset(&sh, 0, sizeof(sh));
   sh.hasBattery = hasBattery;
+  sh.hasRadioSleep = hasRadioSleep;
   Parsed p;
   p.queued = relayParseCommand(json.data(), json.size(), sh, p.c, p.r);
   return p;
@@ -109,6 +110,29 @@ void testSetCutoff() {
   CHECK(relayCutoffSnap(0) == 0);
   CHECK(relayCutoffSnap(2999) == -1 && relayCutoffSnap(3601) == -1 && relayCutoffSnap(-1) == -1);
   CHECK(relayCutoffSnap(3000) == 3200 && relayCutoffSnap(3250) == 3300 && relayCutoffSnap(3350) == 3400);
+}
+
+// ---- set_radio_sleep ---------------------------------------------------------------------------
+void testSetRadioSleep() {
+  for (const char* name : {"set_radio_sleep", "radio_sleep", "set_bt_sleep", "Set_Radio_Sleep"}) {
+    const std::string n(name);
+    Parsed p = cmd("{\"action\":\"" + n + "\",\"enabled\":false}");
+    CHECK_MSG(p.queued && p.r.ok && p.c.type == RELAY_CMD_SET_RADIO_SLEEP && !p.c.en, n);
+    p = cmd("{\"action\":\"" + n + "\",\"enabled\":true}");
+    CHECK_MSG(p.queued && p.r.ok && p.c.type == RELAY_CMD_SET_RADIO_SLEEP && p.c.en, n);
+  }
+  // Quoted booleans and any key order are accepted, as elsewhere.
+  Parsed p = cmd("{\"enabled\":\"false\",\"action\":\"set_radio_sleep\"}");
+  CHECK(p.queued && p.c.type == RELAY_CMD_SET_RADIO_SLEEP && !p.c.en);
+  // A missing or odd "enabled" never changes the radio.
+  for (const char* v : {"", ",\"enabled\":1", ",\"enabled\":0", ",\"enabled\":\"yes\"", ",\"enabled\":null",
+                        ",\"enabled\":truex", ",\"on\":true", ",\"x\":{\"enabled\":true}"}) {
+    const std::string json = std::string("{\"action\":\"set_radio_sleep\"") + v + "}";
+    CHECK_MSG(isError(cmd(json), "bad enabled"), json);
+  }
+  // Classic ESP32 / a Heltec image without the link wrap: unsupported, whatever the value.
+  CHECK(isError(cmd("{\"action\":\"set_radio_sleep\",\"enabled\":true}", true, false), "unsupported"));
+  CHECK(isError(cmd("{\"action\":\"set_radio_sleep\"}", false, false), "unsupported"));
 }
 
 // ---- the commands next to them still parse as before ------------------------------------------
@@ -294,6 +318,18 @@ void testStatusKeys() {
   s.advMaxUs = 0;
   j = status(s, okReply(), link(24, 2, 400));
   CHECK_MSG(!parsed(j).has("btSleep") && !parsed(j).has("advMaxUs") && parsed(j).has("conn"), j);
+  CHECK_MSG(!parsed(j).has("radioSleep"), j);
+
+  // radioSleep: only while the setting is off, after btSleep, 0 = the user, 2 = the board.
+  s.radioSleepOff = RELAY_RSOFF_USER;
+  s.advMaxUs = 77;
+  j = status(s, okReply(), link(24, 2, 400));
+  CHECK_MSG(join(keys(j)).find("conn,radioSleep,advMaxUs") != std::string::npos && parsed(j)["radioSleep"].asInt() == 0, j);
+  s.radioSleepOff = RELAY_RSOFF_AUTO;
+  j = status(s, okReply(), noLink());
+  CHECK_MSG(parsed(j)["radioSleep"].asInt() == 2, j);
+  s.radioSleepOff = RELAY_RSOFF_NONE;
+  s.advMaxUs = 0;
 }
 
 // The engine reports no cutMv (the sketch adds it on the Heltec): a classic STATUS has no key.
@@ -431,6 +467,7 @@ void testStatusLimits() {
 int main() {
   testPowerOff();
   testSetCutoff();
+  testSetRadioSleep();
   testNeighbours();
   testStatusExample();
   testStatusKeys();

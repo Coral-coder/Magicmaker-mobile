@@ -100,6 +100,8 @@ static const UBaseType_t CMD_QUEUE_DEPTH  = 8;
 static const uint32_t POWER_OFF_NOTICE_MS    = 1000;  // the off frame on a lit screen, before the disconnect
 static const uint32_t POWER_OFF_GRACE_MS     = 750;   // dark screen / app: time for the app's STATUS read
 static const uint32_t POWER_OFF_LINK_WAIT_MS = 500;   // disconnects (reason 0x15) acknowledged, at most
+static const uint32_t RESTART_GRACE_MS       = 1000;  // set_radio_sleep: the app reads STATUS, then the restart
+static const uint32_t RESTART_LINK_WAIT_MS   = 500;   // restart: disconnects acknowledged, at most
 static const uint32_t POWER_OFF_LOOP_MS      = 20;    // loop()'s longest sleep while the sequence runs
 static const uint8_t  MAX_LINKS              = 4;     // connection handles tracked for the power-off disconnect
 
@@ -193,6 +195,11 @@ static bool              gOffLit = false;       // the screen was lit: the longe
 #if MM_DEBUG_TIMING
 static uint32_t          gAdvMaxUs = 0;         // longest advApply(), us (STATUS "advMaxUs")
 #endif
+
+// Restart (loop() only): set_radio_sleep changed what the radio has to do, or the modem-sleep guard
+// tripped (btsleep.h). The controller's sleep mode can only be chosen at boot.
+static uint32_t          gRestartAt = 0;        // millis() of a scheduled restart (0: none)
+static bool              gRestartWhenIdle = false;  // the guard tripped: restart once nothing needs us
 
 // loop() only.
 static uint32_t gIdleSince = 0;             // boot / last disconnect: the idle fast-advertising window
@@ -415,6 +422,7 @@ static void publishSnapshot() {
   s.cutMv = (int16_t)powerCutoffMv();
 #endif
   s.btSleep = mmBtModemSleep();
+  s.radioSleepOff = mmBtSleepOffReason();
 #if MM_DEBUG_TIMING
   s.advMaxUs = gAdvMaxUs;
 #endif
@@ -477,7 +485,7 @@ class CommandCallbacks : public NimBLECharacteristicCallbacks {
     if (gOffPending) {
       relayReplyError(reply, "powering off");  // the board is turning off: nothing is queued
     } else if (relayParseCommand((const char*)v.data(), v.length(), gShadow, cmd, reply)) {
-      if (cmd.type == RELAY_CMD_POWER_OFF && otaBusy()) {
+      if ((cmd.type == RELAY_CMD_POWER_OFF || cmd.type == RELAY_CMD_SET_RADIO_SLEEP) && otaBusy()) {
         relayReplyError(reply, "busy");  // an update is being received: finish (or abort) it first
       } else if (xQueueSend(gCmdQueue, &cmd, 0) == pdTRUE) {
         if (cmd.type == RELAY_CMD_POWER_OFF) gOffPending = true;  // later commands: "powering off"
@@ -613,6 +621,36 @@ static bool offService(uint32_t now) {
   return true;
 }
 
+// ---- Restart (loop() only) ---------------------------------------------------------------
+// Every phone is told the link ends (instead of waiting out the supervision timeout), a setting
+// picked in the last seconds is saved, then the chip restarts. The app relinks by itself.
+static void restartNow() {
+  uint16_t handles[MAX_LINKS];
+  uint8_t n;
+  portENTER_CRITICAL(&gSnapMux);
+  n = gLinkCount;
+  memcpy(handles, gLinkHandles, sizeof(handles));
+  portEXIT_CRITICAL(&gSnapMux);
+  for (uint8_t i = 0; i < n; i++) gServer->disconnect(handles[i], BLE_ERR_REM_USER_CONN_TERM);
+  const uint32_t start = millis();
+  while (gLinked > 0 && millis() - start < RESTART_LINK_WAIT_MS) delay(10);
+#if MM_HELTEC_V3
+  powerFlushSaves();
+#endif
+  digitalWrite(STATUS_LED, LOW);
+  esp_restart();  // never returns
+}
+
+// After the commands: a restart that is due (and no firmware update is being received).
+static void restartService(uint32_t now) {
+  if (btSleepTakeTrip()) gRestartWhenIdle = true;  // stored; the next boot starts without modem sleep
+  if (gRestartWhenIdle && gRestartAt == 0 && gLinked == 0 && gEngine.program == RELAY_PROG_NONE &&
+      gEngine.job.type == RELAY_JOB_NONE) {
+    gRestartAt = now;  // nobody is linked and nothing runs: nothing is lost
+  }
+  if (gRestartAt != 0 && (int32_t)(now - gRestartAt) >= 0 && !otaBusy()) restartNow();
+}
+
 // ---- Setup / loop --------------------------------------------------------------------
 void setup() {
   setCpuFrequencyMhz(80); // first: plenty for BLE (its 80 MHz APB clock is the floor); ~half the draw of 240 MHz.
@@ -629,6 +667,7 @@ void setup() {
     // TO START", and PRG during them starts the board anyway.
     if (reset == ESP_RST_BROWNOUT || !screenBootLowNotice()) mmDeepSleepForever();
   }
+  btSleepBegin(reset);                    // the modem-sleep setting (+ the crash rule), before NimBLE starts
 #endif
   pinMode(STATUS_LED, OUTPUT);
   digitalWrite(STATUS_LED, LOW);
@@ -649,6 +688,8 @@ void setup() {
   NimBLEDevice::init(DEVICE_NAME);
   NimBLEDevice::setMTU(247);              // larger packets for firmware updates from the app
   NimBLEDevice::setPower(LINK_POWER);     // default (the link); advertising power is set per advert
+  btSleepStart();                         // modem-sleep guard (Heltec V3 builds with the wrap)
+  gShadow.hasRadioSleep = mmBtSleepAvailable();  // set_radio_sleep: only where the setting exists
 
   gServer = NimBLEDevice::createServer();
   gServer->setCallbacks(new ServerCallbacks());
@@ -704,9 +745,15 @@ void loop() {
       continue;
     }
 #endif
+    if (cmd.type == RELAY_CMD_SET_RADIO_SLEEP) {
+      // Applies at boot only: restart once the app has read this command's STATUS.
+      if (btSleepSet(cmd.en) && gRestartAt == 0) gRestartAt = millis() + RESTART_GRACE_MS;
+      continue;
+    }
     gEngine.apply(cmd, millis());
   }
   gEngine.service(millis());
+  restartService(millis());
 
   const uint32_t now = millis();
   const int linked = gLinked;
@@ -770,6 +817,11 @@ void loop() {
 #endif
   const uint32_t otaMs = otaNextDueMs(after);
   if (otaMs < waitMs) waitMs = otaMs;
+  if (gRestartAt != 0) {
+    const int32_t restartMs = (int32_t)(gRestartAt - after);
+    if (restartMs <= 0) waitMs = 1;
+    else if ((uint32_t)restartMs < waitMs) waitMs = (uint32_t)restartMs;
+  }
   if (waitMs < 1) waitMs = 1;
   ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(waitMs));
 }

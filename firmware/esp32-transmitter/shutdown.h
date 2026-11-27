@@ -32,9 +32,10 @@ struct MmPadLevel { uint8_t pin; uint8_t level; };
 static const MmPadLevel HV3_SLEEP_HOLD[] = {
     {HV3_LORA_NSS_PIN, 1}, {HV3_LORA_SCK_PIN, 0}, {HV3_LORA_MOSI_PIN, 0}, {HV3_LORA_RST_PIN, 1}};
 // RTC pads isolated (no input, no output, no pulls, held): VBAT ADC, header pins, LoRa MISO /
-// BUSY, OLED SDA / SCL / RST.
+// BUSY / DIO1, OLED SDA / SCL / RST.
 static const uint8_t HV3_SLEEP_ISOLATE[] = {1, 2, 3, 4, 5, 6, 7, 11, 13, 14, 17, 18, 21};
-// Never touched: 0 (PRG: strapping, R7 pull-up), 15/16 (32 kHz crystal), 19/20 (USB pads, NC).
+// Never touched: 0 (PRG: strapping, R7 pull-up), 15/16 (32 kHz crystal pads), 19/20 (USB D- / D+,
+// header pins left to the USB PHY).
 // Digital pads (26-48): IDF isolates every one that is not held (35 LED, 36 Vext) at sleep entry,
 // which covers 37 (divider switch) and 43 / 44 (UART to the unpowered CP2102).
 #endif
@@ -80,7 +81,15 @@ static void mmReleaseSleepHolds() {
     rtc_gpio_set_level(g, h.level);
     rtc_gpio_hold_en(g);
   }
-  for (uint8_t p : HV3_SLEEP_ISOLATE) rtc_gpio_isolate((gpio_num_t)p);
+  // rtc_gpio_isolate() turns the RTC side's input, output and pulls off and holds the pad, but it
+  // does not route the pad to the RTC mux: a pad still in digital mode would keep its IO_MUX input
+  // enable latched through the sleep, a floating input (GPIO1-3 come out of reset with it on, 9-14
+  // and 17/18 after the ROM; MISO, BUSY, SDA and SCL are inputs here). Route each pad to the RTC
+  // side first, as IDF's own ext1 wake-up set-up does; mmReleaseSleepHolds() routes them back.
+  for (uint8_t p : HV3_SLEEP_ISOLATE) {
+    rtc_gpio_init((gpio_num_t)p);
+    rtc_gpio_isolate((gpio_num_t)p);
+  }
   gpio_deep_sleep_hold_en();           // 35/36 keep their level; IDF isolates 37, 43, 44, 33-48 at entry
 #else
   digitalWrite(MM_STATUS_LED_PIN, LOW);

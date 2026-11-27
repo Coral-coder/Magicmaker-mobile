@@ -36,6 +36,7 @@
 
 #include <SPI.h>
 #include <Preferences.h>
+#include <driver/gpio.h>
 #include <esp_timer.h>
 #include <esp_system.h>
 #include "battery_model.h"
@@ -152,12 +153,15 @@ static void loraSleep() {
 
 // ---- UART pads ----------------------------------------------------------------------------
 // setup(), right after screenBegin(): the firmware never uses Serial, and on battery the CP2102
-// is unpowered, so the UART0 pads should not drive it. GPIO43 (TX, 499 R to the CP2102) becomes a
-// plain input; GPIO44 (RX) an input with the pull-down, which is also the USB hint (a powered
-// CP2102 holds it HIGH). Flashing is unaffected (the ROM bootloader sets the pads up again).
+// is unpowered, so the UART0 pads should not drive it. GPIO43 (TX, 499 R to the CP2102) is
+// switched off entirely: no output, no pull, and no input buffer either (nothing reads it, and an
+// input left floating can draw current); GPIO44 (RX) an input with the pull-down, which is also the
+// USB hint (a powered CP2102 holds it HIGH). Flashing is unaffected (the ROM bootloader sets the
+// pads up again).
 static void uartRelease() {
 #if MM_UART_RELEASE
-  pinMode(HV3_UART_TX_PIN, INPUT);
+  pinMode(HV3_UART_TX_PIN, INPUT);                                     // GPIO function: U0TXD off the pad
+  gpio_set_direction((gpio_num_t)HV3_UART_TX_PIN, GPIO_MODE_DISABLE);  // input buffer off as well
   pinMode(HV3_UART_RX_PIN, INPUT_PULLDOWN);
 #endif
 }
