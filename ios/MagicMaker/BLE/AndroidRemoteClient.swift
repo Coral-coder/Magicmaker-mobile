@@ -45,6 +45,16 @@ struct AndroidRemoteStatus: Equatable {
     var batteryCapacityMah: Int? = nil
     var runtimeMinutes: Int? = nil
     var charging = false
+    // Firmware 1.5+ (relay protocol 3). `cutMv` comes from the Heltec V3 only: its low-battery
+    // cutoff in mV (0 = off, 3200 / 3300 / 3400), even before it has a battery reading.
+    var lowCutoffMv: Int? = nil
+    /// `batLow`: the battery is below the cutoff + 0.10 V (never set while charging or on USB).
+    var batteryLow = false
+    /// `conn`: the reading phone's link, [interval (1.25 ms units), peripheral latency,
+    /// supervision timeout (10 ms units)]; a diagnostic, dropped first when STATUS is full.
+    var linkParams: [Int]? = nil
+    /// `btSleep`: the board's Bluetooth modem sleep is on (a diagnostic, like `conn`).
+    var btModemSleep = false
     var keepAwakeHex: String? = nil
     var txLoopHex: String? = nil
     var starlightLoopHex: String? = nil
@@ -92,6 +102,10 @@ struct AndroidRemoteStatus: Equatable {
         s.batteryCapacityMah = json["batMah"] as? Int
         s.runtimeMinutes = json["runMin"] as? Int
         s.charging = json["charging"] as? Bool ?? false
+        s.lowCutoffMv = json["cutMv"] as? Int
+        s.batteryLow = json["batLow"] as? Bool ?? false
+        s.linkParams = json["conn"] as? [Int]
+        s.btModemSleep = json["btSleep"] as? Bool ?? false
         s.keepAwakeHex = json["keepAwakeHex"] as? String
         s.txLoopHex = json["txLoopHex"] as? String
         s.starlightLoopHex = json["starlightLoopHex"] as? String
@@ -129,8 +143,10 @@ extension AndroidRemoteStatus {
         return "IDLE"
     }
 
-    /// "68% · 272/400 MAH · ~9H 40M LEFT" (missing parts left out), "CHARGING · 4.18V", or nil
-    /// when the board reports no battery (the classic ESP32).
+    /// "68% · 272/400 MAH · ~9H 40M LEFT" (missing parts left out), "LOW · 8% · 32/400 MAH ·
+    /// ~25M LEFT" while the board warns of a low battery (firmware 1.5+; the runtime then counts
+    /// down to its cutoff), "CHARGING · 4.18V", or nil when the board reports no battery (the
+    /// classic ESP32).
     var esp32BatteryText: String? {
         guard batteryMv != nil || batteryPercent != nil else { return nil }
         if charging {
@@ -150,7 +166,33 @@ extension AndroidRemoteStatus {
         if parts.isEmpty, let mv = batteryMv {
             parts.append(Self.voltsText(mv: mv))
         }
+        if batteryLow { parts.insert("LOW", at: 0) }
         return parts.joined(separator: " · ")
+    }
+
+    /// "30 MS · LAT 2 · TO 4 S" from `conn` (interval × 1.25 ms, peripheral latency, supervision
+    /// timeout × 10 ms), then "MODEM SLEEP" while the board's Bluetooth modem sleep is on; nil when
+    /// the board reports neither (firmware before 1.5, or a full STATUS that dropped them).
+    var esp32LinkText: String? {
+        var parts: [String] = []
+        if let link = linkParams, link.count >= 3 {
+            parts.append(Self.decimalText(Double(link[0]) * 1.25) + " MS")
+            parts.append("LAT \(link[1])")
+            parts.append("TO " + Self.decimalText(Double(link[2]) / 100.0) + " S")
+        }
+        if btModemSleep { parts.append("MODEM SLEEP") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "30", "7.5", "31.25", "0.72": at most two decimals, no trailing zeros ("?" when unusable).
+    static func decimalText(_ value: Double) -> String {
+        guard value.isFinite, value >= 0, value < 1_000_000 else { return "?" }
+        let hundredths: Int = Int((value * 100).rounded())
+        let whole: Int = hundredths / 100
+        let fraction: Int = hundredths % 100
+        if fraction == 0 { return "\(whole)" }
+        if fraction % 10 == 0 { return "\(whole).\(fraction / 10)" }
+        return "\(whole)." + (fraction < 10 ? "0\(fraction)" : "\(fraction)")
     }
 
     /// "FW 1.2 · HELTEC V3 · UP 2H 14M".

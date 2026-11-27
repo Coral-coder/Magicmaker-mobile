@@ -288,6 +288,15 @@ struct RelayEngine {
     }
   }
 
+  // Power-off: nothing on air and nothing to come (the job, the program, a waiting replay step,
+  // a loop re-arm). Settings and stored packets stay; nothing is persisted either way.
+  void halt() {
+    memset((void*)&job, 0, sizeof(job));
+    program = RELAY_PROG_NONE;
+    slotFull = false;
+    loopRearm = false;
+  }
+
   // ---- Time -------------------------------------------------------------------------------
   // Ends phases that are over and starts what follows (the next phase, the replay slot, the
   // keep-awake stream, a loop burst that is due).
@@ -341,7 +350,7 @@ struct RelayEngine {
     return (uint16_t)((uint64_t)done * 1000u / job.phaseMs);
   }
 
-  // STATUS fields owned by the engine (battery fields: none).
+  // STATUS fields owned by the engine (battery and power fields: absent).
   void snapshot(RelaySnapshot& s) const {
     memset((void*)&s, 0, sizeof(s));
     s.program = program;
@@ -355,6 +364,7 @@ struct RelayEngine {
     s.batMv = -1;
     s.batPct = -1;
     s.runMin = -1;
+    s.cutMv = -1;
     if (program == RELAY_PROG_KEEP_AWAKE) {
       s.len = keepLen;
       memcpy(s.bytes, keepBytes, keepLen);

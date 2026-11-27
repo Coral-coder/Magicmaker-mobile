@@ -108,7 +108,7 @@ enum WatchContextBuilder {
                                     hint: String) -> WatchEsp32Status {
         var out = WatchEsp32Status(state: "NOT SELECTED", batteryPct: nil, batteryMv: nil, runtimeMin: nil,
                                    charging: false, program: nil, firmware: nil, board: nil, uptimeS: nil,
-                                   outdated: false)
+                                   outdated: false, batteryLow: nil)
         if backend != .esp32 { return out }
         out.state = linkState(linked: linked, hint: hint)
         out.outdated = vm.esp32FirmwareOutdated
@@ -117,6 +117,7 @@ enum WatchContextBuilder {
         out.batteryMv = report.batteryMv
         out.runtimeMin = report.runtimeMinutes
         out.charging = report.charging
+        out.batteryLow = report.batteryLow && !report.charging
         out.program = report.esp32ProgramText
         out.firmware = nonEmpty(report.firmware)
         out.board = nonEmpty(report.board)

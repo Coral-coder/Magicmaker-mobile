@@ -10,7 +10,6 @@ import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.ui.DEFAULT_WAND_QUICK_HEX
 import com.magicmaker.android.ui.isNewWandHex
 import com.magicmaker.android.ui.loadNewWandNames
-import com.magicmaker.android.ui.saveNewWandName
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -682,7 +681,8 @@ object VFDWandScreen : VFDScreen {
         val initial: String = newWandNames(ctx)[packet.hex.uppercase()] ?: packet.colors
         val hex: String = packet.hex
         ctx.prompt("RENAME CODE", message = hex.uppercase(), text = initial, keyboard = VFDKeyboard.text) { entered ->
-            saveNewWandName(prefs(ctx), hex, entered)
+            // Through the store so the name is also a NEWWAND sync record (P3).
+            ctx.store.setNewWandName(hex, entered)
             ctx.redraw()
         }
     }

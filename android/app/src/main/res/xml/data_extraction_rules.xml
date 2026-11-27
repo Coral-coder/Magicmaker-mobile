@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Android 12+: Google backup and phone-to-phone transfer take all app data except the cloud
      dictionary token, which stays on this phone only (PacketSync.TOKEN_PREFS). -->
+<!-- Sync identity (deviceId, dbId, issuedSeq, event epoch, group key) lives in noBackupFilesDir
+     (sync_identity.json), which backup and device transfer never move: it must stay there, so a
+     restored or transferred phone gets a new identity (docs/SYNC_P3_ANDROID_PLAN.md §3.3). -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="magicmaker_secrets.xml" />

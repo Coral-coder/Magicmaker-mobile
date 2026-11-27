@@ -107,23 +107,25 @@ struct TelemetryBar: View {
         return "BLE:LINK"
     }
 
-    /// "ESP32:68% ~9H 40M", "ESP32:CHG" (charging or on USB power, as the Android app shows it),
-    /// "ESP32:4.05V", or nil when no ESP32 status with a battery. Only while the link is up: the
-    /// last status is kept until a poll reads none, and a skipped poll (firmware transfer, GATT
-    /// work queued) would otherwise leave an unlinked board's old battery on the bar.
+    /// "ESP32:68% ~9H 40M", "ESP32:8% LOW ~25M" while the board warns of a low battery (firmware
+    /// 1.5+), "ESP32:CHG" (charging or on USB power, as the Android app shows it), "ESP32:4.05V",
+    /// or nil when no ESP32 status with a battery. Only while the link is up: the last status is
+    /// kept until a poll reads none, and a skipped poll (firmware transfer, GATT work queued) would
+    /// otherwise leave an unlinked board's old battery on the bar.
     @MainActor
     static func esp32BatteryToken(vm: AppViewModel) -> String? {
         guard vm.relayBackend == .esp32, vm.relayGattReady, let status = vm.androidRemote else { return nil }
         guard status.batteryMv != nil || status.batteryPercent != nil else { return nil }
         if status.charging { return "ESP32:CHG" }
+        let low: String = status.batteryLow ? " LOW" : ""
         var token: String = "ESP32:"
         if let pct = status.batteryPercent {
-            token += "\(pct)%"
+            token += "\(pct)%" + low
             if let minutes = status.runtimeMinutes, minutes >= 0 {
                 token += " " + AndroidRemoteStatus.runtimeText(minutes: minutes)
             }
         } else if let mv = status.batteryMv {
-            token += String(format: "%.2fV", Double(mv) / 1000.0)
+            token += String(format: "%.2fV", Double(mv) / 1000.0) + low
         }
         return token
     }

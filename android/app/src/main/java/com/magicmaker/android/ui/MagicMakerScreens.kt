@@ -1677,7 +1677,7 @@ internal fun WandTab(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    newWandNames = saveNewWandName(prefs, target.hex, renameText)
+                    newWandNames = app.store.setNewWandName(target.hex, renameText)
                     renameTarget = null
                 }) { Text("SAVE", style = techLabel(), color = AppColors.Cyan) }
             },
@@ -2243,14 +2243,15 @@ private fun GattRelayPanel(state: ServiceState.UiState, bleGranted: Boolean) {
 internal fun RelayTab(state: ServiceState.UiState, bleGranted: Boolean, wifiGranted: Boolean, onRequestWifiPerm: () -> Unit) {
     val ctx = LocalContext.current
     Column(Modifier.padding(AppDimens.pad), verticalArrangement = Arrangement.spacedBy(AppDimens.gap)) {
+        SyncDevicesCard()
         Text("RELAY / REMOTE", style = techHeader())
         Text(
-            "STANDALONE keeps this phone off the air as a relay (no BLE GATT advertising) so an " +
-                "iPhone can target the ESP32. Pick BLE GATT or WiFi only when relaying for an iPhone.",
+            "The BLE relay is always on: it is also the iPhone's direct sync link, and its advert " +
+                "tag keeps an iPhone that looks for the ESP32 from picking this phone. WiFi adds the hotspot.",
             style = techLabel(),
             color = AppColors.TextDim,
         )
-        RelayControlMode.entries.forEach { mode ->
+        RelayControlMode.entries.filter { it != RelayControlMode.STANDALONE }.forEach { mode ->
             FilterChip(
                 selected = state.relayMode == mode,
                 onClick = {
@@ -2273,12 +2274,7 @@ internal fun RelayTab(state: ServiceState.UiState, bleGranted: Boolean, wifiGran
             )
         }
         when (state.relayMode) {
-            RelayControlMode.STANDALONE -> Text(
-                "Standalone: transmitting directly, not advertising as an iPhone relay.",
-                style = techLabel(),
-                color = AppColors.TextDim,
-            )
-            RelayControlMode.BLE_GATT -> GattRelayPanel(state, bleGranted)
+            RelayControlMode.STANDALONE, RelayControlMode.BLE_GATT -> GattRelayPanel(state, bleGranted)
             RelayControlMode.WIFI_HOTSPOT -> {
                 if (!wifiGranted) {
                     Text("NEARBY DEVICES permission required for WiFi hotspot.", style = techLabel(), color = AppColors.Amber)

@@ -38,6 +38,8 @@ static const uint16_t RELAY_STAR_MIN_MS     = 250;    // set_starlight_burst
 static const uint16_t RELAY_STAR_MAX_MS     = 5000;
 static const uint16_t RELAY_STAR_ABSENT_MS  = 500;
 static const uint16_t RELAY_STATUS_LIMIT    = 508;    // STATUS object stays under one 512-byte value
+static const int32_t  RELAY_CUT_MIN_MV      = 3000;   // set_low_cutoff "mv": 0 = off, else 3000..3600,
+static const int32_t  RELAY_CUT_MAX_MV      = 3600;   //   snapped to the board's levels 3200 / 3300 / 3400
 
 // The band's standalone wake ping, and the "Vibrate" band command (the app's vibrate action
 // carries no hex: the relay knows the packet).
@@ -366,6 +368,8 @@ enum RelayAction : uint8_t {
   RELAY_ACT_LIVE,             // no live feed: ok, no packets
   RELAY_ACT_STATUS,
   RELAY_ACT_CATALOG,          // empty library: ok + "items":[]
+  RELAY_ACT_POWER_OFF,        // deep sleep until RST (EN); needs "confirm":true
+  RELAY_ACT_SET_CUTOFF,       // low-battery cutoff level (boards with a battery reader)
   RELAY_ACT_UNSUPPORTED,      // library, auto rules, scan filter, live-feed edits, Wi-Fi pairing
 };
 
@@ -374,7 +378,8 @@ struct RelayActionName {
   uint8_t action;
 };
 
-// Every action name and alias the Android relay accepts (RelayCommands.execute).
+// Every action name and alias the Android relay accepts (RelayCommands.execute), plus the board's
+// own power actions (power_off, set_low_cutoff: ESP32 only).
 static const RelayActionName RELAY_ACTIONS[] = {
     {"transmit", RELAY_ACT_TRANSMIT},
     {"tx", RELAY_ACT_TRANSMIT},
@@ -442,6 +447,12 @@ static const RelayActionName RELAY_ACTIONS[] = {
     {"show_control_only", RELAY_ACT_UNSUPPORTED},
     {"pairing", RELAY_ACT_UNSUPPORTED},
     {"pairing_info", RELAY_ACT_UNSUPPORTED},
+    {"power_off", RELAY_ACT_POWER_OFF},
+    {"poweroff", RELAY_ACT_POWER_OFF},
+    {"shutdown", RELAY_ACT_POWER_OFF},
+    {"set_low_cutoff", RELAY_ACT_SET_CUTOFF},
+    {"low_cutoff", RELAY_ACT_SET_CUTOFF},
+    {"set_cutoff", RELAY_ACT_SET_CUTOFF},
 };
 
 static inline uint8_t relayActionFor(const char* lowerName) {
@@ -464,6 +475,8 @@ enum RelayCmdType : uint8_t {
   RELAY_CMD_SET_STAR,        // ms
   RELAY_CMD_SET_POWER,       // interval = level 0..3
   RELAY_CMD_SET_INTERLEAVE,  // en
+  RELAY_CMD_POWER_OFF,       // -
+  RELAY_CMD_SET_CUTOFF,      // ms = cutoff mV (0 = off, 3200 / 3300 / 3400)
 };
 
 enum : uint8_t {
@@ -492,10 +505,12 @@ struct RelayReply {
 };
 
 // What the NimBLE task remembers to validate a command without asking loop(): whether a loop
-// packet was ever given (set_*_loop enabled:true without one is refused).
+// packet was ever given (set_*_loop enabled:true without one is refused), and whether this board
+// reads a battery (set_low_cutoff is refused without one).
 struct RelayShadow {
   bool haveTxLoopPacket;
   bool haveWandLoopPacket;
+  bool hasBattery;
 };
 
 static inline void relayReplyOk(RelayReply& r) {
@@ -537,6 +552,16 @@ static inline bool relayBoolParam(const char* s, size_t n, const char* key, bool
 static inline bool relayHexError(RelayReply& r, RelayHexResult h) {
   relayReplyError(r, h == RELAY_HEX_LONG ? "packet too long" : "bad hex");
   return false;
+}
+
+// set_low_cutoff "mv": 0 (off) stays 0; 3000..3600 snaps to the nearest level (< 3250 -> 3200,
+// < 3350 -> 3300, else 3400); anything else is -1 (refused).
+static inline int32_t relayCutoffSnap(int32_t mv) {
+  if (mv == 0) return 0;
+  if (mv < RELAY_CUT_MIN_MV || mv > RELAY_CUT_MAX_MV) return -1;
+  if (mv < 3250) return 3200;
+  if (mv < 3350) return 3300;
+  return 3400;
 }
 
 static inline void relayCmdPacket(ChipCmd& c, const char* hex) {
@@ -689,6 +714,31 @@ static inline bool relayParseCommand(const char* s, size_t n, const RelayShadow&
       r.items = true;  // the library lives on the phone: always empty here
       return false;
 
+    case RELAY_ACT_POWER_OFF:
+      // The app asks first; a stray write must not turn the board off. "busy" (an update being
+      // received) and "powering off" are answered by the sketch, which knows that state.
+      if (!relayBoolParam(s, n, "confirm", false)) {
+        relayReplyError(r, "confirm required");
+        return false;
+      }
+      c.type = RELAY_CMD_POWER_OFF;
+      return true;
+
+    case RELAY_ACT_SET_CUTOFF: {
+      if (!sh.hasBattery) {  // classic ESP32: no battery reader, no cutoff
+        relayReplyError(r, "unsupported");
+        return false;
+      }
+      const int32_t mv = relayCutoffSnap(relayIntParam(s, n, "mv", -1));
+      if (mv < 0) {
+        relayReplyError(r, "bad mv");
+        return false;
+      }
+      c.type = RELAY_CMD_SET_CUTOFF;
+      c.ms = (uint16_t)mv;
+      return true;
+    }
+
     case RELAY_ACT_UNSUPPORTED:
       relayReplyError(r, "unsupported");
       return false;
@@ -749,9 +799,21 @@ struct RelaySnapshot {
   uint16_t batMah;       // rated capacity
   int32_t  runMin;       // < 0: unknown (omitted)
   bool     charging;
+  bool     batLow;       // the low-battery warning stage (with the battery keys, only when true)
+  int16_t  cutMv;        // low-battery cutoff: 0 = off, 3200 / 3300 / 3400; < 0: no key (no battery reader)
   uint8_t  len;          // the running program's packet (keep-awake ping or loop packet)
   uint8_t  bytes[RELAY_PACKET_MAX];
   char     label[RELAY_LABEL_MAX + 1];  // the running loop's label ("" = none)
+  bool     btSleep;      // diagnostic: BLE modem sleep is on (btsleep.h)
+  uint32_t advMaxUs;     // diagnostic: longest advertising restart, us (0: no key; MM_DEBUG_TIMING)
+};
+
+// The link of the phone reading STATUS (diagnostic "conn"), from the read callback.
+struct RelayLinkInfo {
+  bool     valid;
+  uint16_t itvl;     // connection interval, 1.25 ms units
+  uint16_t latency;  // peripheral latency, connection events
+  uint16_t timeout;  // supervision timeout, 10 ms units
 };
 
 struct RelayOut {
@@ -803,12 +865,19 @@ static inline void relayPutBoolKey(RelayOut& o, const char* key, bool v) {
   relayPut(o, v ? "true" : "false");
 }
 
-// The STATUS value: the last command's reply merged with the chip's state, short fields first,
-// hex and label last. `cap` >= 512; the result stays <= RELAY_STATUS_LIMIT bytes (the label, then
-// the hex, is left out when it would not fit). Returns the length. No printf: this runs on the
-// NimBLE task's small stack.
+// A finished ,"key":value part, appended only when it fits with the closing brace.
+static inline void relayPutIfFits(RelayOut& o, const char* part) {
+  if (o.len + strlen(part) + 1 <= RELAY_STATUS_LIMIT) relayPut(o, part);
+}
+
+// The STATUS value: the last command's reply merged with the chip's state. Essential short fields
+// first, then the running program's hex and label, then the diagnostics (conn, btSleep, advMaxUs).
+// `cap` >= 512; the result stays <= RELAY_STATUS_LIMIT bytes: the diagnostics are left out first,
+// then the label, then the hex, when they would not fit. Returns the length. No printf: this runs
+// on the NimBLE task's small stack.
 static inline size_t relayFormatStatus(const RelaySnapshot& s, const RelayReply& r, uint32_t uptimeS, int proto,
-                                       const char* fw, const char* board, char* out, size_t cap) {
+                                       const char* fw, const char* board, const RelayLinkInfo& link, char* out,
+                                       size_t cap) {
   RelayOut o = {out, cap < RELAY_STATUS_LIMIT + 1u ? cap : RELAY_STATUS_LIMIT + 1u, 0};
   if (o.cap == 0) return 0;
   o.p[0] = '\0';
@@ -851,7 +920,9 @@ static inline size_t relayFormatStatus(const RelaySnapshot& s, const RelayReply&
     relayPutIntKey(o, "batMah", s.batMah);
     if (s.charging) relayPutBoolKey(o, "charging", true);
     else if (s.runMin >= 0) relayPutIntKey(o, "runMin", s.runMin);
+    if (s.batLow) relayPutBoolKey(o, "batLow", true);
   }
+  if (s.cutMv >= 0) relayPutIntKey(o, "cutMv", s.cutMv);
   if (r.items) relayPut(o, ",\"items\":[]");
 
   // The running program's packet (and the loop's label), as far as they fit.
@@ -886,6 +957,28 @@ static inline size_t relayFormatStatus(const RelaySnapshot& s, const RelayReply&
         relayPut(o, "\"");
       }
     }
+  }
+
+  // Diagnostics, each only if it still fits.
+  char part[48];
+  RelayOut d = {part, sizeof(part), 0};
+  if (link.valid) {
+    part[0] = '\0';
+    relayPut(d, ",\"conn\":[");
+    relayPutInt(d, link.itvl);
+    relayPut(d, ",");
+    relayPutInt(d, link.latency);
+    relayPut(d, ",");
+    relayPutInt(d, link.timeout);
+    relayPut(d, "]");
+    relayPutIfFits(o, part);
+  }
+  if (s.btSleep) relayPutIfFits(o, ",\"btSleep\":true");
+  if (s.advMaxUs > 0) {
+    d.len = 0;
+    part[0] = '\0';
+    relayPutIntKey(d, "advMaxUs", (int32_t)(s.advMaxUs > 2147483647u ? 2147483647u : s.advMaxUs));
+    relayPutIfFits(o, part);
   }
   relayPut(o, "}");
   return o.len;

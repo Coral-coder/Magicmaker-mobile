@@ -29,6 +29,12 @@ protocol has to change — the app already knows how to drive this service.
   minutes** on the screen and in STATUS (the app's LINK tab). From firmware 1.4 it is also in a
   **battery heartbeat** advert that the Android app reads without connecting (top bar
   `ESP32:68% ~9H 40M`). See **Battery** and **Battery heartbeat** below.
+- **Power off** (firmware 1.5): hold **PRG** for 2 s on the screen's **POWER** page (Heltec V3),
+  or **POWER OFF** in the iPhone app (both boards). The board goes into its deepest sleep with no
+  wake-up source; **RST** (EN on a DevKit) turns it on again. See **Turning it off and on** below.
+- **Low-battery cutoff** (firmware 1.5, Heltec V3): the board turns itself off at **3.30 V** (or
+  3.20 / 3.40 V, or never) so the cell is not run flat, and warns before that (`LOW`). On by
+  default, also on boards updated from 1.4. See **Low-battery cutoff** below.
 
 ## Hardware
 
@@ -162,7 +168,11 @@ No secrets, no Wi-Fi, no config. It just works once flashed.
 > Prefer PlatformIO? `platformio.ini` with `framework = arduino`,
 > `lib_deps = h2zero/NimBLE-Arduino@^1.4.1`, and `src_dir` set to this folder (or copy the
 > `.ino` to `src/main.cpp` together with the `.h` files next to it).
-> Heltec V3: `board = heltec_wifi_lora_32_V3` and add `olikraus/U8g2@2.35.30` to `lib_deps`.
+> Heltec V3: `board = heltec_wifi_lora_32_V3`, add `olikraus/U8g2@2.35.30` to `lib_deps`, and
+> `build_flags = -Wl,--wrap=esp_bt_controller_init` for BLE modem sleep (see **Power**).
+>
+> An Arduino IDE build has no modem sleep (the IDE has no per-sketch linker flags); everything
+> else is the same.
 
 ## Use it with the app
 
@@ -179,21 +189,36 @@ The sketch detects the board when it is compiled (`board.h`); no build flags nee
 **The screen is off and unpowered unless you are using it.**
 
 - Press **PRG** → the screen lights on the **STATUS** page.
-- Press again → next page: **STATUS → LAST PACKET → DEVICE → STATUS …** (on DEVICE the page
-  turns when you let go).
+- Press again → next page: **STATUS → LAST PACKET → DEVICE → LOW BATTERY → POWER → STATUS …**
+  (on DEVICE, LOW BATTERY and POWER the page turns when you let go, so a hold never carries over
+  to the next page).
 - On **DEVICE**, **hold PRG for 1 s** → the next battery capacity: 400 → 500 → 1000 → 1100 →
   2000 → 3000 → 5000 → 400 mAh (keep holding to step again every second, at most one round;
   the `CAP` line is highlighted). The choice is saved and survives reboots.
+- On **LOW BATTERY**, **hold PRG for 1 s** → the next cutoff level: 3.20 → 3.30 → 3.40 V → OFF →
+  3.20 V (same rules; the `CUT` line is highlighted). Saved and kept across reboots.
+- On **POWER**, **hold PRG for 2 s** (the bar fills) → the board turns off. A tap (under 0.4 s)
+  goes on to STATUS; letting go earlier than 2 s cancels. The hold only counts if the press
+  started on the lit POWER page. See **Turning it off and on**.
 - It goes dark **10 s after the last press** (`SCREEN_ON_MS` at the top of the `.ino`).
-- Nothing else lights it: no boot splash, not a phone connecting, not a transmit.
+- Nothing else lights it: no boot splash, not a phone connecting, not a transmit. **One
+  exception:** after you press **RST** with the battery too low to start, the screen shows
+  `TOO LOW TO START` for 2 s (the only sign RST did anything), then the board turns off again;
+  pressing PRG during those 2 s starts it anyway.
 - At runtime PRG is just a button. It only selects flashing mode when held while you tap
-  **RST**.
+  **RST**: then the board looks dead (dark, LED off) and keeps draining the battery. Tap RST
+  again without PRG.
 
 | Page | Shows |
 |---|---|
 | STATUS | `BLE` LINKED / WAITING FOR PHONE · `TX` IDLE / WAKE / SEND with a progress bar for the current phase · what the chip runs by itself: KEEP AWAKE ON / TX LOOP 3S / WAND LOOP 2.5S / KEEP AWAKE OFF · `PKT` packets sent since boot · the last packet's kind (BAND / WAND / PING / RAW) and how long ago · `BAT` % and expected runtime (`68% ~9H 40M`), or `68% CHARGING` / `100% USB POWER` / `--` |
 | LAST PACKET | kind (RAW = a replay step or an MBLE tap), length and stream time (`WAKE+` when a wake ping ran first), then the packet hex, seven bytes a line |
 | DEVICE | `BAT` battery voltage and % · `CAP` charge left of the capacity (`272 OF 400MAH`; hold PRG to change the capacity) · `RUN` expected runtime (`~9H 40M LEFT`, `~40M LEFT`, `~99H+ LEFT`) or CHARGING / USB POWER · `UP` uptime · `BLE` name and the last three bytes of its address · `FW` firmware version and board (`--` wherever there is no plausible battery reading) |
+| LOW BATTERY | `CUT` the cutoff level (`3.30V` or `OFF`; hold PRG to change it) · `BAT` voltage and % · the state: OK / `LOW - CHARGE SOON` / CHARGING / USB POWER / `--` · `LOW` the warning level (`BELOW 3.40V`) · what the cutoff leaves in the cell (`OFF AT ~10% LEFT`, or `NO AUTO POWER-OFF`) · `HOLD PRG: NEXT LEVEL` |
+| POWER | `HOLD PRG TO POWER OFF` · `RST TURNS ON` · the hold bar · `CHARGES WHILE OFF` · `UNPLUG FOR STORAGE` (`UPDATE RUNNING` / `POWER OFF WHEN DONE` and no bar while a Bluetooth update is received) |
+
+In the low-battery warning stage the STATUS page's `BAT` value is drawn inverse with `LOW`
+(`8% LOW ~25M`).
 
 The text uses the app's VFD 5×7 dot-matrix face. `vfd_font_5x7.h` is generated from
 `tools/vfd/vfd_font.py` by `python3 tools/vfd/gen_c.py` (`--check` tells whether it is
@@ -211,36 +236,115 @@ current). Screen code: `oled_ui.h` (power, button), `oled_pages.h` (layout). Bat
 - No Wi-Fi. The SX1262 LoRa radio, which this firmware never uses, is **put to sleep at boot**
   (reset, wait until ready, `SetSleep`; its chip select then stays high). Out of power-on it
   would idle in standby at ~0.6 mA. `MM_LORA_SLEEP 0` (top of `power.h`) leaves it alone.
+- **UART pads released** after boot (`MM_UART_RELEASE`, `board.h`): on battery the USB-serial
+  chip (CP2102) is unpowered, and the ESP32's TX pin would otherwise push current into it through
+  its 499 Ω resistor. Cost: no serial logs or crash text after boot (the firmware never prints
+  anyway). Flashing is unaffected. Build with `-DMM_UART_RELEASE=0` to get them back.
+
+**Turning it off and on** (firmware 1.5)
+
+- **Off:** hold PRG 2 s on the POWER page, or **POWER OFF** in the iPhone app (SETTINGS → BOARD
+  POWER, with a confirm), or the low-battery cutoff. The board stops transmitting, shows
+  `POWERING OFF...` on a lit screen and waits until you let go of PRG (PRG held while pressing RST
+  would start flashing mode), shows `PRESS RST TO TURN ON` for 1 s, disconnects the phone (reason
+  0x15 "power off", so the app sees it at once), saves a capacity or cutoff picked in the last few
+  seconds, and goes into deep sleep with **no wake-up source**. From the app the screen is not
+  lit.
+- **On:** press **RST**. The board starts like after any power-up: screen dark, LED blinking once a
+  second, the app relinks by itself and pushes its settings. Keep-awake and the loops are off
+  (the board always boots idle). If the battery is too low to start, see the exception above.
+- **What "off" is:** the ESP32-S3 in deep sleep with every pin parked: the LED and the Vext rail
+  held off, the LoRa radio asleep with its bus held, the OLED, battery-divider, header and UART
+  pins isolated. Expected **~15–25 µA** at the battery on a V3.2 (estimate; a V3.0/V3.1 can draw up
+  to ~9 µA more through the battery divider while the cell is above ~3.8 V, which software can't
+  fix), against **~35 mA** running.
+- **It is not a full disconnect.** The V3 has no software switch for its battery, so the only
+  true zero is unplugging the battery (or adding a switch). **Unplug it for storage.**
+- **Charging still works while off** (the charger runs from USB, not from the ESP32). A computer
+  opening the serial port can reset, and so turn on, the board.
+- **Classic DevKit:** the ESP32 itself drops to ~10 µA, but most DevKits' regulator and USB-serial
+  chip keep drawing a few mA (5–15 mA is common), so on a DevKit "off" mainly stops the radio.
+  EN turns it on again.
 
 **Battery**
 
 - A LiPo on the battery connector is read on GPIO1 through the board's divider (×4.9, ×1.045
   calibration). The divider is switched on (GPIO37) **only for a reading** (~10 ms) and off
   again straight after: **once a minute while the screen is dark**, every 5 s while it is lit,
-  and 0.1 s after boot. A reading waits while a beacon is on air (its transmit bursts dip the
-  voltage), at most 10 s.
-- The divider switch is active LOW on V3.0/V3.1 and active HIGH on V3.2: the firmware tries
-  LOW, then HIGH if that reads ~0 V, and remembers which worked.
+  every 15 s in the low-battery warning zone (cutoff on), every 5 s after a reading below 3.10 V,
+  and 0.1 s after boot. Outside the warning zone a reading waits while a beacon is on air (its
+  transmit bursts dip the voltage), at most 10 s; inside it, it never waits.
+- **Each reading is 32 samples, 250 µs apart** (~8 ms), and keeps the **75th percentile**, so the
+  short dips of a beacon's transmit bursts barely move it (about +5–10 mV against a plain mean).
+  A sample spread over 300 mV marks the reading unstable. `loop()` waits those ~8 ms (once a
+  minute; a tap landing in them starts up to 8 ms later).
+- The divider switch is active LOW on V3.0/V3.1 and active HIGH on V3.2: the firmware guesses
+  from GPIO37's idle level at boot, falls back to the other level if a reading is ~0 V, and
+  remembers which worked.
 - **%** comes from the filtered voltage on a LiPo resting-voltage curve (rough; it reads high
   while charging). **Charge left** = capacity × %. The capacity is `BATTERY_MAH` (400 mAh) until
-  you pick another on the DEVICE page (hold PRG); that choice is the only thing the firmware
-  ever writes to flash, and only when you change it.
-- **Expected runtime** = charge left ÷ estimated draw. The board cannot measure its current,
-  only the voltage, so the estimate starts from a **model**: a ~15-minute time-weighted average
-  of per-state draws (`DRAW_*` at the top of `battery_model.h`: base, advertising, phone
-  linked, beacon on air, screen lit). Once the battery has visibly drained (≥ 2 % over ≥ 20 min,
-  counted from 10 min after boot or charging), the **measured** drain takes over: the % slope
-  over the last hour (or since the discharge began, for big cells), smoothed, and kept within
-  0.5–2.5× the model, because the flat middle of a LiPo curve makes single slopes noisy.
+  you pick another on the DEVICE page (hold PRG).
+- **Expected runtime** = the charge above the cutoff ÷ estimated draw, so `~0M` is when the
+  cutoff turns the board off (with the cutoff OFF: down to empty). % and charge left stay the
+  cell's own. The board cannot measure its current, only the voltage, so the estimate starts
+  from a **model**: a ~15-minute time-weighted average of per-state draws (`DRAW_*` at the top
+  of `battery_model.h`: base, advertising, phone linked, beacon on air, screen lit). Once the
+  battery has visibly drained (≥ 2 % over ≥ 20 min, counted from 10 min after boot or charging),
+  the **measured** drain takes over: the % slope over the last hour (or since the discharge
+  began, for big cells), smoothed, and kept within 0.5–2.5× the model, because the flat middle of
+  a LiPo curve makes single slopes noisy.
 - **Charging** = the voltage rose ≥ 15 mV within 5 min (it ends when the voltage falls 10 mV
-  from its peak, i.e. unplugged); **USB POWER** = above 4.25 V. Neither shows a runtime. On USB
-  with a full, idle cell the voltage looks like a resting battery, so the screen then shows a
-  runtime as if on battery: the board has no USB-sense pin.
-- **Tune the model with a USB meter** (battery unplugged, board on the meter): the screen-dark,
-  no-phone, nothing-on-air reading is `DRAW_BASE_MA + DRAW_ADV_MA`; link a phone, start
-  keep-awake and light the screen one at a time to see what each adds. Until then the runtime
-  is only as good as the seed `DRAW_BASE_MA` (37.5 mA) for the first half hour.
+  from its peak, i.e. unplugged); **USB POWER** = above 4.25 V, or the **USB hint**: the board has
+  no USB-sense pin, but the CP2102 is powered from USB only and a powered CP2102 holds its TX
+  line (GPIO44, pulled down by the firmware) high. Neither shows a runtime, a warning or a
+  cutoff. The hint is **unverified on hardware**: if a board shows USB POWER on battery alone,
+  build with `-DMM_USB_SENSE=0` (a false "USB" would silence the cutoff); a wall charger whose
+  CP2102 sits idle just falls back to the voltage rules.
+- **Tune the model in the battery lead**: a current meter in series with the battery, USB
+  unplugged. (A USB meter on a PC port also counts ~20 mA of the enumerated CP2102.) The
+  screen-dark, no-phone, nothing-on-air reading is `DRAW_BASE_MA + DRAW_ADV_MA`; link a phone,
+  start keep-awake and light the screen one at a time to see what each adds. Until then the
+  runtime is only as good as the seeds (`DRAW_BASE_MA` 37.5 mA, `DRAW_BEACON_MA` 10 mA) for the
+  first half hour.
 - Without a battery the screen shows `--` (or the charger's output voltage, as USB POWER).
+- **Charge current** is set by the board's charger at ~500 mA, i.e. **1.25 C for a 400 mAh cell**
+  (hardware, not firmware): use a cell rated for it.
+- **Flash writes:** the capacity and the cutoff level (NVS namespace `mm`, keys `batMah` and
+  `lowCut`) are the only things the firmware ever writes to flash: each 3 s after its last change,
+  only if it changed, and at once by a power-off.
+
+**Low-battery cutoff** (firmware 1.5)
+
+The board has **no over-discharge protection of its own**; only the cell's protection circuit,
+if it has one. So 1.5 turns the board off before the cell runs flat:
+
+| Setting | Turns off at | Left in the cell (curve) | `LOW` warning below |
+|---|---|---|---|
+| OFF | never | — | 3.40 V (warning only) |
+| 3.20 V | 3.20 V | ~5 % | 3.30 V |
+| **3.30 V (default)** | 3.30 V | ~10 % | 3.40 V |
+| 3.40 V | 3.40 V | ~18 % | 3.50 V |
+
+- Change it on the **LOW BATTERY** page (hold PRG) or in the iPhone app (SETTINGS → BOARD POWER).
+  The board keeps it (NVS); the app does not push it on link. Boards updated from 1.4 start at
+  3.30 V.
+- **Warning:** below cutoff + 0.10 V (filtered), off again from 50 mV above that; never while
+  charging or on USB. STATUS `batLow`, heartbeat flag bit 3, `LOW` on the screen and in both apps.
+- **Cutoff:** 3 clean readings in a row below the level with the filtered value below it too
+  (~30–45 s in the warning cadence); or, fast, 2 readings below 3.10 V at least 5 s apart. The
+  count starts over once a reading is 50 mV above the level. Never on USB, while charging, on an
+  unstable reading (spread or a jump over 300 mV), or for 10 min after the voltage steps up by
+  50 mV or more (a charger plugged in). The filtered value lags a fast bench ramp by a minute or
+  more; a real cell near 3.3 V falls a few mV a minute, so there it barely lags.
+- **Boot check:** after RST / power-on / a brownout, two readings 50 ms apart before Bluetooth
+  starts; below cutoff + 0.10 V and not on USB, the board shows `TOO LOW TO START` for 2 s and
+  turns off again (after a brownout: without lighting the screen). **PRG during the notice
+  starts it anyway** (also the way out for a USB-only board with an odd charger reading). Skipped
+  after a software restart (a Bluetooth update), a crash, or with the cutoff OFF.
+- Readings vary between boards by roughly ±30–100 mV at the battery, so "3.30 V" acts somewhere
+  between ~3.25 and 3.35 V real.
+- After a cutoff the cell holds ~20–40 mAh, enough for weeks at the off current, but
+  **recharge it within a month**, then press RST.
 
 ## Power (backpack use)
 
@@ -263,23 +367,38 @@ honestly:
   battery reading, the screen; at most 5 s) and is woken early by a command, a
   connect/disconnect or PRG. It does not poll.
 - **Heltec V3:** the LoRa radio is asleep (~0.6 mA saved, check with a meter), the OLED and its
-  Vext rail are unpowered unless you use PRG, and the battery divider is on for ~10 ms a
-  minute. The LED only blinks.
-- **No Wi-Fi, nothing written to flash** (except a battery capacity you pick on the screen).
+  Vext rail are unpowered unless you use PRG, the battery divider is on for ~10 ms a minute, and
+  the UART pads are released (0 to ~1 mA, unmeasured). The LED only blinks.
+- **CPU at 80 MHz from the first line of `setup()`** (it used to switch after the boot work).
+- **BLE modem sleep on the Heltec V3** (firmware 1.5, `btsleep.h`): the Bluetooth controller
+  turns its radio off between radio events (estimated 3–10 mA of the ~35 mA base; unmeasured).
+  The S3 controller supports it at runtime, but NimBLE-Arduino's default config leaves it off and
+  sets the controller up itself, so the firmware switches it on with a **link-time wrap**:
+  builds linked with `-Wl,--wrap=esp_bt_controller_init` (CI's images; PlatformIO with the
+  `build_flags` below) have it, STATUS says `"btSleep":true`; a plain Arduino IDE build does not
+  (it runs exactly as 1.4 did). The controller wakes itself 2.5 ms before each radio event, so
+  connection parameters, beacon timing and send latency are unchanged. `-DMM_BT_MODEM_SLEEP=0`
+  keeps the wrap but leaves sleep off.
+- **Off and cutoff:** a real off state (~15–25 µA, see **Turning it off and on**) and the
+  low-battery cutoff, so a forgotten board neither drains for days nor runs the cell flat.
+- **No Wi-Fi, nothing else written to flash** (only a battery capacity or cutoff level you pick).
 
 What it can't do in this core (Arduino-ESP32 2.0.17):
 
 - **No automatic light sleep:** `CONFIG_PM_ENABLE` is off in the prebuilt core, so the CPU wakes
   for every 1 ms FreeRTOS tick. Manual light sleep would drop the BLE link.
-- **ESP32-S3 (Heltec V3): no BLE modem sleep** either (compiled out of this core's S3
-  controller), so the radio's clocks stay up between events. Expect roughly **30–45 mA idle**
-  (estimate; measure yours), i.e. about **9–13 h on a 400 mAh cell**. The screen shows the live
-  estimate.
-- The **classic ESP32** does use BLE modem sleep between radio events; its datasheet figures
-  for modem sleep at 80 MHz are ~20–30 mA. It has no battery reader.
+- **No CPU below 80 MHz while Bluetooth runs** (it needs the 80 MHz APB clock).
+- Expect roughly **30–45 mA idle** on the Heltec V3 without modem sleep (estimate; measure yours
+  in the battery lead), i.e. about **8–12 h on a 400 mAh cell down to the 3.30 V cutoff**; with
+  modem sleep somewhat more. The screen shows the live estimate.
+- The **classic ESP32** core already uses BLE modem sleep between radio events; its datasheet
+  figures for modem sleep at 80 MHz are ~20–30 mA. It has no battery reader.
+- **Latency note:** the link asks for slave latency 2, so the first write after an idle stretch
+  can wait up to 3 connection intervals (~90–150 ms) if the phone accepts it. iOS may run its own
+  parameters; STATUS `conn` shows what was actually negotiated. 1.5 leaves the request as it was.
 
-For longer runtime: a bigger cell, fewer loops/keep-awake (the beacon is the biggest extra), or
-a lower beacon power in the app (shorter range).
+For longer runtime: a bigger cell, fewer loops/keep-awake (the beacon is the biggest extra), a
+lower beacon power in the app (shorter range), and turning the board off when it is not in use.
 
 ## Tuning (top of the `.ino`)
 
@@ -302,13 +421,27 @@ a lower beacon power in the app (shorter range).
 | `LOOP_MAX_SLEEP_MS` | longest `loop()` sleep between deadlines (all deadlines are tracked; a safety net) | 5000 ms |
 | `SCREEN_ON_MS` | Heltec V3: how long the screen stays lit after the last PRG press | 10 s |
 | `BATTERY_MAH` | Heltec V3: LiPo capacity until one is picked on the screen (STATUS `batMah`) | 400 mAh |
+| `POWER_OFF_NOTICE_MS` / `POWER_OFF_GRACE_MS` | power-off: the off frame on a lit screen / the app's STATUS read, before the disconnect | 1000 / 750 ms |
+
+Elsewhere:
+
+| Constant | Where | Meaning | Default |
+|---|---|---|---|
+| `POWER_HOLD_MS` | `oled_ui.h` | POWER page: hold PRG this long to turn off | 2000 ms |
+| `POWER_TAP_MS` | `oled_ui.h` | POWER page: a shorter press is a tap (next page) | 400 ms |
+| `BAT_PERIOD_NEAR_MS` | `power.h` | battery reading period in the warning zone (cutoff on) | 15 s |
+| `CUT_DEFAULT_MV` | `battery_model.h` | cutoff level when none was picked | 3300 mV |
+| `MM_USB_SENSE` | build flag (`board.h`) | the CP2102 USB hint; `0` if a board reads USB on battery | 1 |
+| `MM_UART_RELEASE` | build flag (`board.h`) | release the UART pads after boot; `0` for serial logs | 1 |
+| `MM_BT_MODEM_SLEEP` | build flag (`btsleep.h`) | BLE modem sleep in wrap-linked builds; `0` to leave it off | 1 |
+| `MM_DEBUG_TIMING` | build flag (`board.h`) | STATUS `advMaxUs`: the longest advertising restart (bench) | 0 |
 
 The wire clamps (TX-characteristic duration 60–12000 ms, `raw_burst` 60–10000 ms, loop interval
 500–60000 ms, setting ranges) are part of the relay contract and live in `relay_proto.h`.
-Screen internals (frame rate, long press, panel reset timing) are at the top of `oled_ui.h`;
-battery timing (reading periods, capacity presets) and `MM_LORA_SLEEP` at the top of
-`power.h`; the per-state draw estimates (`DRAW_*`) and the runtime model at the top of
-`battery_model.h`.
+Screen internals (frame rate, long press, power hold, panel reset timing) are at the top of
+`oled_ui.h`; battery timing (reading periods, sampling, capacity presets) and `MM_LORA_SLEEP` at
+the top of `power.h`; the per-state draw estimates (`DRAW_*`), the runtime model and the cutoff
+rules (`CUT_*`, `LOW_WARN_*`) at the top of `battery_model.h`; the off state in `shutdown.h`.
 
 ## Protocol reference
 
@@ -354,37 +487,50 @@ STATUS read: `ok`, plus `error` when it failed.
 | `clear_live` (`clear`), `live`, `status` | — | ok |
 | `catalog`, `catalog_sync_begin`/`_chunk` (+ aliases) | — | ok + `"items":[]` |
 | library, auto-rule, scan-filter, live-feed edits, `pairing` | — | `"unsupported"` |
+| `power_off` (`poweroff`, `shutdown`) | `confirm` must be `true` | firmware 1.5, both boards: the power-off sequence (STATUS still readable for ~0.75 s, 1 s with the screen lit, then a disconnect with reason 0x15 and deep sleep until RST / EN); `"confirm required"` without it, `"busy"` while a Bluetooth update is being received |
+| `set_low_cutoff` (`low_cutoff`, `set_cutoff`) | `mv` | firmware 1.5, Heltec V3: the cutoff level. `0` = off, `3200` / `3300` / `3400`; 3000–3600 snaps (< 3250 → 3200, < 3350 → 3300, else 3400); anything else (missing, not a number, out of range) → `"bad mv"`; a classic ESP32 → `"unsupported"`. Kept in NVS |
 | anything else | — | `"unknown action"` |
 
 Errors: `bad json`, `bad hex`, `packet too long`, `no packet`, `bad token`, `unsupported`,
-`unknown action`, `busy` (command queue full). Programs: at most one runs; turning one on turns
+`unknown action`, `busy` (command queue full, or `power_off` during an update), `confirm
+required`, `bad mv`, `powering off` (every command once a power-off began). Programs: at most one runs; turning one on turns
 the others off (a loop burst on air finishes first; a keep-awake stream stops at once). A user
 send or MBLE tap preempts anything; a preempted loop burst re-arms one interval after the job
-that replaced it. Disconnects change nothing; nothing is stored in flash.
+that replaced it. Disconnects change nothing; nothing but the cutoff level (and the capacity
+picked on the screen) is stored in flash.
 
-**STATUS** (one object, ≤ 508 bytes, keys in this order):
+**STATUS** (one object, ≤ 508 bytes, keys in this order; protocol 3 from firmware 1.5):
 
 | Key | When | Meaning |
 |---|---|---|
 | `ok`, `error` | always / on failure | the last command's reply (reset to ok on connect) |
 | `running` | always (`true`) | marks a real status (firmware before 1.2 sent a bare `{"ok":true}`) |
-| `proto`, `fw`, `board` | always | `2`, `MM_FW_VERSION` (`"1.4"`), `"HELTEC V3"` / `"ESP32"` |
+| `proto`, `fw`, `board` | always | `3` (1.5; `2` before), `MM_FW_VERSION` (`"1.5"`), `"HELTEC V3"` / `"ESP32"` |
 | `keepAwake` | always | KEEP AWAKE runs |
 | `txLoopEnabled`, `txLoopIntervalMs` | TX LOOP runs | |
 | `starlightLoopEnabled`, `starlightIntervalMs` | WAND LOOP runs | |
 | `wakeupPreambleMs`, `commandBurstMs`, `starlightBurstMs`, `txPowerLevel`, `txInterleave` | always | chip settings |
 | `uptimeS`, `sent` | always | seconds since boot, jobs put on air since boot |
 | `batMv`, `batPct`, `batMah` | Heltec V3 with a plausible reading | filtered battery mV, %, capacity (mAh) |
-| `runMin` / `charging` | with the battery keys | expected runtime in minutes / `true` while charging or on USB power (then no `runMin`) |
+| `runMin` / `charging` | with the battery keys | expected runtime in minutes, to the cutoff / `true` while charging or on USB power (then no `runMin`) |
+| `batLow` | with the battery keys, only when `true` | 1.5: the low-battery warning stage (below cutoff + 0.10 V) |
+| `cutMv` | Heltec V3 1.5, always (also without a reading) | the cutoff level: `0` = off, `3200` / `3300` / `3400` |
 | `items` | after a catalog action | `[]` |
 | `keepAwakeHex` | KEEP AWAKE runs | the streamed packet |
-| `txLoopHex`, `txLoopLabel` | TX LOOP runs | its packet and label (label dropped first if the object would exceed 508 bytes) |
+| `txLoopHex`, `txLoopLabel` | TX LOOP runs | its packet and label |
 | `starlightLoopHex`, `starlightLoopLabel` | WAND LOOP runs | same |
+| `conn` | 1.5, a BLE read (diagnostic) | the reading phone's link: `[interval in 1.25 ms units, peripheral latency, supervision timeout in 10 ms units]` |
+| `btSleep` | 1.5, when BLE modem sleep is on (diagnostic) | `true` |
+| `advMaxUs` | `MM_DEBUG_TIMING` builds only (diagnostic) | the longest advertising restart since boot, µs |
 
-Example (idle, Heltec):
+When the object would exceed 508 bytes the diagnostics are left out first, then the label, then
+the hex (in practice only the label of a 29-byte wand loop next to an error and every battery key
+can fall off).
+
+Example (idle, Heltec, 1.5, battery in the warning stage):
 
 ```
-{"ok":true,"running":true,"proto":2,"fw":"1.4","board":"HELTEC V3","keepAwake":false,"wakeupPreambleMs":520,"commandBurstMs":4000,"starlightBurstMs":500,"txPowerLevel":3,"txInterleave":false,"uptimeS":8123,"sent":42,"batMv":3921,"batPct":68,"batMah":400,"runMin":431}
+{"ok":true,"running":true,"proto":3,"fw":"1.5","board":"HELTEC V3","keepAwake":false,"wakeupPreambleMs":520,"commandBurstMs":4000,"starlightBurstMs":500,"txPowerLevel":3,"txInterleave":false,"uptimeS":8123,"sent":42,"batMv":3381,"batPct":17,"batMah":400,"runMin":51,"batLow":true,"cutMv":3300,"conn":[24,2,400],"btSleep":true}
 ```
 
 **Advertising.** Waiting for a phone: flags + service UUID, name `MM_ESP` + the battery
@@ -397,6 +543,7 @@ non-connectable, every 1–2 s, +3 dBm.
 **Battery heartbeat** (firmware 1.4+, read by the Android app without connecting):
 manufacturer data with company id `0xFFFF`: `FF FF 4D 42 01 <battery % or FF> <flags>
 <runtime minutes, u16 little-endian, or FFFF>`; flags bit 0 charging, bit 1 USB power, bit 2
-battery reading present (a classic ESP32 sends `FF 00 FFFF`). The % holds until the reading is
+battery reading present, bit 3 battery low (1.5: the warning stage; the version byte stays 1,
+older readers ignore the bit) (a classic ESP32 sends `FF 00 FFFF`). The % holds until the reading is
 0.75 points away and the runtime moves in steps of 5 min (under 10 h), 15 min (under 24 h) or
 30 min, up to 99 h, so the advert only changes when the battery does.

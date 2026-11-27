@@ -30,9 +30,10 @@ import com.magicmaker.android.ui.techLabel
  * RELAY tab in the VFD theme: the Android RelayTab (the counterpart of the iPhone LINK tab) in the
  * layout language of tools/vfd/screens/link.py.
  *
- * RELAY / REMOTE, the STANDALONE note, the MODE selectors (STANDALONE, WIFI / IPHONE, BLE GATT /
- * IPHONE; a pick saves relay_mode and sends ACTION_SET_RELAY, as the FilterChips do), then per
- * mode: the standalone note; the GATT panel (permission / service warnings in alarm ink, the link
+ * SYNC / DEVICES (VFDSyncDevices: every device's battery, heartbeat age, path and sync badge),
+ * then RELAY / REMOTE, the intro note, the MODE selectors (WIFI / IPHONE, BLE GATT / IPHONE; the
+ * GATT server is always on, so STANDALONE is gone; a pick saves relay_mode and sends
+ * ACTION_SET_RELAY, as the FilterChips do), then per mode: the GATT panel (permission / service warnings in alarm ink, the link
  * dot and state, ADV TAG and STATUS info rows, the local-use note); or the WiFi hotspot panel
  * (NEARBY permission warning with GRANT NEARBY, SSID / PASS / GW, the pairing QR drawn on the grid
  * as true black and white cells in a "SCAN WITH IPHONE REMOTE" panel — a tap shows it full size in
@@ -51,18 +52,19 @@ object VFDRelayScreen : VFDScreen {
         val c: Int = L.left
         val w: Int = L.width
         var y: Int = L.contentTop
+        y = VFDSyncDevices.draw(ctx, fb, L, c, y, w)
         y = VFDW.section(fb, L, c, y, w, "RELAY / REMOTE")
         y = note(fb, L, c, y + 1, w, INTRO)
-        val modes: List<RelayControlMode> = RelayControlMode.entries
+        // STANDALONE left the UI: the GATT server always runs (it is the iPhone's direct sync link).
+        val modes: List<RelayControlMode> = RelayControlMode.entries.filter { it != RelayControlMode.STANDALONE }
         val labels: List<String> = modes.map { modeLabel(it) }
-        val selected: Int = modes.indexOf(s.relayMode)
+        val selected: Int = modes.indexOf(if (s.relayMode == RelayControlMode.STANDALONE) RelayControlMode.BLE_GATT else s.relayMode)
         y = VFDW.options(fb, L, c, y, w, labels, selected = if (selected >= 0) selected else null, label = "Mode",
                          onSelect = { index ->
                              if (index in modes.indices) setMode(ctx, modes[index])
                          })
         y = when (s.relayMode) {
-            RelayControlMode.STANDALONE -> note(fb, L, c, y + 3, w, STANDALONE_NOTE)
-            RelayControlMode.BLE_GATT -> gattPanel(ctx, fb, L, s, c, y + 2, w)
+            RelayControlMode.STANDALONE, RelayControlMode.BLE_GATT -> gattPanel(ctx, fb, L, s, c, y + 2, w)
             RelayControlMode.WIFI_HOTSPOT -> {
                 val next: Int = wifiPanel(ctx, fb, L, s, c, y + 2, w)
                 gattPanel(ctx, fb, L, s, c, next + 4, w)
@@ -77,9 +79,8 @@ object VFDRelayScreen : VFDScreen {
     // MARK: - Texts (RelayTab / GattRelayPanel wording)
 
     private const val INTRO: String =
-        "STANDALONE keeps this phone off the air as a relay (no BLE GATT advertising) so an " +
-            "iPhone can target the ESP32. Pick BLE GATT or WiFi only when relaying for an iPhone."
-    private const val STANDALONE_NOTE: String = "Standalone: transmitting directly, not advertising as an iPhone relay."
+        "The BLE relay is always on: it is also the iPhone's direct sync link, and its advert " +
+            "tag keeps an iPhone that looks for the ESP32 from picking this phone. WiFi adds the hotspot."
     private const val BLE_PERMS: String = "Bluetooth permissions required for GATT remote."
     private const val NOT_RUNNING: String = "Service not running — grant permissions and reopen app."
     private const val LOCAL_NOTE: String = "Local scan/TX/wand keep working — iPhone connects as remote."

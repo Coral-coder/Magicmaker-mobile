@@ -69,6 +69,10 @@ struct SettingsScreen: View {
                     .padding(.top, 8)
                 SettingsFirmwareSection(updater: vm.firmware)
                     .padding(.top, 8)
+                if vm.relayBackend == .esp32 {
+                    SettingsBoardPowerSection()
+                        .padding(.top, 8)
+                }
                 aboutLine
                     .padding(.top, 8)
             }
@@ -701,5 +705,132 @@ private struct SettingsFirmwareSection: View {
             return
         }
         updater.startUpdate()
+    }
+}
+
+// MARK: - Board power
+
+/// BOARD POWER (docs/POWER_V3.md B11), while the ESP32 is the backend: the board's battery (amber
+/// with LOW while it warns of a low battery), the LOW-BATTERY CUTOFF chips OFF · 3.20V · 3.30V ·
+/// 3.40V (only when the board reports its cutoff, Heltec V3 firmware 1.5+; dimmed and ignoring taps
+/// while it is not linked), the state note and POWER OFF with a confirm (linked, firmware 1.5+).
+/// The board keeps the cutoff in its own flash; nothing is pushed to it on link.
+private struct SettingsBoardPowerSection: View {
+    @EnvironmentObject var vm: AppViewModel
+    @State private var confirmPresented: Bool = false
+
+    init() {}
+
+    var body: some View {
+        content(vm.esp32PowerSummary)
+            .alert(Esp32PowerCopy.powerOffTitle, isPresented: $confirmPresented) {
+                Button(Esp32PowerCopy.powerOffLabel, role: .destructive) {
+                    vm.powerOffEsp32()
+                }
+                Button("CANCEL", role: .cancel) { }
+            } message: {
+                Text(Esp32PowerCopy.powerOffMessage)
+            }
+    }
+
+    private func content(_ p: Esp32PowerSummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("BOARD POWER")
+                .font(MMTheme.techHeader())
+                .foregroundStyle(MMTheme.cyan)
+            if let battery = p.batteryText {
+                valueRow("BATTERY", battery.uppercased(), color: p.batteryLow ? MMTheme.amber : MMTheme.cyan)
+            }
+            if let mv = p.cutoffMv {
+                cutoffBlock(selectedMv: mv, enabled: p.cutoffEnabled)
+                    .padding(.top, 2)
+            }
+            if !p.note.isEmpty {
+                Text(p.note)
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(p.noteIsWarning ? MMTheme.amber : MMTheme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
+            if p.canPowerOff {
+                powerOffButton
+                    .padding(.top, 4)
+            }
+        }
+    }
+
+    private func cutoffBlock(selectedMv: Int, enabled: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(Esp32PowerCopy.cutoffTitle)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(MMTheme.textDim)
+            HStack(spacing: 4) {
+                ForEach(0..<Esp32PowerCopy.cutoffOptionsMv.count, id: \.self) { index in
+                    cutoffChip(index, selectedMv: selectedMv, enabled: enabled)
+                }
+            }
+            Text(Esp32PowerCopy.cutoffCaption)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(MMTheme.textDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func cutoffChip(_ index: Int, selectedMv: Int, enabled: Bool) -> some View {
+        let options: [Int] = Esp32PowerCopy.cutoffOptionsMv
+        let labels: [String] = Esp32PowerCopy.cutoffLabels
+        let mv: Int = index < options.count ? options[index] : 0
+        let name: String = index < labels.count ? labels[index] : "\(mv)"
+        let selected: Bool = selectedMv == mv
+        let lineColor: Color = selected ? (enabled ? MMTheme.cyan : MMTheme.cyanDim) : MMTheme.panelLine
+        let textColor: Color = selected ? (enabled ? MMTheme.cyan : MMTheme.cyanDim) : MMTheme.textDim
+        let traits: AccessibilityTraits = selected ? .isSelected : []
+        return Button {
+            vm.setEsp32LowCutoff(mv)
+        } label: {
+            Text(name)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .frame(height: 28)
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(lineColor, lineWidth: 0.5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.5)
+        .accessibilityLabel("Low-battery cutoff " + name)
+        .accessibilityAddTraits(traits)
+    }
+
+    private var powerOffButton: some View {
+        Button {
+            confirmPresented = true
+        } label: {
+            Text(Esp32PowerCopy.powerOffLabel)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(MMTheme.error)
+                .frame(maxWidth: .infinity)
+                .frame(height: 28)
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(MMTheme.error, lineWidth: 0.5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Power off the ESP32")
+    }
+
+    private func valueRow(_ key: String, _ value: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(key)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(MMTheme.textDim)
+            Spacer(minLength: 4)
+            Text(value)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(color)
+                .multilineTextAlignment(.trailing)
+        }
     }
 }

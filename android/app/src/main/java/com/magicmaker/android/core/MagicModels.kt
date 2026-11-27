@@ -13,6 +13,10 @@ data class MagicPacket(
     var userRecorded: Boolean = false,
     var rssi: Int? = null,
     var wandVerified: Boolean = false,
+    // Sync (docs/SYNC_P3_ANDROID_PLAN.md §3.2): nullable so old files read them as null and Gson
+    // omits them, keeping 20k raw rows the same size. userEdited = the label is the user's.
+    var note: String? = null,
+    var userEdited: Boolean? = null,
 )
 
 data class ClassifiedPacket(

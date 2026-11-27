@@ -5,7 +5,9 @@ package com.magicmaker.android.ble
  * firmware 1.4+. Manufacturer data, company id 0xFFFF (reserved for testing, so it can never be
  * mistaken for a Disney packet). After the company id:
  *   'M' 'B' <version 1> <battery % or 0xFF> <flags> <runtime minutes, u16 LE, or 0xFFFF>
- * flags: bit0 charging, bit1 on USB power, bit2 a battery reading is present.
+ * flags: bit0 charging, bit1 on USB power, bit2 a battery reading is present, bit3 low battery
+ * (firmware 1.5+: below the board's low-battery cutoff + 0.10 V; never set while charging or on
+ * USB). The version byte stays 1: older parsers ignore the new bit.
  */
 data class Esp32Heartbeat(
     /** 0..100, or -1 when the board has no battery reading (classic ESP32, no battery). */
@@ -13,17 +15,27 @@ data class Esp32Heartbeat(
     val charging: Boolean,
     val onUsb: Boolean,
     val hasBattery: Boolean,
-    /** Estimated minutes left on battery, or -1 when unknown (charging, USB or no reading). */
+    /**
+     * Estimated minutes left on battery, or -1 when unknown (charging, USB or no reading). From
+     * firmware 1.5 it counts down to the low-battery cutoff, not to empty.
+     */
     val runtimeMinutes: Int,
+    /** Firmware 1.5+: the board warns of a low battery (it turns itself off at its cutoff). */
+    val low: Boolean = false,
 ) {
-    /** "ESP32:68% ~9H 40M", "ESP32:CHG", "ESP32:USB", or null when there is nothing to show. */
+    /**
+     * "ESP32:68% ~9H 40M", "ESP32:8% LOW ~25M" while the board warns of a low battery (as the
+     * iPhone app shows it), "ESP32:CHG" (charging wins), "ESP32:USB", or null when there is
+     * nothing to show.
+     */
     fun telemetryToken(): String? {
         if (!hasBattery) return null
         if (charging) return "ESP32:CHG"
         if (onUsb && percent < 0) return "ESP32:USB"
-        if (percent < 0) return null
+        if (percent < 0) return if (low) "ESP32:LOW" else null
+        val lowText = if (low) " LOW" else ""
         val runtime = if (runtimeMinutes >= 0 && !onUsb) " " + runtimeText(runtimeMinutes) else ""
-        return "ESP32:$percent%$runtime"
+        return "ESP32:$percent%$lowText$runtime"
     }
 
     companion object {
@@ -48,6 +60,7 @@ data class Esp32Heartbeat(
                 onUsb = flags and 0x02 != 0,
                 hasBattery = flags and 0x04 != 0,
                 runtimeMinutes = if (run == 0xFFFF) -1 else run,
+                low = flags and 0x08 != 0,
             )
         }
 

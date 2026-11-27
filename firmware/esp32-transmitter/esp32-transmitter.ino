@@ -27,21 +27,30 @@
 // The build detects the board (board.h) and adds the onboard OLED, which stays dark and
 // unpowered until you press PRG (oled_ui.h). Every other board builds exactly as before.
 //
-// Power: 80 MHz CPU, the Disney beacon only on air while something is being sent (full power
-// only then), idle advertising that relaxes after 30 s, +3 dBm for idle advertising and the
-// link, and loop() asleep until its next deadline (a command, a phase end, an LED edge, the PRG
-// button) instead of polling. Heltec V3: the LoRa radio asleep, the screen unpowered unless PRG
-// is used, and the battery read once a minute for its % and expected runtime (power.h).
+// Power: 80 MHz CPU from the first line of setup(), the Disney beacon only on air while
+// something is being sent (full power only then), idle advertising that relaxes after 30 s,
+// +3 dBm for idle advertising and the link, and loop() asleep until its next deadline (a
+// command, a phase end, an LED edge, the PRG button) instead of polling. Heltec V3: the LoRa
+// radio asleep, the screen unpowered unless PRG is used, the UART pads released after boot, BLE
+// modem sleep in builds linked with the wrap (btsleep.h), and the battery read once a minute for
+// its %, expected runtime and the low-battery cutoff (power.h).
+//
+// Off: hold PRG on the POWER page (Heltec), the app's power_off, or the low-battery cutoff
+// (Heltec, 3.30 V unless changed on the LOW BATTERY page or in the app) put the board in deep
+// sleep with no wake source (shutdown.h). RST (EN on a DevKit) turns it on again.
 
 #include <NimBLEDevice.h>
 #include <esp_timer.h>
+#include <esp_system.h>
 #include "board.h"
-#include "ota.h"   // firmware updates over Bluetooth from the app (button-armed, A7830007)
+#include "btsleep.h"  // Heltec V3: BLE modem sleep when linked with -Wl,--wrap=esp_bt_controller_init
+#include "ota.h"      // firmware updates over Bluetooth from the app (button-armed, A7830007)
 #include "relay_proto.h"
 #include "relay_engine.h"
 #if MM_HELTEC_V3
 #include "oled_ui.h"
 #endif
+#include "shutdown.h"  // power-off: deep sleep until RST
 
 // ---- RelayProtocol contract (must match the app) -------------------------------------
 static const char* SERVICE_UUID  = "A7830001-0000-1000-8000-00805F9B34FB";
@@ -87,6 +96,13 @@ static const esp_power_level_t LINK_POWER     = ESP_PWR_LVL_P3;  // +3 dBm, the 
 static const uint32_t LOOP_MAX_SLEEP_MS   = 5000;
 static const UBaseType_t CMD_QUEUE_DEPTH  = 8;
 
+// Power-off sequence (beginPowerOff() / offService()).
+static const uint32_t POWER_OFF_NOTICE_MS    = 1000;  // the off frame on a lit screen, before the disconnect
+static const uint32_t POWER_OFF_GRACE_MS     = 750;   // dark screen / app: time for the app's STATUS read
+static const uint32_t POWER_OFF_LINK_WAIT_MS = 500;   // disconnects (reason 0x15) acknowledged, at most
+static const uint32_t POWER_OFF_LOOP_MS      = 20;    // loop()'s longest sleep while the sequence runs
+static const uint8_t  MAX_LINKS              = 4;     // connection handles tracked for the power-off disconnect
+
 #if MM_HELTEC_V3
 // Heltec V3 OLED: lit only while you use the PRG button; dark this long after the last press.
 static const uint32_t SCREEN_ON_MS        = 10000;
@@ -96,13 +112,7 @@ static const uint32_t SCREEN_ON_MS        = 10000;
 static const uint16_t BATTERY_MAH         = 400;
 #endif
 
-#if MM_HELTEC_V3
-static const int STATUS_LED = HV3_LED_PIN;  // white LED, GPIO35
-#elif defined(LED_BUILTIN)
-static const int STATUS_LED = LED_BUILTIN;
-#else
-static const int STATUS_LED = 2;
-#endif
+static const int STATUS_LED = MM_STATUS_LED_PIN;  // Heltec V3: white LED, GPIO35; else LED_BUILTIN or 2
 
 // ---- Status LED: short blinks only, never on steadily ---------------------------------
 // Waiting for a phone: a tiny blink every second. Phone linked: a tiny blink every 5 s.
@@ -123,7 +133,8 @@ enum AdvKind : uint8_t { ADV_OFF = 0, ADV_IDLE, ADV_BEACON, ADV_HEARTBEAT };
 // Battery heartbeat other devices read without connecting (the Android app's scanner shows it):
 // manufacturer data, company id 0xFFFF (reserved for testing, so nothing mistakes it for a
 // Disney packet): FF FF 'M' 'B' <version 1> <battery % or 0xFF> <flags> <runtime min, u16 LE or
-// 0xFFFF>. flags: bit0 charging, bit1 on USB power, bit2 battery reading present.
+// 0xFFFF>. flags: bit0 charging, bit1 on USB power, bit2 battery reading present, bit3 battery
+// low (the warning stage before the cutoff).
 // In the scan response while no phone is linked; while one is, a slow non-connectable advert
 // (name + heartbeat) keeps it visible.
 static const uint8_t  HEARTBEAT_LEN     = 9;
@@ -170,6 +181,18 @@ static RelayShadow    gShadow;  // loop packets the chip has been given
 // Written by the NimBLE task, read by loop().
 static volatile int      gLinked = 0;       // phones connected
 static volatile uint32_t gDisconnects = 0;  // count, so loop() sees every one
+static uint16_t          gLinkHandles[MAX_LINKS];  // under gSnapMux: the connected phones
+static uint8_t           gLinkCount = 0;
+
+// Power-off: loop() runs the sequence; the CMD callback answers "powering off" once it began.
+enum OffStage : uint8_t { OFF_NONE = 0, OFF_WAIT_RELEASE, OFF_NOTICE, OFF_DISCONNECT, OFF_SLEEP };
+static volatile bool     gOffPending = false;
+static uint8_t           gOffStage = OFF_NONE;  // loop() only
+static uint32_t          gOffStageMs = 0;
+static bool              gOffLit = false;       // the screen was lit: the longer notice
+#if MM_DEBUG_TIMING
+static uint32_t          gAdvMaxUs = 0;         // longest advApply(), us (STATUS "advMaxUs")
+#endif
 
 // loop() only.
 static uint32_t gIdleSince = 0;             // boot / last disconnect: the idle fast-advertising window
@@ -212,6 +235,7 @@ static void heartbeatBytes(uint8_t out[HEARTBEAT_LEN]) {
     flags |= 0x04;
     if (powerCharging()) flags |= 0x01;
     if (powerOnUsb()) flags |= 0x02;
+    if (powerBatteryLow()) flags |= 0x08;
     int32_t r = powerRuntimeMin();
     if (r >= 0) {
       if (r > HEARTBEAT_RUN_CAP_MIN) r = HEARTBEAT_RUN_CAP_MIN;
@@ -244,7 +268,7 @@ static bool advSame(const AdvState& a, const AdvState& b) {
   return true;
 }
 
-static void advApply(const AdvState& want) {
+static void advApplyNow(const AdvState& want) {
   gAdv->stop();
   gAdvNow = want;
   if (want.kind == ADV_OFF) return;
@@ -297,6 +321,17 @@ static void advApply(const AdvState& want) {
     gAdv->setMaxInterval(BEACON_ADV_MAX);
   }
   gAdv->start();
+}
+
+static void advApply(const AdvState& want) {
+#if MM_DEBUG_TIMING
+  const int64_t t0 = esp_timer_get_time();
+  advApplyNow(want);
+  const int64_t us = esp_timer_get_time() - t0;
+  if (us > (int64_t)gAdvMaxUs) gAdvMaxUs = (uint32_t)us;
+#else
+  advApplyNow(want);
+#endif
 }
 
 // Beacon while a job or the stream is on air; idle advertising while no phone is linked; else
@@ -375,7 +410,13 @@ static void publishSnapshot() {
     s.batMah = powerCapacityMah();
     s.charging = powerCharging() || powerOnUsb();  // on USB power: no runtime either
     s.runMin = powerRuntimeMin();
+    s.batLow = powerBatteryLow();
   }
+  s.cutMv = (int16_t)powerCutoffMv();
+#endif
+  s.btSleep = mmBtModemSleep();
+#if MM_DEBUG_TIMING
+  s.advMaxUs = gAdvMaxUs;
 #endif
   portENTER_CRITICAL(&gSnapMux);
   gSnap = s;
@@ -388,16 +429,26 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     gLinked = gLinked + 1;
     portENTER_CRITICAL(&gSnapMux);
     relayReplyOk(gReply);  // a fresh link starts from a clean reply
+    if (gLinkCount < MAX_LINKS) gLinkHandles[gLinkCount++] = desc->conn_handle;
     portEXIT_CRITICAL(&gSnapMux);
-    // Ask for a relaxed connection interval to cut idle wakeups (battery).
+    // Ask for a relaxed connection interval to cut idle wakeups (battery). Unchanged in 1.5 on
+    // purpose (docs/POWER_V3.md C2): iOS may run its own parameters, and a request it accepts
+    // could add latency to the first tap after idle. STATUS "conn" shows what was negotiated.
     s->updateConnParams(desc->conn_handle, 24, 40, 2, 400);  // 30–50 ms, latency 2, 4 s sup.
     wakeLoop();
   }
   void onDisconnect(NimBLEServer* s, ble_gap_conn_desc* desc) override {
     (void)s;
-    (void)desc;
     // Programs and settings keep running: keep-awake and the loops do not need a phone.
     // loop() restarts advertising (advertiseOnDisconnect is off).
+    portENTER_CRITICAL(&gSnapMux);
+    for (uint8_t i = 0; i < gLinkCount; i++) {
+      if (gLinkHandles[i] == desc->conn_handle) {
+        gLinkHandles[i] = gLinkHandles[--gLinkCount];
+        break;
+      }
+    }
+    portEXIT_CRITICAL(&gSnapMux);
     if (gLinked > 0) gLinked = gLinked - 1;
     gDisconnects = gDisconnects + 1;
     otaOnDisconnect();                    // an interrupted firmware update is dropped
@@ -410,6 +461,7 @@ class TransmitCallbacks : public NimBLECharacteristicCallbacks {
     // "{hex}|{durationMs}": a user send, the newest wins. Not a command: the reply stays as it is.
     const NimBLEAttValue v = c->getValue();
     ChipCmd cmd;
+    if (gOffPending) return;  // turning off: nothing goes on air any more
     if (!relayParseTransmitWrite((const char*)v.data(), v.length(), cmd)) return;
     if (xQueueSend(gCmdQueue, &cmd, 0) == pdTRUE) wakeLoop();
   }
@@ -422,8 +474,13 @@ class CommandCallbacks : public NimBLECharacteristicCallbacks {
     const NimBLEAttValue v = c->getValue();
     ChipCmd cmd;
     RelayReply reply;
-    if (relayParseCommand((const char*)v.data(), v.length(), gShadow, cmd, reply)) {
-      if (xQueueSend(gCmdQueue, &cmd, 0) == pdTRUE) {
+    if (gOffPending) {
+      relayReplyError(reply, "powering off");  // the board is turning off: nothing is queued
+    } else if (relayParseCommand((const char*)v.data(), v.length(), gShadow, cmd, reply)) {
+      if (cmd.type == RELAY_CMD_POWER_OFF && otaBusy()) {
+        relayReplyError(reply, "busy");  // an update is being received: finish (or abort) it first
+      } else if (xQueueSend(gCmdQueue, &cmd, 0) == pdTRUE) {
+        if (cmd.type == RELAY_CMD_POWER_OFF) gOffPending = true;  // later commands: "powering off"
         if (cmd.flags & RELAY_CMDF_PACKET) {
           if (cmd.type == RELAY_CMD_TX_LOOP) gShadow.haveTxLoopPacket = true;
           if (cmd.type == RELAY_CMD_WAND_LOOP) gShadow.haveWandLoopPacket = true;
@@ -440,9 +497,10 @@ class CommandCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 class StatusCallbacks : public NimBLECharacteristicCallbacks {
-  void onRead(NimBLECharacteristic* c) override {
-    // The chip's state merged with the last command's reply. Formatted outside the lock; static
-    // buffer (the NimBLE task's stack is small, and only that task reads characteristics).
+  void onRead(NimBLECharacteristic* c, ble_gap_conn_desc* desc) override {
+    // The chip's state merged with the last command's reply, plus the reading phone's link
+    // parameters (diagnostic "conn"). Formatted outside the lock; static buffer (the NimBLE
+    // task's stack is small, and only that task reads characteristics).
     static char buf[512];
     RelaySnapshot s;
     RelayReply r;
@@ -450,8 +508,17 @@ class StatusCallbacks : public NimBLECharacteristicCallbacks {
     s = gSnap;
     r = gReply;
     portEXIT_CRITICAL(&gSnapMux);
+    RelayLinkInfo link;
+    memset(&link, 0, sizeof(link));
+    if (desc && desc->conn_itvl != 0) {
+      link.valid = true;
+      link.itvl = desc->conn_itvl;
+      link.latency = desc->conn_latency;
+      link.timeout = desc->supervision_timeout;
+    }
     const uint32_t uptimeS = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    const size_t n = relayFormatStatus(s, r, uptimeS, MM_RELAY_PROTO, MM_FW_VERSION, MM_BOARD_LABEL, buf, sizeof(buf));
+    const size_t n =
+        relayFormatStatus(s, r, uptimeS, MM_RELAY_PROTO, MM_FW_VERSION, MM_BOARD_LABEL, link, buf, sizeof(buf));
     c->setValue((const uint8_t*)buf, n);
   }
 };
@@ -462,17 +529,109 @@ class CatalogCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+// ---- Power-off (loop() only) -------------------------------------------------------------
+// The board stops transmitting at once, shows the off frame on a lit screen, waits for PRG to be
+// released (PRG held during a later RST would start the ROM's download mode: looks dead, keeps
+// draining), gives the app time to read STATUS, disconnects every phone with reason 0x15 (power
+// off: the phone sees the drop at once instead of after the supervision timeout), saves a setting
+// picked in the last seconds, and sleeps until RST (shutdown.h). reason: MmOffReason.
+static void beginPowerOff(uint8_t reason, uint32_t now) {
+  if (gOffStage != OFF_NONE) return;
+  gOffPending = true;
+  gEngine.halt();
+  AdvState off;
+  memset(&off, 0, sizeof(off));
+  advApply(off);           // ADV_OFF: advManage() is not called again
+  digitalWrite(STATUS_LED, LOW);
+  gLedOn = false;
+  otaCancelRestart();      // a finished update starts at the next RST instead
+  gOffStage = OFF_NOTICE;
+  gOffLit = false;
+#if MM_HELTEC_V3
+  gOffLit = screenLit();
+  const bool held = reason == MM_OFF_BUTTON && screenPrgDown();
+  screenShowOff(reason == MM_OFF_LOW ? SCREEN_OFFST_LOW : (held ? SCREEN_OFFST_RELEASE : SCREEN_OFFST_GOING));
+  if (held) gOffStage = OFF_WAIT_RELEASE;
+#else
+  (void)reason;
+#endif
+  gOffStageMs = now;
+  publishSnapshot();
+}
+
+// Right after otaLoop(): runs the sequence; true while it does (loop() then does nothing else).
+static bool offService(uint32_t now) {
+  if (gOffStage == OFF_NONE) return false;
+  otaCancelRestart();      // an update finishing meanwhile does not restart the board either
+  ChipCmd cmd;
+  while (xQueueReceive(gCmdQueue, &cmd, 0) == pdTRUE) {}  // dropped
+#if MM_HELTEC_V3
+  screenPoll();            // PRG debounce (the release), panel power; no page steps, no timeout
+  if (screenFrameDue()) {
+    ScreenInputs in;
+    memset(&in, 0, sizeof(in));
+    in.linked = gLinked > 0;
+    screenDraw(in);
+  }
+#endif
+  publishSnapshot();       // a STATUS read during the grace still works
+  switch (gOffStage) {
+    case OFF_WAIT_RELEASE:
+#if MM_HELTEC_V3
+      if (!screenPrgDown() || now - gOffStageMs >= POWER_OFF_RELEASE_MAX_MS) {
+        screenShowOff(SCREEN_OFFST_GOING);
+        gOffStage = OFF_NOTICE;
+        gOffStageMs = now;
+      }
+#endif
+      break;
+    case OFF_NOTICE:
+      if (now - gOffStageMs >= (gOffLit ? POWER_OFF_NOTICE_MS : POWER_OFF_GRACE_MS)) {
+        uint16_t handles[MAX_LINKS];
+        uint8_t n;
+        portENTER_CRITICAL(&gSnapMux);
+        n = gLinkCount;
+        memcpy(handles, gLinkHandles, sizeof(handles));
+        portEXIT_CRITICAL(&gSnapMux);
+        for (uint8_t i = 0; i < n; i++) gServer->disconnect(handles[i], BLE_ERR_RD_CONN_TERM_PWROFF);
+        gOffStage = OFF_DISCONNECT;
+        gOffStageMs = now;
+      }
+      break;
+    case OFF_DISCONNECT:
+      if (gLinked == 0 || now - gOffStageMs >= POWER_OFF_LINK_WAIT_MS) gOffStage = OFF_SLEEP;
+      break;
+    default:
+      break;
+  }
+  if (gOffStage == OFF_SLEEP) {
+#if MM_HELTEC_V3
+    powerFlushSaves();     // a capacity / cutoff picked in the last seconds
+#endif
+    mmDeepSleepForever();  // never returns
+  }
+  return true;
+}
+
 // ---- Setup / loop --------------------------------------------------------------------
 void setup() {
+  setCpuFrequencyMhz(80); // first: plenty for BLE (its 80 MHz APB clock is the floor); ~half the draw of 240 MHz.
+  mmReleaseSleepHolds();  // pads held by a previous sleep (none after RST; after a restart, yes)
   gLoopTask = xTaskGetCurrentTaskHandle();  // Arduino runs setup() and loop() in loopTask
 #if MM_HELTEC_V3
-  screenBegin(SCREEN_ON_MS, DEVICE_NAME); // first thing: the OLED's Vext rail off from boot
+  screenBegin(SCREEN_ON_MS, DEVICE_NAME); // the OLED's Vext rail off from boot, PRG interrupt
+  uartRelease();                          // UART0 pads off the unpowered CP2102 (MM_UART_RELEASE), USB hint
   loraSleep();                            // the unused SX1262 out of standby (MM_LORA_SLEEP)
-  powerBegin(BATTERY_MAH);                // battery capacity (NVS, read only), first reading in 100 ms
+  powerBegin(BATTERY_MAH);                // capacity + cutoff (NVS, read only), first reading in 100 ms
+  const esp_reset_reason_t reset = esp_reset_reason();
+  if (powerBootCheck(reset)) {            // battery below cutoff + 0.10 V after RST / power-on: stay off
+    // After a brownout the panel is not lit (it could brown out again); otherwise 2 s of "TOO LOW
+    // TO START", and PRG during them starts the board anyway.
+    if (reset == ESP_RST_BROWNOUT || !screenBootLowNotice()) mmDeepSleepForever();
+  }
 #endif
   pinMode(STATUS_LED, OUTPUT);
   digitalWrite(STATUS_LED, LOW);
-  setCpuFrequencyMhz(80); // plenty for BLE (its 80 MHz APB clock is the floor); ~half the draw of 240 MHz.
 
   RelaySettings defaults;
   defaults.wakeMs = DEFAULT_WAKE_MS;
@@ -484,6 +643,7 @@ void setup() {
   gEngine.begin(defaults, LOOP_DEFAULT_MS);
   relayReplyOk(gReply);
   gEngine.snapshot(gSnap);
+  gShadow.hasBattery = MM_HELTEC_V3;      // set_low_cutoff: Heltec V3 only
   gCmdQueue = xQueueCreate(CMD_QUEUE_DEPTH, sizeof(ChipCmd));
 
   NimBLEDevice::init(DEVICE_NAME);
@@ -519,6 +679,10 @@ void setup() {
 
 void loop() {
   otaLoop();  // button arming, lost-link abort, restart after a firmware update
+  if (offService(millis())) {  // turning off: nothing else runs
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(POWER_OFF_LOOP_MS));
+    return;
+  }
   // A phone left: advertise fast again for a while so it (or another) relinks quickly.
   const uint32_t disconnects = gDisconnects;
   if (disconnects != gSeenDisconnects) {
@@ -526,9 +690,22 @@ void loop() {
     gIdleSince = millis();
   }
 
-  // The phone's commands, oldest first (the newest send wins), then the clock.
+  // The phone's commands, oldest first (the newest send wins), then the clock. Power commands
+  // are the sketch's; the rest is the engine's.
   ChipCmd cmd;
-  while (xQueueReceive(gCmdQueue, &cmd, 0) == pdTRUE) gEngine.apply(cmd, millis());
+  while (xQueueReceive(gCmdQueue, &cmd, 0) == pdTRUE) {
+    if (cmd.type == RELAY_CMD_POWER_OFF) {
+      beginPowerOff(MM_OFF_APP, millis());  // the rest of the queue is dropped by offService()
+      return;
+    }
+#if MM_HELTEC_V3
+    if (cmd.type == RELAY_CMD_SET_CUTOFF) {
+      powerSetCutoff((int32_t)cmd.ms, millis());
+      continue;
+    }
+#endif
+    gEngine.apply(cmd, millis());
+  }
   gEngine.service(millis());
 
   const uint32_t now = millis();
@@ -546,7 +723,15 @@ void loop() {
 
 #if MM_HELTEC_V3
   screenPoll(); // PRG button, screen power + timeout
-  powerPoll(millis(), screenLit(), gEngine.job.type != RELAY_JOB_NONE, linked > 0);  // battery, runtime model
+  powerPoll(millis(), screenLit(), gEngine.job.type != RELAY_JOB_NONE, linked > 0);  // battery, runtime model, cutoff
+  if (screenTakePowerOffRequest()) {  // PRG held 2 s on the POWER page
+    beginPowerOff(MM_OFF_BUTTON, millis());
+    return;
+  }
+  if (powerTakeCutoff()) {            // the battery reached the cutoff: off at once (a job on air is cut short)
+    beginPowerOff(MM_OFF_LOW, millis());
+    return;
+  }
   if (screenFrameDue()) {
     ScreenInputs in;
     memset(&in, 0, sizeof(in));

@@ -32,6 +32,9 @@ import com.magicmaker.android.relay.RelayGattServer
 import com.magicmaker.android.relay.RelayHttpServer
 import com.magicmaker.android.relay.RelayPairingPayload
 import com.magicmaker.android.relay.RelayProtocol
+import com.magicmaker.android.sync.SyncEngine
+import com.magicmaker.android.sync.SyncPorts
+import com.magicmaker.android.sync.SyncStatus
 import java.util.concurrent.Executors
 
 /**
@@ -229,6 +232,13 @@ class MagicMakerForegroundService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var scanResumeRunnable: Runnable? = null
     private var relayMode = RelayControlMode.STANDALONE
+    /** The sync runtime (docs/SYNC_P3_ANDROID_PLAN.md §5.6); null until part 1's data layer is installed. */
+    @Volatile private var syncEngine: SyncEngine? = null
+    /** Loops by hex (caps bit5): a hex with no library row runs as given. */
+    private var txLoopHexOverride: String? = null
+    private var txLoopLabelOverride: String? = null
+    private var starlightHexOverride: String? = null
+    private var starlightLabelOverride: String? = null
     private var recordSession = true
     private var autoEnabled = true
     private var lastAutoAt = 0L
@@ -277,9 +287,11 @@ class MagicMakerForegroundService : Service() {
                             if (!booted) boot() else {
                                 restartRelay()
                                 if (userWantsScan) restartScanWithScreenMode()
+                                syncEngine?.bluetoothOn()
                             }
                         }
                         BluetoothAdapter.STATE_OFF -> {
+                            syncEngine?.bluetoothOff()
                             publishState { it.copy(running = false, scanActive = false, status = "Turn on Bluetooth") }
                         }
                     }
@@ -329,6 +341,7 @@ class MagicMakerForegroundService : Service() {
             ACTION_SET_RELAY -> {
                 intent.getStringExtra(EXTRA_RELAY_MODE)?.let {
                     relayMode = runCatching { RelayControlMode.valueOf(it) }.getOrDefault(relayMode)
+                    if (relayMode == RelayControlMode.STANDALONE) relayMode = RelayControlMode.BLE_GATT
                     savePrefs()
                     if (!booted) boot() else restartRelay()
                 }
@@ -522,13 +535,17 @@ class MagicMakerForegroundService : Service() {
             { store.getStarlightBurstMs() },
             { store.getTxInterleave() },
         )
+        startSyncEngine()
         bleScanner = BleScanner(
             onDisneyPacket = { hex, rssi, address -> onHeard(hex, rssi, address) },
             onScanFailed = { code -> restartScanDelayed(code) },
             onEsp32Heartbeat = { hb, address ->
                 if (address.isNotEmpty()) esp32Address = address
+                syncEngine?.onHubAdvert(address)
                 mainHandler.post { onEsp32Heartbeat(hb) }
             },
+            onRelayAdvert = { address, name, rssi -> syncEngine?.hubSeen(address, name, rssi) },
+            hubDiscovery = { syncEngine?.wantsHubDiscovery() == true },
         )
         leScanner = adapter.bluetoothLeScanner
         scanCallback = bleScanner!!.buildCallback()
@@ -566,22 +583,50 @@ class MagicMakerForegroundService : Service() {
         if (randomShowEnabled) startRandomShow()
     }
 
+    /** Start the sync runtime once (boot); it runs until shutdown. */
+    private fun startSyncEngine() {
+        if (syncEngine != null) return
+        val data = SyncPorts.data ?: return
+        syncEngine = runCatching {
+            SyncEngine(applicationContext, data) { txRunning }.also { eng ->
+                eng.onGroupTag = { _ -> mainHandler.post { gattServer?.refreshAdvertising() } }
+                eng.onStatusChanged = { mainHandler.post { refreshNotification() } }
+                eng.start()
+            }
+        }.onFailure { CrashLog.record(it, "SyncEngine start") }.getOrNull()
+    }
+
+    private fun refreshNotification() {
+        val now = System.currentTimeMillis()
+        if (now - lastNotifyAt < 800) {
+            mainHandler.postDelayed({ refreshNotification() }, 850)
+            return
+        }
+        lastNotifyAt = now
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, notification(ServiceState.state.value.status))
+    }
+
     private fun txLoopHex(): String? {
+        txLoopHexOverride?.let { return it }
         if (txLoopPacketId < 0) return null
         return store.findTransmitPacket(txLoopPacketId)?.hex?.let { HexUtils.canonicalHex(it) }
     }
 
     private fun txLoopLabel(): String {
+        txLoopHexOverride?.let { return txLoopLabelOverride ?: it }
         if (txLoopPacketId < 0) return "none"
         return store.findTransmitPacket(txLoopPacketId)?.label ?: "unknown"
     }
 
     private fun starlightLoopHex(): String? {
+        starlightHexOverride?.let { return it }
         if (starlightLoopPacketId < 0) return null
         return store.findLearnedStarlight(starlightLoopPacketId)?.hex?.let { HexUtils.canonicalHex(it) }
     }
 
     private fun starlightLoopLabel(): String {
+        starlightHexOverride?.let { return starlightLabelOverride ?: it }
         if (starlightLoopPacketId < 0) return "none"
         return store.findLearnedStarlight(starlightLoopPacketId)?.label ?: "unknown"
     }
@@ -1122,8 +1167,11 @@ class MagicMakerForegroundService : Service() {
         // Our own ESP32 sending (its wand loop, keep-awake or the iPhone's sends through it): shown
         // in the live feed, but never recorded, never auto-answered. Answering it fought the
         // iPhone's own sends on the band and made the ESP32 feel laggy with the wand loop on.
-        val ownEsp32 = esp32Address.isNotEmpty() && address.equals(esp32Address, ignoreCase = true)
+        val hubMac = syncEngine?.hubAddress()
+        val ownEsp32 = (esp32Address.isNotEmpty() && address.equals(esp32Address, ignoreCase = true)) ||
+            (hubMac != null && address.equals(hubMac, ignoreCase = true))
         if (ownEsp32) {
+            syncEngine?.onHubAir(address)
             ServiceState.appendLive(hex, (classified?.label ?: "?") + " (ESP32)", rssi, "Heard", address, false)
             ServiceState.update { it.copy(packetsHeard = it.packetsHeard + 1) }
             return
@@ -1135,6 +1183,8 @@ class MagicMakerForegroundService : Service() {
         // persistence, and cloud sync below are throw-prone (disk full, IO, network); a
         // failure there must never starve the scanner — that's the "only one packet" symptom.
         ServiceState.appendLive(hex, classified?.label ?: "?", rssi, "Heard", address, isBand)
+        // Heard-packet event for the iPhone (spec §5.7): a post to mm-sync, never blocks here.
+        syncEngine?.onHeard(hex, rssi, address, loc?.latitude ?: Double.NaN, loc?.longitude ?: Double.NaN, loc?.accuracy ?: -1f, isBand)
 
         val event = runCatching {
             store.processHeardPacket(
@@ -1206,13 +1256,10 @@ class MagicMakerForegroundService : Service() {
         hotspotManager?.stopHotspot()
 
         val handlers = relayCommandHandlers()
-        // Only advertise the relay GATT server when the user actually picked BLE_GATT relay.
-        // In STANDALONE (or WiFi) we must NOT advertise the A7830001 service, or an iPhone aimed
-        // at the ESP32 will grab this phone instead. Standalone transmit uses BleAdvertiser and
-        // is unaffected (gattServer stays null, and all gattServer?. call sites are null-safe).
-        if (relayMode == RelayControlMode.BLE_GATT) {
-            startGattRelay(handlers)
-        }
+        // The relay GATT server always runs (SYNC_HUB_SPEC §5.1): it is also the iPhone's direct
+        // sync link. Its advert carries the MM_AND tag in the primary ADV, so an iPhone looking for
+        // the ESP32 (by name) never grabs this phone; WiFi mode adds HTTP on top.
+        startGattRelay(handlers)
 
         when (relayMode) {
             RelayControlMode.STANDALONE, RelayControlMode.BLE_GATT -> publishState {
@@ -1293,8 +1340,17 @@ class MagicMakerForegroundService : Service() {
                     }
                 },
                 commandHandlers = handlers,
+                syncEndpoint = syncEngine?.serverEndpoint,
+                groupId = { syncEngine?.groupId() },
+                ownClientLink = { address -> syncEngine?.isHubLink(address) == true },
             ).also { it.start() }
         }.onFailure { publishStatus("GATT relay failed: ${it.message}") }
+    }
+
+    /** A loop command by hex: a library row by id when the hex has one, else the hex override set by the caller. */
+    private fun relayCommandHandlersLoop(enabled: Boolean, packetId: Long?, intervalMs: Long?, starlight: Boolean) {
+        val h = relayCommandHandlers()
+        if (starlight) h.setStarlightLoop(enabled, packetId, intervalMs) else h.setTxLoop(enabled, packetId, intervalMs)
     }
 
     private fun relayCommandHandlers(): RelayCommands.Handlers = RelayCommands.Handlers(
@@ -1348,7 +1404,10 @@ class MagicMakerForegroundService : Service() {
         setStarlightLoop = { enabled, packetId, intervalMs ->
             if (!booted) boot()
             starlightLoopEnabled = enabled
-            packetId?.let { starlightLoopPacketId = it }
+            packetId?.let {
+                starlightLoopPacketId = it
+                starlightHexOverride = null
+            }
             intervalMs?.let { starlightIntervalMs = it.coerceIn(500L, 60_000L) }
             savePrefs()
             if (starlightLoopEnabled) {
@@ -1362,10 +1421,31 @@ class MagicMakerForegroundService : Service() {
             gattServer?.refreshStatusCharacteristic()
             gattServer?.refreshCatalogBuffer()
         },
+        setTxLoopHex = { enabled, hex, label, intervalMs ->
+            val canon = HexUtils.canonicalHex(hex)
+            val match = store.allTransmitPackets().firstOrNull { HexUtils.canonicalHex(it.hex) == canon }
+            if (match == null) {
+                txLoopHexOverride = canon
+                txLoopLabelOverride = label?.takeIf { it.isNotBlank() }
+            }
+            relayCommandHandlersLoop(enabled, match?.id, intervalMs, starlight = false)
+        },
+        setStarlightLoopHex = { enabled, hex, label, intervalMs ->
+            val canon = HexUtils.canonicalHex(hex)
+            val match = store.learnedStarlightPackets().firstOrNull { HexUtils.canonicalHex(it.hex) == canon }
+            if (match == null) {
+                starlightHexOverride = canon
+                starlightLabelOverride = label?.takeIf { it.isNotBlank() }
+            }
+            relayCommandHandlersLoop(enabled, match?.id, intervalMs, starlight = true)
+        },
         setTxLoop = { enabled, packetId, intervalMs ->
             if (!booted) boot()
             txLoopEnabled = enabled
-            packetId?.let { txLoopPacketId = it }
+            packetId?.let {
+                txLoopPacketId = it
+                txLoopHexOverride = null
+            }
             intervalMs?.let { txLoopIntervalMs = it.coerceIn(500L, 60_000L) }
             savePrefs()
             if (txLoopEnabled) {
@@ -1574,6 +1654,8 @@ class MagicMakerForegroundService : Service() {
         pauseScanNow()
         httpServer?.stop()
         gattServer?.stop()
+        syncEngine?.stop()
+        syncEngine = null
         hotspotManager?.stopHotspot()
         bleAdvertiser?.stopAll()
         stopLocationUpdates()
@@ -1593,6 +1675,8 @@ class MagicMakerForegroundService : Service() {
         relayMode = runCatching {
             RelayControlMode.valueOf(p.getString("relay_mode", RelayControlMode.BLE_GATT.name)!!)
         }.getOrDefault(RelayControlMode.BLE_GATT)
+        // STANDALONE left the UI with the always-on GATT server (SYNC_HUB_SPEC §5.1).
+        if (relayMode == RelayControlMode.STANDALONE) relayMode = RelayControlMode.BLE_GATT
         autoEnabled = p.getBoolean("auto_enabled", true)
         recordSession = p.getBoolean(PREF_RECORD_SESSION, true)
         userWantsScan = p.getBoolean(PREF_SCAN_ACTIVE, true)
@@ -1708,6 +1792,7 @@ class MagicMakerForegroundService : Service() {
             if (s.autoEnabled) append(" · auto")
             if (s.recordSessionActive) append(" · rec")
             if (s.starlightLoopEnabled) append(" · wand ${s.starlightLoopLabel}")
+            append(SyncStatus.state.value.notificationToken)
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))

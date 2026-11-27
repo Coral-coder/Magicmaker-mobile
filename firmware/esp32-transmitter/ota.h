@@ -211,6 +211,13 @@ static void otaOnDisconnect() {
   otaWakeLoop();
 }
 
+// An update is being received (the POWER page refuses its hold; power_off answers "busy").
+static bool otaBusy() { return gOtaState == OTA_ST_RECEIVING; }
+
+// Power-off: a finished update waiting to restart is not restarted (the new image is already the
+// boot partition, so it starts at the next RST).
+static void otaCancelRestart() { gOtaRebootAt = 0; }
+
 // loop()'s sleep: wake for a pending restart.
 static uint32_t otaNextDueMs(uint32_t now) {
   if (gOtaRebootAt == 0) return 0xFFFFFFFFu;

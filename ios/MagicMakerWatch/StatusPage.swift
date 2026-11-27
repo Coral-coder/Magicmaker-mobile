@@ -36,6 +36,9 @@ struct StatusPage: View {
             line(state.text, state.tone, ink, font: WatchFont.title)
             if e.batteryPct != nil || e.batteryMv != nil {
                 esp32Battery(e, ink)
+                if e.batteryLow == true && !e.charging {
+                    line("BATTERY LOW — CHARGE SOON", .alarm, ink, font: WatchFont.small)
+                }
             }
             if let program: String = e.program, !program.isEmpty {
                 line(program, program == "IDLE" ? .dim : .text, ink)
@@ -52,17 +55,18 @@ struct StatusPage: View {
         }
     }
 
-    /// "68% ~9H 40M" (alarm when low), "CHARGING · 4.18V" or "4.05V".
+    /// "68% ~9H 40M" (alarm when low: 20 % or less, 3.55 V or less, or the board's own low-battery
+    /// warning), "CHARGING · 4.18V" or "4.05V".
     @ViewBuilder
     private func esp32Battery(_ e: WatchEsp32Status, _ ink: WatchInk) -> some View {
-        let lowVolts: Bool = (e.batteryMv ?? Int.max) <= 3550
+        let low: Bool = (e.batteryMv ?? Int.max) <= 3550 || e.batteryLow == true
         if e.charging {
             line(e.batteryMv.map { "CHARGING · " + watchVoltsText(mv: $0) } ?? "CHARGING", .text, ink)
         } else if let pct: Int = e.batteryPct {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(verbatim: "\(pct)%")
                     .font(WatchFont.hero)
-                    .watchTone(pct <= 20 || lowVolts ? .alarm : .highlight, ink)
+                    .watchTone(pct <= 20 || low ? .alarm : .highlight, ink)
                 if let minutes: Int = e.runtimeMin, minutes >= 0 {
                     Text(watchRuntimeText(minutes: minutes))
                         .font(WatchFont.body)
@@ -72,7 +76,7 @@ struct StatusPage: View {
             }
             .listRowBackground(Color.clear)
         } else if let mv: Int = e.batteryMv {
-            line(watchVoltsText(mv: mv), lowVolts ? .alarm : .highlight, ink, font: WatchFont.hero)
+            line(watchVoltsText(mv: mv), low ? .alarm : .highlight, ink, font: WatchFont.hero)
         }
     }
 

@@ -59,6 +59,8 @@ final class AppViewModel: ObservableObject {
                 self?.relayLacksRawBurst = false
                 // The ESP32 keeps its settings in RAM only: they are checked again on every link.
                 self?.esp32SettingsPushed = false
+                // A board that was powered off from here has been turned on again (RST).
+                self?.esp32PoweredOff = false
                 self?.refreshAndroidCatalog()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self?.refreshAndroidRemote()
@@ -94,6 +96,8 @@ final class AppViewModel: ObservableObject {
     private var esp32SettingsPushed = false
     /// Keep-awake and loop changes made while the ESP32 was not linked; sent in order when it links.
     private var pendingEsp32Commands: [(action: String, params: [String: Any])] = []
+    /// The ESP32 took POWER OFF from this iPhone (SETTINGS → BOARD POWER); cleared on the next link.
+    @Published private(set) var esp32PoweredOff = false
 
     /// Opt-in "Keep running in background" (SETTINGS). Device-only: capitalised key, kept out of library exports.
     private static let keepRunningInBackgroundKey = "MMKeepRunningInBackground"
@@ -464,6 +468,8 @@ final class AppViewModel: ObservableObject {
         case .esp32:
             if esp32FirmwareOutdated { return "Reflash the ESP32 — its firmware has no chip-side loops." }
             if relayGattReady { return "" }
+            // Before the link check: a connect to the locked board stays pending while it is off.
+            if esp32PoweredOff { return "The ESP32 is off — press RST on the board, then tap Retry BLE." }
             if ble.bleCentral.relayGatt.isLinkInProgress { return "Finishing ESP32 link…" }
             return "Power on the ESP32 — tap Retry BLE."
         case .androidBle:
@@ -581,6 +587,7 @@ final class AppViewModel: ObservableObject {
             esp32SettingsPushed = false
             esp32FirmwareOutdated = false
             esp32StatusMisses = 0
+            esp32PoweredOff = false
             if keepAwakeActive { keepAwakeActive = false }
             // A link to the other relay would keep taking every send and command: drop it so
             // discovery starts over for the selected backend.
@@ -663,6 +670,7 @@ final class AppViewModel: ObservableObject {
                 if let status {
                     self?.androidRemote = status
                 } else if self?.relayBackend == .androidWifi || self?.relayGattReady != true {
+                    self?.noteEsp32LinkLost()
                     self?.androidRemote = nil
                 }
                 // Only a link that is really down resets this: a skipped GATT poll also gives nil.
@@ -875,6 +883,124 @@ final class AppViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - ESP32 board power (firmware 1.5+, docs/POWER_V3.md B11)
+
+    /// SETTINGS → BOARD POWER in both themes: what the section shows for the selected ESP32.
+    var esp32PowerSummary: Esp32PowerSummary {
+        var out = Esp32PowerSummary()
+        guard relayBackend == .esp32 else { return out }
+        let linked: Bool = esp32Linked
+        // A status counts only while the GATT link is up, as for the telemetry bar's battery token.
+        let shown: AndroidRemoteStatus? = relayGattReady ? androidRemote : nil
+        if let status = shown, status.proto != nil {
+            out.batteryText = status.esp32BatteryText
+            out.batteryLow = status.batteryLow && !status.charging
+            out.cutoffMv = status.lowCutoffMv
+        }
+        out.cutoffEnabled = linked
+        guard linked else {
+            if esp32PoweredOff {
+                out.note = Esp32PowerCopy.poweredOffNote
+                out.noteIsWarning = true
+            } else {
+                out.note = Esp32PowerCopy.notLinkedNote
+            }
+            return out
+        }
+        guard let status = shown, let proto = status.proto else {
+            out.note = esp32FirmwareOutdated ? Esp32PowerCopy.needsFirmwareNote : Esp32PowerCopy.readingNote
+            return out
+        }
+        if proto >= Esp32PowerCopy.minProto {
+            out.canPowerOff = true
+        } else {
+            out.note = Esp32PowerCopy.needsFirmwareNote
+        }
+        return out
+    }
+
+    /// The board's low-battery cutoff: 0 = off, or 3200 / 3300 / 3400 mV (`set_low_cutoff`). The
+    /// board keeps it in its own flash and is the authority for it, so nothing is pushed on link
+    /// and a change made while it is not linked is not kept for later.
+    func setEsp32LowCutoff(_ mv: Int) {
+        guard esp32Linked else {
+            statusMessage = "ESP32 not linked — link it to change its cutoff"
+            return
+        }
+        let body: [String: Any] = ["action": "set_low_cutoff", "mv": mv]
+        ble.bleCentral.relayGatt.sendRemoteCommandJson(body, coalesceKind: "set_low_cutoff") { [weak self] json in
+            Task { @MainActor in
+                guard let self else { return }
+                guard let json else {
+                    self.statusMessage = "ESP32 cutoff not sent — try again"
+                    return
+                }
+                let ok: Bool = json["ok"] as? Bool == true
+                if ok {
+                    self.statusMessage = mv == 0
+                        ? "ESP32 low-battery cutoff OFF"
+                        : "ESP32 low-battery cutoff " + String(format: "%.2fV", Double(mv) / 1000.0)
+                } else {
+                    self.statusMessage = "ESP32 cutoff failed: " + (json["error"] as? String ?? "no reply")
+                }
+                // The reply is the chip's whole status; it can be read before the board's loop has
+                // applied the change, so an accepted value is shown at once and read again shortly.
+                if json["running"] != nil {
+                    var status = AndroidRemoteStatus.parse(json)
+                    if ok && status.lowCutoffMv != nil { status.lowCutoffMv = mv }
+                    self.androidRemote = status
+                    self.esp32StatusRead(status)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.refreshAndroidRemote()
+                }
+            }
+        }
+    }
+
+    /// POWER OFF (asked to confirm first): the board answers, then disconnects and goes into deep
+    /// sleep; only RST (EN on a DevKit) turns it on again. Firmware 1.5+, both boards.
+    func powerOffEsp32() {
+        guard esp32Linked else {
+            statusMessage = "ESP32 not linked"
+            return
+        }
+        let body: [String: Any] = ["action": "power_off", "confirm": true]
+        ble.bleCentral.relayGatt.sendRemoteCommandJson(body) { [weak self] json in
+            Task { @MainActor in
+                guard let self else { return }
+                guard let json else {
+                    self.statusMessage = "ESP32 power off: no reply — if its LED has stopped, it is off"
+                    return
+                }
+                if json["ok"] as? Bool == true {
+                    self.esp32PoweredOff = true
+                    self.statusMessage = "ESP32 powering off — press RST on the board to turn it on"
+                    return
+                }
+                let error: String = json["error"] as? String ?? "no reply"
+                switch error {
+                case "busy":
+                    self.statusMessage = "ESP32 is receiving a firmware update — power it off when it is done"
+                case "powering off":
+                    self.esp32PoweredOff = true
+                    self.statusMessage = "ESP32 is already powering off"
+                default:
+                    self.statusMessage = "ESP32 power off failed: " + error
+                }
+            }
+        }
+    }
+
+    /// The ESP32's link went down. With a low battery in its last status the board has most likely
+    /// turned itself off at its cutoff (one told to power off from here, or restarting after a
+    /// firmware update, is not reported as that).
+    private func noteEsp32LinkLost() {
+        guard relayBackend == .esp32, !esp32PoweredOff, !firmware.isBusy, let last = androidRemote,
+              last.batteryLow, !last.charging else { return }
+        statusMessage = "ESP32 off: battery low — charge it, then press RST"
     }
 
     /// `force` (LINK → Refresh) skips the wait between re-syncs.
@@ -1375,5 +1501,49 @@ final class AppViewModel: ObservableObject {
                 self?.statusMessage = ok ? "Vibrate sent to Android" : "Vibrate failed"
             }
         }
+    }
+}
+
+// MARK: - ESP32 board power
+
+/// SETTINGS → BOARD POWER (docs/POWER_V3.md B11), drawn the same way by both themes.
+struct Esp32PowerSummary: Equatable {
+    /// esp32BatteryText ("LOW · 8% · …"), or nil without a battery reading.
+    var batteryText: String? = nil
+    /// The board warns of a low battery (shown amber / ALARM).
+    var batteryLow: Bool = false
+    /// The board's low-battery cutoff in mV (0 = off); nil when it has none to set (the classic
+    /// ESP32, or firmware before 1.5). The chips are shown only with one.
+    var cutoffMv: Int? = nil
+    /// The chips take taps (the board is linked); otherwise they are drawn dimmed.
+    var cutoffEnabled: Bool = false
+    /// POWER OFF is offered: linked, relay protocol 3 (firmware 1.5) or newer.
+    var canPowerOff: Bool = false
+    /// The line under the section ("" for none): powered off, not linked, reading, needs 1.5.
+    var note: String = ""
+    /// The note is a warning (amber / highlight), not a dim hint.
+    var noteIsWarning: Bool = false
+}
+
+/// The BOARD POWER texts and the cutoff choices, shared by both themes.
+enum Esp32PowerCopy {
+    /// Relay protocol 3 (firmware 1.5) added power_off and set_low_cutoff.
+    static let minProto: Int = 3
+    /// OFF and the board's three cutoff levels, in mV, as the chips list them.
+    static let cutoffOptionsMv: [Int] = [0, 3200, 3300, 3400]
+    static let cutoffLabels: [String] = ["OFF", "3.20V", "3.30V", "3.40V"]
+    static let cutoffTitle: String = "LOW-BATTERY CUTOFF"
+    static let cutoffCaption: String = "Turns the board off at this voltage (about 5 / 10 / 18 % left) so the battery is never run flat. Press RST on the board to turn it on again after charging."
+    static let powerOffLabel: String = "POWER OFF"
+    static let powerOffTitle: String = "Power off the ESP32?"
+    static let powerOffMessage: String = "It stops transmitting and disconnects. Press RST (EN on a DevKit) on the board to turn it on again. It still charges while off."
+    static let poweredOffNote: String = "POWERED OFF — PRESS RST ON THE BOARD"
+    static let notLinkedNote: String = "Link the ESP32 to change its low-battery cutoff or turn it off."
+    static let readingNote: String = "Reading the board's status…"
+    static let needsFirmwareNote: String = "Needs board firmware 1.5 — update it in BOARD FIRMWARE."
+
+    /// The chip index for a cutoff in mV, or nil for a value the chips do not list.
+    static func cutoffIndex(_ mv: Int) -> Int? {
+        return cutoffOptionsMv.firstIndex(of: mv)
     }
 }

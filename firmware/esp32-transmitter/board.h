@@ -21,13 +21,40 @@
 #endif
 
 // Shown on the OLED's DEVICE page and in STATUS ("fw"). Bump it when the firmware's behaviour changes.
-#define MM_FW_VERSION "1.4.1"
+#define MM_FW_VERSION "1.5"
 // Relay protocol version in STATUS ("proto"). 2: chip-side keep-awake / loops / settings, full
 // STATUS object (the app treats a STATUS without "running" as firmware before 1.2).
-#define MM_RELAY_PROTO 2
+// 3: power_off, set_low_cutoff, cutMv / batLow, conn / btSleep diagnostics.
+#define MM_RELAY_PROTO 3
+
+// Build-time switches (-DNAME=0 / 1 on the compiler command line; the defaults are the release).
+//   MM_USB_SENSE      Heltec V3: read "on USB" from the CP2102's TXD (GPIO44, see power.h). 0 if
+//                     a board reads USB while on battery only (it would silence the cutoff).
+//   MM_UART_RELEASE   Heltec V3: release the UART0 pads after boot (no drive into an unpowered
+//                     CP2102). No serial logs or crash text after boot; flashing is unaffected.
+//                     MM_USB_SENSE needs it.
+//   MM_DEBUG_TIMING   STATUS "advMaxUs": the longest advertising restart since boot (bench builds).
+//   MM_BT_MODEM_SLEEP Heltec V3 (btsleep.h): BLE modem sleep, active only when the image is linked
+//                     with -Wl,--wrap=esp_bt_controller_init (CI and PlatformIO builds; a plain
+//                     Arduino IDE build does not get it). 0 keeps the wrap but leaves sleep off.
+#ifndef MM_USB_SENSE
+#define MM_USB_SENSE 1
+#endif
+#ifndef MM_UART_RELEASE
+#define MM_UART_RELEASE 1
+#endif
+#ifndef MM_DEBUG_TIMING
+#define MM_DEBUG_TIMING 0
+#endif
 
 #if !MM_HELTEC_V3
 #define MM_BOARD_LABEL "ESP32"
+// Status LED: the board's LED_BUILTIN, else GPIO2 (most DevKits).
+#if defined(LED_BUILTIN)
+#define MM_STATUS_LED_PIN LED_BUILTIN
+#else
+#define MM_STATUS_LED_PIN 2
+#endif
 #endif
 
 #if MM_HELTEC_V3
@@ -51,4 +78,8 @@ static const uint8_t HV3_LORA_MOSI_PIN = 10;
 static const uint8_t HV3_LORA_MISO_PIN = 11;
 static const uint8_t HV3_LORA_RST_PIN  = 12;
 static const uint8_t HV3_LORA_BUSY_PIN = 13;
+// UART0 to the CP2102 USB-serial bridge (powered from USB only): released after boot (power.h).
+static const uint8_t HV3_UART_TX_PIN   = 43;  // U0TXD -> CP2102 RXD (through 499 R)
+static const uint8_t HV3_UART_RX_PIN   = 44;  // U0RXD <- CP2102 TXD (HIGH while the CP2102 is powered)
+#define MM_STATUS_LED_PIN HV3_LED_PIN
 #endif

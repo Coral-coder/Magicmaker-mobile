@@ -6,7 +6,10 @@
 //
 // Grid: 21 columns of 6 px. Row 0 is the header (page title + page dots) over a dotted rule;
 // below it six text lines, 9 px apart. Labels sit in columns 0-3, values start at column 4
-// (17 columns).
+// (17 columns). The font is ASCII 32-126, so "..." stands for an ellipsis.
+//
+// Pages (PRG steps through them): STATUS, LAST PACKET, DEVICE, LOW BATTERY, POWER. While the
+// board turns itself off (or refuses to start on a low battery) an off frame replaces the page.
 #pragma once
 
 #include <stdint.h>
@@ -18,12 +21,16 @@
 #include "u8g2.h"
 #endif
 #include "vfd_font_5x7.h"
+#include "battery_model.h"
 
 #ifndef pgm_read_byte
 #define pgm_read_byte(p) (*(const uint8_t*)(p))
 #endif
 
-enum ScreenPage : uint8_t { PAGE_STATUS = 0, PAGE_PACKET, PAGE_DEVICE, PAGE_COUNT };
+enum ScreenPage : uint8_t { PAGE_STATUS = 0, PAGE_PACKET, PAGE_DEVICE, PAGE_CUTOFF, PAGE_POWER, PAGE_COUNT };
+// Off frames (ScreenModel.offStage): NONE = the page. RELEASE / GOING: power-off from the POWER
+// page or the app (RELEASE while PRG is still held); LOW: the cutoff; BOOT_LOW: refused at boot.
+enum ScreenOffStage : uint8_t { SCREEN_OFFST_NONE = 0, SCREEN_OFFST_RELEASE, SCREEN_OFFST_GOING, SCREEN_OFFST_LOW, SCREEN_OFFST_BOOT_LOW };
 enum ScreenTxState : uint8_t { SCREEN_TX_IDLE = 0, SCREEN_TX_WAKE, SCREEN_TX_SEND };
 // Same values as relay_proto.h RelayKind / RelayProgram (the sketch passes them straight through).
 enum ScreenPacketKind : uint8_t { PACKET_NONE = 0, PACKET_BAND, PACKET_WAND, PACKET_PING, PACKET_RAW };
@@ -54,6 +61,14 @@ struct ScreenModel {
   bool        charging;
   bool        usb;             // on the charger (USB power)
   bool        capMark;         // the capacity is being changed (hold PRG): highlight it
+  // low battery (STATUS + LOW BATTERY + off frames)
+  int32_t     cutMv;           // cutoff level: 0 = off, else mV
+  bool        batLow;          // the warning stage
+  bool        cutMark;         // the cutoff level is being changed (hold PRG): highlight it
+  // POWER + off frames
+  uint16_t    powerPermille;   // POWER hold progress, 0..1000
+  uint8_t     offStage;        // ScreenOffStage
+  bool        otaBusy;         // a Bluetooth update is being received (POWER refuses the hold)
   // DEVICE
   uint32_t    uptimeS;
   const char* bleName;
@@ -104,15 +119,34 @@ static void scrValueInverse(u8g2_t* g, int line, const char* s) {
   u8g2_SetDrawColor(g, 1);
 }
 
+// A full-width line drawn dark on a lit box (1 px margin), from column 0.
+static void scrLabelInverse(u8g2_t* g, int line, const char* s) {
+  int cols = (int)strlen(s);
+  const int maxCols = (SCR_W - VFD5X7_W) / VFD5X7_ADVANCE + 1;
+  if (cols > maxCols) cols = maxCols;
+  if (cols == 0) return;
+  int w = cols * VFD5X7_ADVANCE + 1;
+  if (w > SCR_W) w = SCR_W;
+  u8g2_DrawBox(g, 0, (u8g2_uint_t)(scrLineY(line) - 1), (u8g2_uint_t)w, (u8g2_uint_t)(VFD5X7_ASCENT + 2));
+  u8g2_SetDrawColor(g, 0);
+  scrLabel(g, line, s);
+  u8g2_SetDrawColor(g, 1);
+}
+
+// Title on the left and the dotted rule below, no page dots (the off frames).
+static void scrHeaderPlain(u8g2_t* g, const char* title) {
+  scrText(g, 0, 0, title);
+  for (int x = 0; x < SCR_W; x += 2) u8g2_DrawPixel(g, (u8g2_uint_t)x, SCR_RULE_Y);
+}
+
 // Title on the left, one dot per page on the right (the current one filled), dotted rule below.
 static void scrHeader(u8g2_t* g, const char* title, uint8_t page) {
-  scrText(g, 0, 0, title);
+  scrHeaderPlain(g, title);
   for (int i = 0; i < PAGE_COUNT; i++) {
     const int x = SCR_W - 5 - (PAGE_COUNT - 1 - i) * 8;
     if (i == page) u8g2_DrawBox(g, (u8g2_uint_t)x, 1, 5, 5);
     else           u8g2_DrawFrame(g, (u8g2_uint_t)x, 1, 5, 5);
   }
-  for (int x = 0; x < SCR_W; x += 2) u8g2_DrawPixel(g, (u8g2_uint_t)x, SCR_RULE_Y);
 }
 
 // Segmented progress bar on a text line: a 7 px tall frame holding 2x3 px segments.
@@ -168,16 +202,27 @@ static void scrRuntime(char* out, size_t n, int32_t minutes) {
   else                    snprintf(out, n, "~%ldM", (long)minutes);
 }
 
-// STATUS line 6: "68% ~9H 40M", "68% CHARGING", "100% USB POWER", "--".
+// STATUS line 6: "68% ~9H 40M", "8% LOW ~25M" (drawn inverse), "68% CHARGING", "100% USB POWER", "--".
 static void scrBatteryStatus(char* out, size_t n, const ScreenModel& m) {
   char run[12];
+  const char* low = m.batLow ? " LOW" : "";
   if (m.batteryPct < 0)       snprintf(out, n, "--");
   else if (m.usb)             snprintf(out, n, "%d%% USB POWER", (int)m.batteryPct);
   else if (m.charging)        snprintf(out, n, "%d%% CHARGING", (int)m.batteryPct);
   else if (m.runtimeMin >= 0) {
     scrRuntime(run, sizeof(run), m.runtimeMin);
-    snprintf(out, n, "%d%% %s", (int)m.batteryPct, run);
-  } else                      snprintf(out, n, "%d%%", (int)m.batteryPct);
+    snprintf(out, n, "%d%%%s %s", (int)m.batteryPct, low, run);
+  } else                      snprintf(out, n, "%d%%%s", (int)m.batteryPct, low);
+}
+
+// "3.92V 68%" (battery mV and %), for BAT lines.
+static void scrVoltPct(char* out, size_t n, int32_t mv, int16_t pct) {
+  snprintf(out, n, "%ld.%02ldV %d%%", (long)(mv / 1000), (long)((mv % 1000) / 10), (int)(pct < 0 ? 0 : pct));
+}
+
+// "3.30V"
+static void scrVolts(char* out, size_t n, int32_t mv) {
+  snprintf(out, n, "%ld.%02ldV", (long)(mv / 1000), (long)((mv % 1000) / 10));
 }
 
 // BLE  LINKED | WAITING FOR PHONE
@@ -215,7 +260,8 @@ static void scrPageStatus(u8g2_t* g, const ScreenModel& m) {
   }
   scrLabel(g, 5, "BAT");
   scrBatteryStatus(buf, sizeof(buf), m);
-  scrValue(g, 5, buf);
+  if (m.batLow && m.batteryPct >= 0 && !m.usb && !m.charging) scrValueInverse(g, 5, buf);
+  else                                                         scrValue(g, 5, buf);
 }
 
 // BAND 23B WAKE+4000MS
@@ -251,8 +297,7 @@ static void scrPageDevice(u8g2_t* g, const ScreenModel& m) {
   if (m.batteryMv < 0) {
     scrValue(g, 0, "--");
   } else {
-    snprintf(buf, sizeof(buf), "%ld.%02ldV %d%%", (long)(m.batteryMv / 1000), (long)((m.batteryMv % 1000) / 10),
-             (int)(m.batteryPct < 0 ? 0 : m.batteryPct));
+    scrVoltPct(buf, sizeof(buf), m.batteryMv, m.batteryPct);
     scrValue(g, 0, buf);
   }
   scrLabel(g, 1, "CAP");
@@ -287,13 +332,112 @@ static void scrPageDevice(u8g2_t* g, const ScreenModel& m) {
   scrValue(g, 5, buf);
 }
 
-// Clears the frame buffer and draws one page into it (nothing is sent to the panel here).
+// CUT  3.30V | OFF                       (hold PRG here: the next level, highlighted)
+// BAT  3.92V 68% | --
+//      OK | LOW - CHARGE SOON | CHARGING | USB POWER | --
+// LOW  BELOW 3.40V
+//      OFF AT ~10% LEFT | NO AUTO POWER-OFF
+// HOLD PRG: NEXT LEVEL
+static void scrPageCutoff(u8g2_t* g, const ScreenModel& m) {
+  char buf[32];
+  char v[12];
+  scrHeader(g, "LOW BATTERY", PAGE_CUTOFF);
+  scrLabel(g, 0, "CUT");
+  if (m.cutMv > 0) scrVolts(buf, sizeof(buf), m.cutMv);
+  else             snprintf(buf, sizeof(buf), "OFF");
+  if (m.cutMark) scrValueInverse(g, 0, buf);
+  else           scrValue(g, 0, buf);
+  scrLabel(g, 1, "BAT");
+  if (m.batteryMv < 0) {
+    scrValue(g, 1, "--");
+  } else {
+    scrVoltPct(buf, sizeof(buf), m.batteryMv, m.batteryPct);
+    scrValue(g, 1, buf);
+  }
+  if (m.batteryPct < 0)  scrValue(g, 2, "--");
+  else if (m.usb)        scrValue(g, 2, "USB POWER");
+  else if (m.charging)   scrValue(g, 2, "CHARGING");
+  else if (m.batLow)     scrValue(g, 2, "LOW - CHARGE SOON");
+  else                   scrValue(g, 2, "OK");
+  scrLabel(g, 3, "LOW");
+  scrVolts(v, sizeof(v), (m.cutMv > 0 ? m.cutMv : LOW_WARN_BASE_MV) + LOW_WARN_MARGIN_MV);
+  snprintf(buf, sizeof(buf), "BELOW %s", v);
+  scrValue(g, 3, buf);
+  if (m.cutMv > 0) {
+    snprintf(buf, sizeof(buf), "OFF AT ~%d%% LEFT", (int)(batteryPercentFromMv((float)m.cutMv) + 0.5f));
+    scrValue(g, 4, buf);
+  } else {
+    scrValue(g, 4, "NO AUTO POWER-OFF");
+  }
+  scrLabel(g, 5, "HOLD PRG: NEXT LEVEL");
+}
+
+// HOLD PRG TO POWER OFF | UPDATE RUNNING
+// RST TURNS ON          | POWER OFF WHEN DONE
+// [bar: the hold]       | (no bar)
+//
+// CHARGES WHILE OFF
+// UNPLUG FOR STORAGE
+static void scrPagePower(u8g2_t* g, const ScreenModel& m) {
+  scrHeader(g, "POWER", PAGE_POWER);
+  if (m.otaBusy) {
+    scrLabel(g, 0, "UPDATE RUNNING");
+    scrLabel(g, 1, "POWER OFF WHEN DONE");
+  } else {
+    scrLabel(g, 0, "HOLD PRG TO POWER OFF");
+    scrLabel(g, 1, "RST TURNS ON");
+    scrBar(g, 0, scrLineY(2), SCR_W, m.powerPermille);
+  }
+  scrLabel(g, 4, "CHARGES WHILE OFF");
+  scrLabel(g, 5, "UNPLUG FOR STORAGE");
+}
+
+// The off frames:
+//   RELEASE / GOING (POWER page, app)   LOW (cutoff)            BOOT_LOW (refused at boot)
+//   POWER                               LOW BATTERY             LOW BATTERY
+//   POWERING OFF...                     POWERING OFF...         TOO LOW TO START
+//                                       BAT  3.27V 9%           BAT  3.36V 13%
+//   RELEASE PRG (inverse, RELEASE)      CHARGE IT, THEN         CHARGE IT, THEN
+//   PRESS RST TO TURN ON (GOING)        PRESS RST TO TURN ON    PRESS RST TO TURN ON
+//   CHARGES WHILE OFF                                           PRG: START ANYWAY
+static void scrPageOff(u8g2_t* g, const ScreenModel& m) {
+  char buf[32];
+  if (m.offStage == SCREEN_OFFST_RELEASE || m.offStage == SCREEN_OFFST_GOING) {
+    scrHeaderPlain(g, "POWER");
+    scrLabel(g, 0, "POWERING OFF...");
+    if (m.offStage == SCREEN_OFFST_RELEASE) scrLabelInverse(g, 2, "RELEASE PRG");
+    else                                    scrLabel(g, 3, "PRESS RST TO TURN ON");
+    scrLabel(g, 4, "CHARGES WHILE OFF");
+    return;
+  }
+  scrHeaderPlain(g, "LOW BATTERY");
+  scrLabel(g, 0, m.offStage == SCREEN_OFFST_BOOT_LOW ? "TOO LOW TO START" : "POWERING OFF...");
+  scrLabel(g, 1, "BAT");
+  if (m.batteryMv < 0) {
+    scrValue(g, 1, "--");
+  } else {
+    scrVoltPct(buf, sizeof(buf), m.batteryMv, m.batteryPct);
+    scrValue(g, 1, buf);
+  }
+  scrLabel(g, 2, "CHARGE IT, THEN");
+  scrLabel(g, 3, "PRESS RST TO TURN ON");
+  if (m.offStage == SCREEN_OFFST_BOOT_LOW) scrLabel(g, 4, "PRG: START ANYWAY");
+}
+
+// Clears the frame buffer and draws one page into it (nothing is sent to the panel here). An off
+// frame wins over the page.
 static void scrDrawPage(u8g2_t* g, uint8_t page, const ScreenModel& m) {
   u8g2_ClearBuffer(g);
   u8g2_SetDrawColor(g, 1);
+  if (m.offStage != SCREEN_OFFST_NONE) {
+    scrPageOff(g, m);
+    return;
+  }
   switch (page) {
     case PAGE_PACKET: scrPagePacket(g, m); break;
     case PAGE_DEVICE: scrPageDevice(g, m); break;
+    case PAGE_CUTOFF: scrPageCutoff(g, m); break;
+    case PAGE_POWER:  scrPagePower(g, m); break;
     default:          scrPageStatus(g, m); break;
   }
 }

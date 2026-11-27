@@ -198,15 +198,19 @@ private struct LinkRelayPanel: View {
         }
     }
 
-    /// The ESP32 (firmware 1.2+): the board, what it runs by itself, and its battery (Heltec V3).
-    /// Older firmware sends no status; the HINT row says to reflash it.
+    /// The ESP32 (firmware 1.2+): the board, what it runs by itself, its battery (Heltec V3; amber
+    /// with LOW while the board warns of a low battery) and, from firmware 1.5, the Bluetooth link
+    /// it has with this iPhone. Older firmware sends no status; the HINT row says to reflash it.
     @ViewBuilder
     private var esp32Rows: some View {
         if vm.relayBackend == .esp32, let s = vm.androidRemote, s.proto != nil {
             LinkInfoRow("ESP32", s.esp32DeviceText)
             LinkInfoRow("RADIO", s.esp32ProgramText)
             if let battery = s.esp32BatteryText {
-                LinkInfoRow("BATTERY", battery)
+                LinkInfoRow("BATTERY", battery, color: s.batteryLow && !s.charging ? MMTheme.amber : MMTheme.textPrimary)
+            }
+            if let link = s.esp32LinkText {
+                LinkInfoRow("LINK", link)
             }
         }
     }

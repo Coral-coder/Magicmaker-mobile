@@ -1,13 +1,24 @@
 // OLED screen of the Heltec WiFi LoRa 32 V3 build: power, PRG button, frame updates.
 //
 // Power first: the panel is OFF and UNPOWERED unless you are using it. Pressing PRG (GPIO0)
-// powers it up on the STATUS page; further presses step through the pages; it powers down
-// again SCREEN_ON_MS (top of the .ino) after the last press. Nothing else wakes it: no boot
-// splash, not a phone connecting, not a transmit.
+// powers it up on the STATUS page; further presses step through the pages (STATUS -> LAST
+// PACKET -> DEVICE -> LOW BATTERY -> POWER -> STATUS); it powers down again SCREEN_ON_MS (top of
+// the .ino) after the last press. Nothing else wakes it: no boot splash, not a phone connecting,
+// not a transmit. One exception: after RST with the battery too low to start, the sketch shows
+// screenBootLowNotice() for SCREEN_BOOT_NOTICE_MS (the only sign RST did anything), then the
+// board goes off again unless PRG is pressed meanwhile.
 //
-// On the DEVICE page a press steps on when PRG is released; holding it BUTTON_LONG_MS instead
-// picks the next battery capacity (power.h), and again every BUTTON_LONG_MS while held, for at
-// most one round of the presets (a button held down in a bag must not keep the screen lit).
+// DEVICE, LOW BATTERY and POWER step on when PRG is released, so a hold never carries over to
+// the next page; a hold only counts on the page where the press began.
+//   DEVICE       hold BUTTON_LONG_MS: the next battery capacity (power.h), again every
+//                BUTTON_LONG_MS while held, at most one round of the presets (a button held down
+//                in a bag must not keep the screen lit).
+//   LOW BATTERY  the same gesture for the cutoff level (3.20 -> 3.30 -> 3.40 V -> OFF).
+//   POWER        hold POWER_HOLD_MS (the bar fills): a power-off request for the sketch
+//                (screenTakePowerOffRequest()); refused while a Bluetooth update is received. A
+//                tap (< POWER_TAP_MS) steps on to STATUS; a release before POWER_HOLD_MS cancels.
+// While the board turns itself off (screenShowOff()) the off frame owns the screen: no page
+// steps, no timeout.
 //
 //   off  = SSD1306 display off, I2C stopped and its pins released (no back-powering through
 //          pull-ups), reset held LOW (never driven high into an unpowered panel), Vext HIGH so
@@ -29,6 +40,7 @@
 #include <esp_timer.h>
 #include "oled_pages.h"
 #include "power.h"
+#include "ota.h"
 
 // ---- Tuning ----------------------------------------------------------------------------
 static const uint32_t SCREEN_FRAME_MS       = 250;    // at most 4 frames/s while lit
@@ -37,8 +49,12 @@ static const uint16_t OLED_RESET_PULSE_MS   = 10;     // u8g2 default 100: sized
 static const uint16_t OLED_POST_RESET_MS    = 20;     // u8g2 default 100
 static const uint32_t OLED_I2C_HZ           = 400000;
 static const uint32_t BUTTON_DEBOUNCE_MS    = 25;
-static const uint32_t BUTTON_LONG_MS        = 1000;   // DEVICE page: hold PRG this long for the next capacity
-static const uint32_t SCREEN_CAP_MARK_MS    = 1500;   // the changed capacity stays highlighted this long
+static const uint32_t BUTTON_LONG_MS        = 1000;   // DEVICE / LOW BATTERY: hold PRG this long for the next value
+static const uint32_t SCREEN_CAP_MARK_MS    = 1500;   // the changed capacity / cutoff stays highlighted this long
+static const uint32_t POWER_HOLD_MS         = 2000;   // POWER page: hold PRG this long to power off
+static const uint32_t POWER_TAP_MS          = 400;    // POWER page: a shorter press is a tap (next page)
+static const uint32_t POWER_OFF_RELEASE_MAX_MS = 10000;  // power-off waits this long at most for PRG to be released
+static const uint32_t SCREEN_BOOT_NOTICE_MS = 2000;   // "TOO LOW TO START" after RST
 
 // ---- State (loop-owned) ----------------------------------------------------------------
 enum ScreenPower : uint8_t { SCREEN_OFF, SCREEN_POWERING, SCREEN_ON };
@@ -61,10 +77,14 @@ static bool     gBtnRaw        = false;        // PRG level as last sampled (tru
 static bool     gBtnDown       = false;        // debounced
 static uint32_t gBtnChangeMs   = 0;
 static uint32_t gBtnDownMs     = 0;            // debounced press start
-static bool     gBtnOnDevice   = false;        // this press started on the lit DEVICE page
-static uint8_t  gBtnLongSteps  = 0;            // capacity steps taken by this press
+static uint8_t  gBtnHoldPage   = PAGE_COUNT;   // the lit hold page (DEVICE / CUTOFF / POWER) this press began on; PAGE_COUNT = none
+static uint8_t  gBtnLongSteps  = 0;            // capacity / cutoff steps taken by this press
 static bool     gScrCapMarked  = false;        // a capacity was picked ...
 static uint32_t gScrCapMarkMs  = 0;            // ... at this time
+static bool     gScrCutMarked  = false;        // a cutoff level was picked ...
+static uint32_t gScrCutMarkMs  = 0;            // ... at this time
+static bool     gScrPowerOffReq = false;       // the POWER hold completed (screenTakePowerOffRequest())
+static uint8_t  gScrOffStage   = SCREEN_OFFST_NONE;  // an off frame owns the screen
 
 // Packet stats, fed by the sketch from beginTransmit().
 static uint32_t gScrSent       = 0;
@@ -170,6 +190,13 @@ static void screenNextPage() {
   gScrFrameNow = true;
 }
 
+static bool scrIsHoldPage(uint8_t page) { return page == PAGE_DEVICE || page == PAGE_CUTOFF || page == PAGE_POWER; }
+
+// Steps a value page's hold may take: one round of its presets.
+static uint8_t scrLongStepLimit(uint8_t page) {
+  return page == PAGE_DEVICE ? BATTERY_PRESET_COUNT : (page == PAGE_CUTOFF ? CUTOFF_PRESET_COUNT : 0);
+}
+
 // loop(): PRG button, power sequencing, timeout. Cheap while the screen is off.
 static void screenPoll() {
   const uint32_t now = millis();
@@ -181,38 +208,86 @@ static void screenPoll() {
   } else if (raw != gBtnDown && now - gBtnChangeMs >= BUTTON_DEBOUNCE_MS) {
     gBtnDown = raw;
     gScrPressMs = now;  // pressing or releasing keeps the screen lit
-    if (gBtnDown) {     // a press: acted on when it goes down, except on the DEVICE page
+    if (gScrOffStage != SCREEN_OFFST_NONE) {
+      gBtnHoldPage = PAGE_COUNT;  // the off sequence owns the screen: PRG only debounces (screenPrgDown())
+    } else if (gBtnDown) {  // a press: acted on when it goes down, except on the hold pages
       gBtnDownMs = now;
       gBtnLongSteps = 0;
-      gBtnOnDevice = false;
+      gBtnHoldPage = PAGE_COUNT;
       if (gScrPower == SCREEN_OFF) {
         screenPowerOn(now);
       } else if (gScrPower == SCREEN_ON) {
-        if (gScrPage == PAGE_DEVICE) gBtnOnDevice = true;  // short or long: decided by the release
+        if (scrIsHoldPage(gScrPage)) gBtnHoldPage = gScrPage;  // tap or hold: decided by the release / the clock
         else screenNextPage();
       }  // still powering up: the press only extends the timeout
     } else {
-      if (gBtnOnDevice && gBtnLongSteps == 0 && gScrPower == SCREEN_ON) screenNextPage();
-      gBtnOnDevice = false;
+      const uint8_t held = gBtnHoldPage;
+      gBtnHoldPage = PAGE_COUNT;
+      if (gScrPower == SCREEN_ON && held == gScrPage) {
+        if (held == PAGE_POWER) {
+          if (!gScrPowerOffReq) {
+            if (now - gBtnDownMs < POWER_TAP_MS) screenNextPage();  // a tap: on to STATUS
+            else gScrFrameNow = true;                               // released early: cancelled, the bar empties
+          }
+        } else if (held != PAGE_COUNT && gBtnLongSteps == 0) {
+          screenNextPage();
+        }
+      }
     }
   }
 
-  // Held on the DEVICE page: the next battery capacity now, and again every BUTTON_LONG_MS.
-  if (gBtnDown && gBtnOnDevice && gScrPower == SCREEN_ON && gBtnLongSteps < BATTERY_PRESET_COUNT &&
-      now - gBtnDownMs >= BUTTON_LONG_MS * (uint32_t)(gBtnLongSteps + 1)) {
-    powerCycleCapacity(now);
+  // Held on DEVICE / LOW BATTERY: the next capacity / cutoff level now, and again every
+  // BUTTON_LONG_MS, at most one round.
+  if (gBtnDown && (gBtnHoldPage == PAGE_DEVICE || gBtnHoldPage == PAGE_CUTOFF) && gScrPower == SCREEN_ON &&
+      gBtnLongSteps < scrLongStepLimit(gBtnHoldPage) && now - gBtnDownMs >= BUTTON_LONG_MS * (uint32_t)(gBtnLongSteps + 1)) {
     gBtnLongSteps++;
     gScrPressMs = now;
-    gScrCapMarked = true;
-    gScrCapMarkMs = now;
     gScrFrameNow = true;
+    if (gBtnHoldPage == PAGE_DEVICE) {
+      powerCycleCapacity(now);
+      gScrCapMarked = true;
+      gScrCapMarkMs = now;
+    } else {
+      powerCycleCutoff(now);
+      gScrCutMarked = true;
+      gScrCutMarkMs = now;
+    }
   }
 
-  if (gScrPower != SCREEN_OFF && now - gScrPressMs >= gScrOnMs) {
+  // Held on POWER: the bar fills; at POWER_HOLD_MS a power-off request, once. Not while an update
+  // is being received.
+  if (gBtnDown && gBtnHoldPage == PAGE_POWER && gScrPower == SCREEN_ON && !gScrPowerOffReq &&
+      gScrOffStage == SCREEN_OFFST_NONE) {
+    gScrPressMs = now;  // the timeout cannot cut into the hold
+    if (!otaBusy() && now - gBtnDownMs >= POWER_HOLD_MS) {
+      gScrPowerOffReq = true;
+      gScrFrameNow = true;
+    }
+  }
+
+  if (gScrPower != SCREEN_OFF && gScrOffStage == SCREEN_OFFST_NONE && now - gScrPressMs >= gScrOnMs) {
     screenPowerOff();
   } else if (gScrPower == SCREEN_POWERING && now - gScrPowerMs >= SCREEN_VEXT_SETTLE_MS) {
     screenInitPanel();
   }
+}
+
+// loop(): the POWER hold completed (true once). The sketch then runs the off sequence.
+static bool screenTakePowerOffRequest() {
+  const bool req = gScrPowerOffReq;
+  gScrPowerOffReq = false;
+  return req;
+}
+
+// PRG is down (debounced; screenPoll() keeps it current).
+static bool screenPrgDown() { return gBtnDown; }
+
+// The off sequence: show an off frame (ScreenOffStage) on a lit screen, which then stays lit (no
+// timeout) until the board sleeps. A dark screen stays dark (PRG no longer lights it).
+static void screenShowOff(uint8_t stage) {
+  gBtnHoldPage = PAGE_COUNT;  // the press that got here counts for nothing more
+  gScrOffStage = stage;
+  gScrFrameNow = true;
 }
 
 // The panel is powered (lit or coming up): it draws current.
@@ -229,16 +304,19 @@ static void scrDueAt(uint32_t& due, uint32_t at, uint32_t now) {
   if (ms < due) due = ms;
 }
 
-// loop(): ms until screenPoll() or a frame has work: PRG debounce, a long press, Vext settle,
-// the next frame, the screen timeout. 0xFFFFFFFF while the screen is dark and PRG is idle.
+// loop(): ms until screenPoll() or a frame has work: PRG debounce, a long press, the POWER hold,
+// Vext settle, the next frame (every SCREEN_FRAME_MS while lit: the hold bar moves), the screen
+// timeout. 0xFFFFFFFF while the screen is dark and PRG is idle.
 static uint32_t screenNextDueMs(uint32_t now) {
   uint32_t due = 0xFFFFFFFFu;
   if (gBtnRaw != gBtnDown) scrDueAt(due, gBtnChangeMs + BUTTON_DEBOUNCE_MS, now);
   if (gScrPower == SCREEN_OFF) return due;
-  if (gBtnDown && gBtnOnDevice && gBtnLongSteps < BATTERY_PRESET_COUNT) {
+  if (gBtnDown && (gBtnHoldPage == PAGE_DEVICE || gBtnHoldPage == PAGE_CUTOFF) &&
+      gBtnLongSteps < scrLongStepLimit(gBtnHoldPage)) {
     scrDueAt(due, gBtnDownMs + BUTTON_LONG_MS * (uint32_t)(gBtnLongSteps + 1), now);
   }
-  scrDueAt(due, gScrPressMs + gScrOnMs, now);
+  if (gBtnDown && gBtnHoldPage == PAGE_POWER && !gScrPowerOffReq) scrDueAt(due, gBtnDownMs + POWER_HOLD_MS, now);
+  if (gScrOffStage == SCREEN_OFFST_NONE) scrDueAt(due, gScrPressMs + gScrOnMs, now);
   if (gScrPower == SCREEN_POWERING) scrDueAt(due, gScrPowerMs + SCREEN_VEXT_SETTLE_MS, now);
   if (gScrPower == SCREEN_ON) scrDueAt(due, gScrFrameNow ? now : gScrFrameMs + SCREEN_FRAME_MS, now);
   return due;
@@ -274,16 +352,9 @@ static void screenFlush() {
   gScrSendAll = false;
 }
 
-// loop(), when screenFrameDue(): draw the current page from the sketch's transmitter state
-// plus the stats and readings kept here, and send what changed.
-static void screenDraw(const ScreenInputs& in) {
+// The page model from the sketch's transmitter state plus the stats and readings kept here.
+static void screenFillModel(const ScreenInputs& in, ScreenModel& m) {
   const uint32_t now = millis();
-  if (!gScrAddr[0]) {
-    const std::string a = NimBLEDevice::getAddress().toString();  // "aa:bb:cc:dd:ee:ff"
-    if (a.size() == 17) memcpy(gScrAddr, a.c_str() + 9, 9);       // "dd:ee:ff" + NUL
-  }
-
-  ScreenModel m;
   memset(&m, 0, sizeof(m));
   m.linked = in.linked;
   m.txState = in.txState;
@@ -307,20 +378,82 @@ static void screenDraw(const ScreenInputs& in) {
   m.usb = powerOnUsb();
   if (gScrCapMarked && now - gScrCapMarkMs >= SCREEN_CAP_MARK_MS && !(gBtnDown && gBtnLongSteps > 0)) gScrCapMarked = false;
   m.capMark = gScrCapMarked;
+  m.cutMv = powerCutoffMv();
+  m.batLow = powerBatteryLow();
+  if (gScrCutMarked && now - gScrCutMarkMs >= SCREEN_CAP_MARK_MS && !(gBtnDown && gBtnLongSteps > 0)) gScrCutMarked = false;
+  m.cutMark = gScrCutMarked;
+  m.otaBusy = otaBusy();
+  if (gBtnDown && gBtnHoldPage == PAGE_POWER && !m.otaBusy) {
+    const uint32_t held = now - gBtnDownMs;
+    m.powerPermille = (uint16_t)(held >= POWER_HOLD_MS ? 1000u : held * 1000u / POWER_HOLD_MS);
+  }
+  m.offStage = gScrOffStage;
   m.uptimeS = (uint32_t)(nowUs / 1000000LL);
   m.bleName = gScrName;
   memcpy(m.bleAddr, gScrAddr, sizeof(m.bleAddr));
   m.fwVersion = MM_FW_VERSION;
   m.boardLabel = MM_BOARD_LABEL;
+}
 
+static void screenRender(const ScreenModel& m) {
   scrDrawPage(gOled.getU8g2(), gScrPage, m);
   screenFlush();
   if (!gScrDisplayOn) {
     gOled.setPowerSave(0);  // first frame is in the panel's RAM: switch the display on
     gScrDisplayOn = true;
   }
-  gScrFrameMs = now;
+  gScrFrameMs = millis();
   gScrFrameNow = false;
+}
+
+// loop(), when screenFrameDue(): draw the current page (or the off frame) and send what changed.
+static void screenDraw(const ScreenInputs& in) {
+  if (!gScrAddr[0]) {
+    const std::string a = NimBLEDevice::getAddress().toString();  // "aa:bb:cc:dd:ee:ff"
+    if (a.size() == 17) memcpy(gScrAddr, a.c_str() + 9, 9);       // "dd:ee:ff" + NUL
+  }
+  ScreenModel m;
+  screenFillModel(in, m);
+  screenRender(m);
+}
+
+// setup(), before NimBLE starts: the battery is too low to start (power.h powerBootCheck()). The
+// screen lights for SCREEN_BOOT_NOTICE_MS with "TOO LOW TO START" (blocking). True = PRG was
+// pressed meanwhile: start anyway (the screen then shows STATUS until its timeout, like any
+// press). False: the sketch turns the board off again (the panel is switched off there).
+static bool screenBootLowNotice() {
+  screenPowerOn(millis());
+  delay(SCREEN_VEXT_SETTLE_MS);
+  screenInitPanel();
+  gScrOffStage = SCREEN_OFFST_BOOT_LOW;
+  ScreenInputs in;
+  memset(&in, 0, sizeof(in));
+  ScreenModel m;
+  screenFillModel(in, m);  // battery mV / % from the boot readings; no BLE address yet
+  screenRender(m);
+  bool start = false;
+  const uint32_t t0 = millis();
+  while (millis() - t0 < SCREEN_BOOT_NOTICE_MS) {
+    if (digitalRead(HV3_PRG_PIN) == LOW) {
+      delay(BUTTON_DEBOUNCE_MS);
+      if (digitalRead(HV3_PRG_PIN) == LOW) {
+        start = true;
+        break;
+      }
+    }
+    delay(10);
+  }
+  gScrOffStage = SCREEN_OFFST_NONE;
+  if (start) {
+    const uint32_t now = millis();
+    gScrPage = PAGE_STATUS;
+    gScrPressMs = now;
+    gScrFrameNow = true;
+    gBtnRaw = gBtnDown = true;  // this press is not a new one when it is released
+    gBtnChangeMs = now;
+    gBtnHoldPage = PAGE_COUNT;
+  }
+  return start;
 }
 
 #endif  // MM_HELTEC_V3

@@ -8,6 +8,9 @@ import android.bluetooth.le.ScanSettings
 import com.magicmaker.android.core.CrashLog
 import com.magicmaker.android.core.HexUtils
 import com.magicmaker.android.relay.RelayProtocol
+import com.magicmaker.android.sync.HubLinkMachine
+import android.os.ParcelUuid
+import java.util.UUID
 
 class BleScanner(
     private val onDisneyPacket: (hex: String, rssi: Int, address: String) -> Unit,
@@ -16,7 +19,14 @@ class BleScanner(
     /** The ESP32 transmitter's battery heartbeat (firmware 1.4+), read from its adverts, with the
      *  board's address (it sends its Disney packets from the same address). */
     private val onEsp32Heartbeat: ((Esp32Heartbeat, String) -> Unit)? = null,
+    /** A connectable ESP32 relay advert (name MM_ESP… / MagicMaker-ESP32…) for the sync hub link:
+     *  address, name, rssi. Another Android relay (service data tag MM_AND) is never reported. */
+    private val onRelayAdvert: ((address: String, name: String?, rssi: Int) -> Unit)? = null,
+    /** True while no sync hub is known: screen-off scans also match the relay service. */
+    private val hubDiscovery: () -> Boolean = { false },
 ) {
+    private val relayUuid = ParcelUuid(UUID.fromString(RelayProtocol.SERVICE_UUID))
+
     private var scanning = false
     private var callback: ScanCallback? = null
 
@@ -66,7 +76,27 @@ class BleScanner(
             ScanFilter.Builder()
                 .setManufacturerData(Esp32Heartbeat.COMPANY_ID, Esp32Heartbeat.FILTER_DATA, Esp32Heartbeat.FILTER_MASK)
                 .build(),
-        )
+        ) + hubDiscoveryFilters()
+    }
+
+    /** Sync hub discovery with the screen off (no hub known yet); no forced restart when it changes. */
+    private fun hubDiscoveryFilters(): List<ScanFilter> =
+        if (runCatching { hubDiscovery() }.getOrDefault(false)) listOf(ScanFilter.Builder().setServiceUuid(relayUuid).build()) else emptyList()
+
+    /** Report an ESP32 relay advert to the sync hub link (before any other handling; never consumes it). */
+    private fun reportRelayAdvert(result: ScanResult, record: ScanRecord) {
+        val cb = onRelayAdvert ?: return
+        val name = record.deviceName
+        if (!HubLinkMachine.isHubName(name)) return
+        val tag = record.getServiceData(relayUuid)
+        if (tag != null && tag.size >= 6 && String(tag, 0, 6, Charsets.US_ASCII) == RelayProtocol.RELAY_TAG) return
+        if (!result.isConnectable) return
+        val address = try {
+            result.device?.address.orEmpty()
+        } catch (_: SecurityException) {
+            ""
+        }
+        if (address.isNotEmpty()) cb(address, name, result.rssi)
     }
 
     fun markStarted() { scanning = true }
@@ -74,6 +104,7 @@ class BleScanner(
 
     private fun handleResult(result: ScanResult) {
         val record = result.scanRecord ?: return
+        runCatching { reportRelayAdvert(result, record) }
 
         // Our own ESP32 transmitter's battery heartbeat: report it, never treat it as a packet.
         Esp32Heartbeat.parse(record.getManufacturerSpecificData(Esp32Heartbeat.COMPANY_ID))?.let { hb ->

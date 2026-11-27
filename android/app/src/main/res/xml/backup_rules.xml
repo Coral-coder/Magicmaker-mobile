@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Android 11 and older: Google backup takes all app data except the cloud dictionary token,
      which stays on this phone only (PacketSync.TOKEN_PREFS). -->
+<!-- Sync identity (deviceId, dbId, issuedSeq, event epoch, group key) lives in noBackupFilesDir
+     (sync_identity.json), which the platform never backs up: it must stay there, never in a
+     backed-up location, so a restored phone gets a new identity (docs/SYNC_P3_ANDROID_PLAN.md §3.3). -->
 <full-backup-content>
     <exclude domain="sharedpref" path="magicmaker_secrets.xml" />
 </full-backup-content>

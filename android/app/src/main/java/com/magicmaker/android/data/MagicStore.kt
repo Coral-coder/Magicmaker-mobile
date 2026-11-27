@@ -8,8 +8,24 @@ import com.magicmaker.android.core.*
 import com.magicmaker.android.service.AllFilesAccess
 import com.magicmaker.android.service.MagicMakerForegroundService
 import com.magicmaker.android.service.ServiceState
+import com.magicmaker.android.sync.AtomicFiles
+import com.magicmaker.android.sync.Bytes
+import com.magicmaker.android.sync.IdentityReconcile
+import com.magicmaker.android.sync.LedgerStore
+import com.magicmaker.android.sync.LibraryDiff
+import com.magicmaker.android.sync.LibraryMigration
+import com.magicmaker.android.sync.LibraryRows
+import com.magicmaker.android.sync.LibrarySync
 import com.magicmaker.android.sync.PacketSync
+import com.magicmaker.android.sync.RowsAccess
+import com.magicmaker.android.sync.SaveSink
+import com.magicmaker.android.sync.StoredPeer
+import com.magicmaker.android.sync.SyncIdentityFile
+import com.magicmaker.android.sync.SyncLibraryPort
+import com.magicmaker.android.sync.SyncStateCodec
+import com.magicmaker.android.sync.SyncStateJson
 import java.io.File
+import java.util.zip.CRC32
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,6 +70,9 @@ class MagicStore(context: Context) {
     private val externalLibraryDir = File(Environment.getExternalStorageDirectory(), "MagicMaker")
     private val externalLibraryFile = File(externalLibraryDir, "magicmaker_library.json")
     val libraryFilePath: String get() = externalLibraryFile.absolutePath
+    // Size / mtime / CRC of the external copy as last written by this app (plan §3.4): a fast
+    // "the user has not edited it" check, so a multi-MB file is not parsed at every launch.
+    private val externalSidecarFile = File(appContext.filesDir, "magicmaker_library.ext.json")
 
     var presets: List<MagicPacket> = emptyList()
         private set
@@ -140,6 +159,9 @@ class MagicStore(context: Context) {
         // can restore everything: band addresses, timings, UI collapse state, etc.
         val settings: Map<String, PrefEntry>? = null,
         val uiSettings: Map<String, PrefEntry>? = null,
+        // The sync ledger + peer table (plan §3.1), in the same write as the rows. Null in files
+        // written before P3: load() then migrates the rows (§4.4).
+        val sync: SyncStateJson? = null,
     )
 
     /** A single SharedPreferences value, type-tagged for lossless JSON round-trip. */
@@ -149,18 +171,78 @@ class MagicStore(context: Context) {
         val set: List<String>? = null,
     )
 
-    init {
-        load()
-        if (presets.isEmpty()) {
-            presets = PresetCatalog.asMagicPackets().mapIndexed { index, packet ->
-                packet.copy(id = index + 1L)
-            }
-            nextPacketId = presets.size + 1L
-            save()
-        } else {
-            mergeBuiltInPresets()
-        }
-        refreshSessions()
+    // ---- sync (docs/SYNC_P3_ANDROID_PLAN.md §3–§4) ------------------------------------------
+
+    /** The sync identity in noBackupFilesDir (plan §3.3). Loaded before the store: load() needs it. */
+    internal val syncIdentity: SyncIdentityFile = SyncIdentityFile.load(
+        File(appContext.noBackupFilesDir, SyncIdentityFile.FILE_NAME),
+        System.currentTimeMillis(),
+        onError = { t, tag -> CrashLog.record(t, tag) },
+    )
+
+    /** LibrarySync's view of the rows. Every call happens with this store's monitor held. */
+    private val rowsAccess = object : RowsAccess {
+        override var presets: List<MagicPacket>
+            get() = this@MagicStore.presets
+            set(value) { this@MagicStore.presets = value }
+        override var learnedColors: List<MagicPacket>
+            get() = this@MagicStore.learnedColors
+            set(value) { this@MagicStore.learnedColors = value }
+        override var learnedLibrary: List<MagicPacket>
+            get() = this@MagicStore.learnedLibrary
+            set(value) { this@MagicStore.learnedLibrary = value }
+        override var learnedRaw: List<MagicPacket>
+            get() = this@MagicStore.learnedRaw
+            set(value) { this@MagicStore.learnedRaw = value }
+        override var newWandNames: Map<String, String>
+            get() = loadNewWandNamesPref()
+            set(value) { writeNewWandNamesPref(value) }
+
+        override fun allocId(): Long = nextPacketId++
+
+        override fun learnFromSync(hex: String): Boolean = learnFromSyncRow(hex)
+
+        override fun bumpRevision() = ServiceState.bumpStoreRevision()
+
+        override fun rebuildRawIndex() = this@MagicStore.rebuildRawIndex()
+    }
+
+    private val librarySync = LibrarySync(
+        rowsAccess, LedgerStore(), syncIdentity, SaveSink { save() }, this, { System.currentTimeMillis() },
+    )
+
+    /** The phone's ledger and rows for the sync runtime (SyncPorts.data.library). */
+    val sync: SyncLibraryPort get() = librarySync
+
+    /** Serializes the internal + external writes (saveNow, exportLibrary); never the store monitor. */
+    private val writeLock = Any()
+
+    /** While importHexesToLibrary runs: learned hexes collect here for one bulk PRESENCE batch. */
+    private var learnBatch: MutableList<String>? = null
+
+    private fun loadNewWandNamesPref(): Map<String, String> =
+        LibraryRows.parseNewWandJson(prefs.getString("newwand_names", null))
+
+    private fun writeNewWandNamesPref(names: Map<String, String>) {
+        val o = org.json.JSONObject()
+        names.forEach { (k, v) -> o.put(k, v) }
+        prefs.edit().putString("newwand_names", o.toString()).apply()
+    }
+
+    /** PRESENCE projection (plan §4.3): the learn routine without ledger, cloud, serial or rssi. */
+    private fun learnFromSyncRow(hex: String): Boolean {
+        val canonical = HexUtils.canonicalHex(hex)
+        if (MagicClassifier.isLibraryNoise(canonical)) return false
+        val classified = MagicClassifier.classify(canonical) ?: return false
+        if (classified.category == MagicCategory.UNKNOWN || classified.typeInfo == "ping") return false
+        return addClassifiedToLibrary(classified, rawHex = canonical, rssi = 0, fromSync = true).added
+    }
+
+    /** A learn path created a row in colors / library: PRESENCE, unless it came from sync. */
+    private fun learnedRow(hex: String, fromSync: Boolean) {
+        if (fromSync) return
+        val batch = learnBatch
+        if (batch != null) batch.add(hex) else librarySync.onLearned(hex)
     }
 
     private fun mergeBuiltInPresets() {
@@ -177,53 +259,157 @@ class MagicStore(context: Context) {
     // True once the external file is the loaded/imported source of truth. Until then
     // we never overwrite an existing external library (avoids clobbering real data
     // with freshly-seeded defaults before the user imports it).
-    private var externalAuthoritative = false
+    @Volatile private var externalAuthoritative = false
 
+    /** {"size", "mtimeMs", "crc"} of the external copy this app last wrote (plan §3.4). */
+    private data class ExtSidecar(val size: Long? = null, val mtimeMs: Long? = null, val crc: Long? = null)
+
+    private fun parseState(bytes: ByteArray?): PersistedState? =
+        bytes?.let { b -> runCatching { gson.fromJson(String(b, Charsets.UTF_8), PersistedState::class.java) }.getOrNull() }
+
+    private fun crc32(bytes: ByteArray): Long = CRC32().also { it.update(bytes) }.value
+
+    private fun readSidecar(): ExtSidecar? =
+        AtomicFiles.read(externalSidecarFile)?.let { b ->
+            runCatching { gson.fromJson(String(b, Charsets.UTF_8), ExtSidecar::class.java) }.getOrNull()
+        }
+
+    private fun writeSidecar(bytes: ByteArray) {
+        val f = externalLibraryFile
+        val sc = ExtSidecar(f.length(), f.lastModified(), crc32(bytes))
+        AtomicFiles.write(externalSidecarFile, gson.toJson(sc).toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * Load (plan §3.6). The internal store is always the base when it parses. The external copy is
+     * the base only when no internal store exists, and is otherwise diffed as user edits when it
+     * changed since this app wrote it (sidecar) and is newer. The ledger is restored, or migrated
+     * from the rows once, then the identity is reconciled (rollback / restore / corruption).
+     */
     fun load() {
-        readBestState()?.let { applyState(it.first) }
-        // When access is granted we can see the real external state, so internal and
-        // external are reconciled (readBestState already loaded the newer of the two):
-        // it's safe to treat external as writable, and to seed it if missing.
-        // When NOT granted we stay non-authoritative so a later save can't clobber a
+        val internal = parseState(AtomicFiles.read(storeFile))
+        val granted = AllFilesAccess.granted(appContext)
+        if (granted) AtomicFiles.recover(externalLibraryFile)
+        val extExists = runCatching { externalLibraryFile.isFile }.getOrDefault(false)
+        var external: PersistedState? = null
+        var externalChanged = false
+        var externalNewer = false
+        if (extExists) {
+            if (internal == null) {
+                external = parseState(runCatching { externalLibraryFile.readBytes() }.getOrNull())
+            } else {
+                externalNewer = externalLibraryFile.lastModified() > storeFile.lastModified()
+                val sc = readSidecar()
+                val quickMatch = sc != null && sc.size == externalLibraryFile.length() &&
+                    sc.mtimeMs == externalLibraryFile.lastModified()
+                if (externalNewer && !quickMatch) {
+                    val bytes = runCatching { externalLibraryFile.readBytes() }.getOrNull()
+                    if (bytes != null && (sc == null || sc.crc != crc32(bytes))) {
+                        externalChanged = true
+                        external = parseState(bytes)
+                    }
+                }
+            }
+        }
+        val base = IdentityReconcile.chooseBase(internal != null, external != null)
+        val baseState = when (base) {
+            IdentityReconcile.Base.INTERNAL -> internal
+            IdentityReconcile.Base.EXTERNAL -> external
+            IdentityReconcile.Base.NONE -> null
+        }
+        baseState?.let { applyState(it) }
+
+        // Ledger: restore the stored section, or migrate the rows (schema 0 -> 1, once).
+        val stored = baseState?.sync
+        var ledger = LedgerStore()
+        var peers = LinkedHashMap<Bytes, StoredPeer>()
+        var corrupt = false
+        var migrated = false
+        if (stored != null) {
+            val r = SyncStateCodec.restore(stored)
+            ledger = r.ledger
+            peers = r.peers
+            corrupt = r.corrupt
+            if (corrupt) CrashLog.record(IllegalStateException("sync ledger: dropped ${r.dropped.take(8)}"), "MagicStore.load")
+        } else if (baseState != null) {
+            val res = LibraryMigration.migrate(currentRows(), syncIdentity.deviceId, ledger)
+            presets = res.rows.presets
+            learnedColors = res.rows.learnedColors
+            learnedLibrary = res.rows.learnedLibrary
+            learnedRaw = res.rows.learnedRaw
+            rebuildRawIndex()
+            if (res.rows.newWandNames != loadNewWandNamesPref()) writeNewWandNamesPref(res.rows.newWandNames)
+            migrated = true
+        }
+        // What is already on the internal disk: everything below the stored nextSyncSeq.
+        val durable = if (base == IdentityReconcile.Base.INTERNAL && stored != null) ledger.nextSyncSeq - 1 else 0
+        val outcome = IdentityReconcile.decide(
+            IdentityReconcile.Facts(base, syncIdentity.wasPresent, syncIdentity.issuedSeq, ledger.nextSyncSeq, corrupt, migrated),
+        )
+        IdentityReconcile.apply(outcome, syncIdentity, peers)
+        librarySync.install(ledger, peers, durable)
+
+        var diffed = false
+        if (IdentityReconcile.externalDiff(base, external != null, externalChanged, externalNewer)) {
+            applyExternalDiff(external!!)
+            diffed = true
+        }
+        // When access is granted we can see the real external state, so internal and external
+        // are reconciled above: it's safe to treat external as writable (and to seed it if
+        // missing). When NOT granted we stay non-authoritative so a later save can't clobber a
         // real external library we simply couldn't read on a fresh install.
-        if (AllFilesAccess.granted(appContext)) {
-            externalAuthoritative = true
-            if (!externalLibraryFile.exists()) writeExternal(gson.toJson(buildState()))
+        if (granted) externalAuthoritative = true
+        if (migrated || diffed || base != IdentityReconcile.Base.INTERNAL || outcome.newDbId || (granted && !extExists)) {
+            save()
         }
     }
 
-    /** Loads from the SD-card library if it's present and at least as new as the internal copy. */
-    private fun readBestState(): Pair<PersistedState, Boolean>? {
-        val extExists = runCatching { externalLibraryFile.exists() }.getOrDefault(false)
-        val useExternal = extExists &&
-            (!storeFile.exists() || externalLibraryFile.lastModified() >= storeFile.lastModified())
-        val file = when {
-            useExternal -> externalLibraryFile
-            storeFile.exists() -> storeFile
-            else -> return null
-        }
-        val state = runCatching { gson.fromJson(file.readText(), PersistedState::class.java) }.getOrNull()
-            ?: return null
-        return state to useExternal
+    /** The rows as one value (migration / diff input). Callers hold the monitor or run in init. */
+    private fun currentRows(): LibraryRows =
+        LibraryRows(presets, learnedColors, learnedLibrary, learnedRaw, loadNewWandNamesPref())
+
+    /**
+     * The external file as user edits (spec §5.2, plan §4.5): its rows are diffed by canonical hex
+     * into ledger edits (its own sync section is ignored); its other state (auto rules, prefs,
+     * lab, starlight serial) is applied as before.
+     */
+    private fun applyExternalDiff(e: PersistedState) {
+        val internalRows = currentRows()
+        @Suppress("USELESS_ELVIS")
+        val externalRows = LibraryRows(
+            e.presets ?: emptyList(), e.learnedColors ?: emptyList(), e.learnedLibrary ?: emptyList(),
+            e.learnedRaw ?: emptyList(), LibraryRows.parseNewWandJson(e.settings?.get("newwand_names")?.value),
+        )
+        val ops = LibraryDiff.diff(internalRows, externalRows) { hex -> librarySync.isSyncable(hex) }
+        applyNonLibraryState(e)
+        librarySync.onDiff(ops)
     }
 
+    @Suppress("USELESS_ELVIS")
     private fun applyState(state: PersistedState) {
-        presets = state.presets
-        learnedColors = state.learnedColors
-        learnedLibrary = state.learnedLibrary
+        presets = state.presets ?: emptyList()
+        learnedColors = state.learnedColors ?: emptyList()
+        learnedLibrary = state.learnedLibrary ?: emptyList()
         learnedRaw = state.learnedRaw ?: emptyList()
         rebuildRawIndex()
-        recordings = state.recordings
-        autoRules = state.autoRules
+        recordings = state.recordings ?: emptyList()
         nextPacketId = state.nextPacketId
-        nextRecordingId = state.nextRecordingId
-        nextRuleId = state.nextRuleId
+        applyNonLibraryState(state)
+    }
+
+    /** Everything but the library rows (also used by the external diff). */
+    @Suppress("USELESS_ELVIS")
+    private fun applyNonLibraryState(state: PersistedState) {
+        autoRules = state.autoRules ?: emptyList()
+        nextPacketId = maxOf(nextPacketId, state.nextPacketId)
+        nextRecordingId = maxOf(nextRecordingId, state.nextRecordingId)
+        nextRuleId = maxOf(nextRuleId, state.nextRuleId)
         // Restore explicit fields first (covers older files without the settings maps),
         // then the full prefs snapshots which override and fill in everything else.
         prefs.edit()
-            .putString("starlight_serial", state.starlightSerial)
-            .putString("lab_hex", state.labHex)
-            .putString("lab_label", state.labLabel)
+            .putString("starlight_serial", state.starlightSerial ?: StarlightSerial.DEFAULT_SERIAL)
+            .putString("lab_hex", state.labHex ?: PacketBuilder.WAKEUP_PING)
+            .putString("lab_label", state.labLabel ?: "")
             .apply()
         state.settings?.let { restorePrefs(PREFS_MAIN, it) }
         state.uiSettings?.let { restorePrefs(PREFS_UI, it) }
@@ -232,13 +418,25 @@ class MagicStore(context: Context) {
     // Recordings are not written to the library file. The CSV session log is their durable
     // record, and a recording made without a GPS fix carries NaN lat/lng, which Gson refuses
     // to serialise — one such row in memory made every library save and export fail.
-    private fun buildState(): PersistedState = PersistedState(
+    private fun buildState(sync: SyncStateJson?): PersistedState = PersistedState(
         presets, learnedColors, learnedLibrary, learnedRaw, emptyList(), autoRules,
         nextPacketId, nextRecordingId, nextRuleId,
         getStarlightSerial(), getLabHex(), getLabLabel(),
         settings = snapshotPrefs(PREFS_MAIN),
         uiSettings = snapshotPrefs(PREFS_UI),
+        sync = sync,
     )
+
+    /** One store write's input, taken under the monitor; [seqAtSnapshot] = nextSyncSeq then. */
+    private class Snapshot(val state: PersistedState, val seqAtSnapshot: Long)
+
+    // The lists are captured by reference: rows are never mutated in place (every writer uses
+    // copy() and replaces the list), so serializing them outside the monitor is safe (§3.5).
+    @Synchronized
+    private fun buildSnapshot(): Snapshot {
+        val seq = librarySync.nextSyncSeq
+        return Snapshot(buildState(librarySync.snapshot()), seq)
+    }
 
     private fun snapshotPrefs(name: String): Map<String, PrefEntry> {
         val p = appContext.getSharedPreferences(name, Context.MODE_PRIVATE)
@@ -300,43 +498,62 @@ class MagicStore(context: Context) {
         }
     }
 
-    @Synchronized
+    /**
+     * One store write (plan §3.5): snapshot under the monitor, then serialize and write the
+     * internal file atomically (and the external copy + sidecar) outside it, then durableHigh,
+     * issuedSeq and onDurable via [LibrarySync.onSaved]. The monitor is never held during I/O.
+     */
     private fun saveNow() {
-        val json = gson.toJson(buildState())
-        storeFile.writeText(json)
-        writeExternal(json)
+        val snap = buildSnapshot()
+        synchronized(writeLock) {
+            val bytes = gson.toJson(snap.state).toByteArray(Charsets.UTF_8)
+            if (!AtomicFiles.write(storeFile, bytes)) {
+                CrashLog.record(IllegalStateException("store write failed"), "MagicStore.saveNow")
+                return
+            }
+            writeExternal(bytes)
+        }
+        librarySync.onSaved(snap.seqAtSnapshot)
     }
 
-    private fun writeExternal(json: String) {
+    /** The same bytes as the internal file, atomically, then the sidecar. Caller holds writeLock. */
+    private fun writeExternal(bytes: ByteArray) {
         if (!AllFilesAccess.granted(appContext)) return
         runCatching {
             // Don't overwrite an existing external library we haven't imported/loaded yet.
             if (!externalAuthoritative && externalLibraryFile.exists()) return@runCatching
-            externalLibraryDir.mkdirs()
-            externalLibraryFile.writeText(json)
-            externalAuthoritative = true
+            if (AtomicFiles.write(externalLibraryFile, bytes)) {
+                externalAuthoritative = true
+                writeSidecar(bytes)
+            }
         }
     }
 
     /** Force-write the current library to the SD-card file. Returns the path, or null if it failed. */
-    @Synchronized
     fun exportLibrary(): String? = runCatching {
-        externalLibraryDir.mkdirs()
-        externalLibraryFile.writeText(gson.toJson(buildState()))
+        val snap = buildSnapshot()
+        synchronized(writeLock) {
+            val bytes = gson.toJson(snap.state).toByteArray(Charsets.UTF_8)
+            if (!AtomicFiles.write(externalLibraryFile, bytes)) return@runCatching null
+            writeSidecar(bytes)
+        }
         externalAuthoritative = true
         externalLibraryFile.absolutePath
     }.getOrNull()
 
-    /** Replace the in-memory + internal library from the SD-card file. Returns true on success. */
-    @Synchronized
+    /**
+     * Merge the SD-card file into the library as user edits (plan §4.5): a diff by canonical hex,
+     * not a replace, so every change becomes a record version. The identity is not reset.
+     */
     fun importLibrary(): Boolean = runCatching {
         if (!externalLibraryFile.exists()) return false
-        val state = gson.fromJson(externalLibraryFile.readText(), PersistedState::class.java)
-            ?: return false
-        applyState(state)
-        externalAuthoritative = true
+        val state = parseState(externalLibraryFile.readBytes()) ?: return false
+        synchronized(this) {
+            applyExternalDiff(state)
+            externalAuthoritative = true
+            mergeBuiltInPresets()
+        }
         save()
-        mergeBuiltInPresets()
         ServiceState.bumpStoreRevision()
         true
     }.getOrElse { false }
@@ -427,13 +644,14 @@ class MagicStore(context: Context) {
         ).apply()
     }
 
+    /** The Lab tag names the matching raw row: a USER edit applied to every row with that hex. */
+    @Synchronized
     fun applyLabLabelToMatchingRaw() {
         val hex = HexUtils.canonicalHex(getLabHex())
         val tag = getLabLabel().trim()
         if (tag.isEmpty()) return
-        val idx = learnedRaw.indexOfFirst { HexUtils.canonicalHex(it.hex) == hex }
-        if (idx < 0) return
-        learnedRaw = learnedRaw.toMutableList().also { it[idx] = it[idx].copy(label = tag) }
+        if (learnedRaw.none { HexUtils.canonicalHex(it.hex) == hex }) return
+        librarySync.onUserEdit(hex, label = tag, category = null, note = null)
         save()
         ServiceState.bumpStoreRevision()
     }
@@ -469,6 +687,8 @@ class MagicStore(context: Context) {
         }
 
         presets = presets.filter { !(it.userRecorded && HexUtils.canonicalHex(it.hex) == canonical) } + packet
+        // USER|PRESET (beats a tombstone); the projection gives every row with the hex this state.
+        librarySync.onSavePreset(packet.hex, displayLabel, userTyped = label.isNotBlank())
         saveLabHex(canonical)
         saveLabLabel(displayLabel)
         save()
@@ -476,46 +696,46 @@ class MagicStore(context: Context) {
         return null
     }
 
+    /** Deleting a user preset tombstones its hex: every learned row with that packet goes too (D-P3-6). */
     @Synchronized
     fun deleteCustomPreset(id: Long) {
         val target = presets.firstOrNull { it.id == id && it.userRecorded } ?: return
-        presets = presets.filter { it.id != target.id }
+        librarySync.onDelete(listOf(target.hex))
         save()
         ServiceState.bumpStoreRevision()
     }
 
+    /** The first row with [id] in the order colors, library, raw, presets. */
+    private fun rowById(id: Long): MagicPacket? =
+        learnedColors.firstOrNull { it.id == id } ?: learnedLibrary.firstOrNull { it.id == id }
+            ?: learnedRaw.firstOrNull { it.id == id } ?: presets.firstOrNull { it.id == id }
+
+    /** Recategorize: a USER edit, applied to every row with that packet's hex. */
     @Synchronized
     fun recategorizePacket(id: Long, category: MagicCategory) {
-        fun updateList(list: List<MagicPacket>): List<MagicPacket> =
-            list.map { if (it.id == id) it.copy(category = category) else it }
-
-        when {
-            learnedColors.any { it.id == id } -> learnedColors = updateList(learnedColors)
-            learnedLibrary.any { it.id == id } -> learnedLibrary = updateList(learnedLibrary)
-            learnedRaw.any { it.id == id } -> learnedRaw = updateList(learnedRaw)
-            presets.any { it.id == id } -> presets = updateList(presets)
-            else -> return
-        }
+        val row = rowById(id) ?: return
+        librarySync.onUserEdit(row.hex, label = null, category = LibraryRows.categoryCode(category), note = null)
         save()
         ServiceState.bumpStoreRevision()
     }
 
-    /** Rename a captured/library packet. Only touches the label field. */
+    /**
+     * Rename: a USER edit applied to every row with that packet's hex. A blank name clears the
+     * user's name (RESET: the generated label comes back, D-P3-7).
+     */
     @Synchronized
     fun renamePacket(id: Long, newLabel: String) {
-        val label = newLabel.trim()
-        if (label.isEmpty()) return
+        val row = rowById(id) ?: return
+        librarySync.onUserEdit(row.hex, label = newLabel, category = null, note = null)
+        save()
+        ServiceState.bumpStoreRevision()
+    }
 
-        fun updateList(list: List<MagicPacket>): List<MagicPacket> =
-            list.map { if (it.id == id) it.copy(label = label) else it }
-
-        when {
-            learnedColors.any { it.id == id } -> learnedColors = updateList(learnedColors)
-            learnedLibrary.any { it.id == id } -> learnedLibrary = updateList(learnedLibrary)
-            learnedRaw.any { it.id == id } -> learnedRaw = updateList(learnedRaw)
-            presets.any { it.id == id } -> presets = updateList(presets)
-            else -> return
-        }
+    /** A row's note (no UI in P3; the iPhone sets notes): USER if user-edited, else RESET + note. */
+    @Synchronized
+    fun setNote(id: Long, note: String) {
+        val row = rowById(id) ?: return
+        librarySync.onNote(row.hex, note)
         save()
         ServiceState.bumpStoreRevision()
     }
@@ -596,6 +816,16 @@ class MagicStore(context: Context) {
         saveLabLabel(label)
     }
 
+    /** A New-Wand code's custom name (blank removes it); returns the new map. P3: also a NEWWAND record. */
+    @Synchronized
+    fun setNewWandName(hex: String, name: String): Map<String, String> {
+        // The NEWWAND record (blank = deleted) and the `newwand_names` pref, with the name
+        // normalized (trimmed, at most 64 UTF-8 bytes) exactly as the record carries it.
+        val current = librarySync.onNewWandName(hex, name)
+        ServiceState.bumpStoreRevision()
+        return current
+    }
+
     @Synchronized
     fun processHeardPacket(
         hex: String,
@@ -671,6 +901,7 @@ class MagicStore(context: Context) {
         for (e in entries) {
             val hex = HexUtils.canonicalHex(e.hex)
             if (hex.isEmpty() || !known.add(hex)) continue
+            if (librarySync.isTombstoned(hex)) continue // deleted means deleted (spec §2.7)
             val category = runCatching { MagicCategory.valueOf(e.category) }.getOrDefault(MagicCategory.UNKNOWN)
             additions.add(
                 MagicPacket(
@@ -688,27 +919,43 @@ class MagicStore(context: Context) {
         }
         if (added > 0) {
             learnedLibrary = (learnedLibrary + additions).sortedBy { it.label.lowercase() }
+            // PRESENCE per added row (they land in the library).
+            if (additions.size == 1) librarySync.onLearned(additions[0].hex) else librarySync.onLearnedAll(additions.map { it.hex })
             save()
             ServiceState.bumpStoreRevision()
         }
     }
 
-    private fun addClassifiedToLibrary(classified: ClassifiedPacket, rawHex: String, rssi: Int): RecordEvent {
+    /**
+     * [fromSync]: the PRESENCE projection of a received record (plan §4.3): no ledger entry (it
+     * exists), no cloud push, no `starlight_serial` pref write, no rssi, no recording.
+     */
+    private fun addClassifiedToLibrary(
+        classified: ClassifiedPacket,
+        rawHex: String,
+        rssi: Int,
+        fromSync: Boolean = false,
+    ): RecordEvent {
         // Pings are background noise — keep them live/in logs, but never in the library.
         if (classified.typeInfo == "ping") {
             return RecordEvent(classified.toPacket(), false, "Ping (not saved)")
         }
-        return addClassifiedToLibraryInner(classified, rawHex, rssi)
+        return addClassifiedToLibraryInner(classified, rawHex, rssi, fromSync)
     }
 
-    private fun addClassifiedToLibraryInner(classified: ClassifiedPacket, rawHex: String, rssi: Int): RecordEvent =
+    private fun addClassifiedToLibraryInner(
+        classified: ClassifiedPacket,
+        rawHex: String,
+        rssi: Int,
+        fromSync: Boolean = false,
+    ): RecordEvent =
         when (classified.category) {
             MagicCategory.COLOR -> if (classified.typeInfo == "starlight") {
-                addStarlightToLibrary(classified, rssi, rawHex)
+                addStarlightToLibrary(classified, rssi, rawHex, fromSync)
             } else {
-                addColorToLibrary(classified, rssi)
+                addColorToLibrary(classified, rssi, fromSync)
             }
-            MagicCategory.SHOW, MagicCategory.ANIMATION -> addShowAnimToLibrary(classified, rssi)
+            MagicCategory.SHOW, MagicCategory.ANIMATION -> addShowAnimToLibrary(classified, rssi, fromSync)
             MagicCategory.UNKNOWN -> hearRawPacket(classified.hex, rssi, classified.label)
         }
 
@@ -725,6 +972,10 @@ class MagicStore(context: Context) {
         }
         if (canonical in rawHexIndex) {
             return RecordEvent(rawPreview(canonical, displayLabel, rssi), false, "Known raw")
+        }
+        // A named raw row the user deleted is tombstoned; it is not re-learned (spec §2.7).
+        if (librarySync.isTombstoned(canonical)) {
+            return RecordEvent(rawPreview(canonical, displayLabel, rssi), false, "Deleted (not re-learned)")
         }
         if (learnedRaw.size >= MAX_RAW_LIBRARY) {
             return RecordEvent(rawPreview(canonical, displayLabel, rssi), false, "Raw library full ($MAX_RAW_LIBRARY)")
@@ -764,6 +1015,18 @@ class MagicStore(context: Context) {
      */
     @Synchronized
     fun importHexesToLibrary(hexes: List<String>): Int {
+        val batch = ArrayList<String>()
+        learnBatch = batch
+        try {
+            return importHexesInner(hexes)
+        } finally {
+            learnBatch = null
+            // Classified rows went through the learn path: one bulk PRESENCE batch (raw: no entry).
+            if (batch.isNotEmpty()) librarySync.onLearnedAll(batch)
+        }
+    }
+
+    private fun importHexesInner(hexes: List<String>): Int {
         val existingRaw = learnedRaw.mapTo(HashSet()) { HexUtils.canonicalHex(it.hex) }
         val newRaw = ArrayList<MagicPacket>()
         var added = 0
@@ -771,6 +1034,7 @@ class MagicStore(context: Context) {
             val canonical = HexUtils.canonicalHex(h)
             if (canonical.isEmpty()) continue
             if (MagicClassifier.isLibraryNoise(canonical)) continue
+            if (librarySync.isTombstoned(canonical)) continue
             val classified = MagicClassifier.classify(canonical)
             if (classified != null && classified.category != MagicCategory.UNKNOWN) {
                 if (addClassifiedToLibrary(classified, canonical, 0).added) added++
@@ -798,27 +1062,34 @@ class MagicStore(context: Context) {
         return added
     }
 
-    private fun addStarlightToLibrary(classified: ClassifiedPacket, rssi: Int, rawHex: String): RecordEvent {
+    private fun addStarlightToLibrary(
+        classified: ClassifiedPacket,
+        rssi: Int,
+        rawHex: String,
+        fromSync: Boolean = false,
+    ): RecordEvent {
         val canonical = HexUtils.canonicalHex(rawHex)
         val colorIdx = MagicClassifier.starlightLearnColorIndex(canonical)
         if (colorIdx == null) {
-            val preview = libraryPacketFrom(classified, rawHex)
+            val preview = libraryPacketFrom(classified, rawHex, fromSync)
             return RecordEvent(preview, false, "Heard ${preview.colors} (unrecognized wand format)")
         }
-        val stored = libraryPacketFrom(classified, rawHex)
+        val stored = libraryPacketFrom(classified, rawHex, fromSync)
         val key = HexUtils.canonicalHex(stored.hex)
         if (learnedColors.any { it.typeInfo == "starlight" && HexUtils.canonicalHex(it.hex) == key }) {
             updateLearnedColor(stored, verified = true)
             return RecordEvent(stored, false, "Verified ${stored.colors}")
         }
+        if (librarySync.isTombstoned(key)) return RecordEvent(stored, false, "Deleted (not re-learned)")
         val packet = stored.copy(id = nextPacketId++)
         learnedColors = learnedColors + packet
+        learnedRow(packet.hex, fromSync)
         save()
         ServiceState.bumpStoreRevision()
         return RecordEvent(packet, true, "Learned ${packet.colors} → Wand")
     }
 
-    private fun addColorToLibrary(classified: ClassifiedPacket, rssi: Int): RecordEvent {
+    private fun addColorToLibrary(classified: ClassifiedPacket, rssi: Int, fromSync: Boolean = false): RecordEvent {
         if (isDuplicateOfPreset(classified)) {
             return RecordEvent(classified.toPacket(), false, "Recorded (built-in color)")
         }
@@ -826,18 +1097,21 @@ class MagicStore(context: Context) {
         learnedColors.firstOrNull { HexUtils.canonicalHex(it.hex) == key }?.let {
             return RecordEvent(it, false, "Verified ${classified.colors}")
         }
+        if (librarySync.isTombstoned(key)) return RecordEvent(classified.toPacket(), false, "Deleted (not re-learned)")
         val packet = classified.toPacket(userRecorded = true).copy(id = nextPacketId++)
         learnedColors = learnedColors + packet
+        learnedRow(packet.hex, fromSync)
         save()
         return RecordEvent(packet, true, "Learned ${packet.colors} → Colors")
     }
 
-    private fun addShowAnimToLibrary(classified: ClassifiedPacket, rssi: Int): RecordEvent {
+    private fun addShowAnimToLibrary(classified: ClassifiedPacket, rssi: Int, fromSync: Boolean = false): RecordEvent {
         // Per-distinct: keep every identified packet whose exact hex we haven't seen,
         // rather than collapsing by function code.
         val key = HexUtils.canonicalHex(classified.hex)
         learnedLibrary.firstOrNull { HexUtils.canonicalHex(it.hex) == key }?.let { existing ->
-            val updated = existing.copy(hex = classified.hex, label = classified.label)
+            // Re-hearing never rewrites hex and never undoes a user's name (spec §5.4).
+            val updated = LibraryRows.relabelOnRehear(existing, classified)
             if (updated != existing) {
                 learnedLibrary = learnedLibrary.map { if (it.id == existing.id) updated else it }
                     .sortedBy { it.label.lowercase() }
@@ -846,8 +1120,10 @@ class MagicStore(context: Context) {
             }
             return RecordEvent(updated, false, "Verified ${classified.label}")
         }
+        if (librarySync.isTombstoned(key)) return RecordEvent(classified.toPacket(), false, "Deleted (not re-learned)")
         val packet = classified.toPacket(userRecorded = true).copy(id = nextPacketId++)
         learnedLibrary = (learnedLibrary + packet).sortedBy { it.label.lowercase() }
+        learnedRow(packet.hex, fromSync)
         save()
         ServiceState.bumpStoreRevision()
         val section = when {
@@ -873,12 +1149,15 @@ class MagicStore(context: Context) {
         return presets.any { MagicClassifier.libraryDedupeKey(it.toClassified()) == key }
     }
 
-    private fun libraryPacketFrom(classified: ClassifiedPacket, rawHex: String): MagicPacket {
+    private fun libraryPacketFrom(classified: ClassifiedPacket, rawHex: String, fromSync: Boolean = false): MagicPacket {
         if (classified.typeInfo == "starlight") {
             val canonical = HexUtils.canonicalHex(rawHex)
-            StarlightSerial.extractSerial(canonical)?.let { heard ->
-                StarlightSerial.normalizeSerial(heard)?.let { valid ->
-                    prefs.edit().putString("starlight_serial", valid).apply()
+            // A record from a peer is not a wand heard here: it never changes this phone's serial.
+            if (!fromSync) {
+                StarlightSerial.extractSerial(canonical)?.let { heard ->
+                    StarlightSerial.normalizeSerial(heard)?.let { valid ->
+                        prefs.edit().putString("starlight_serial", valid).apply()
+                    }
                 }
             }
             return MagicPacket(
@@ -896,15 +1175,13 @@ class MagicStore(context: Context) {
     }
 
     private fun updateLearnedColor(packet: MagicPacket, verified: Boolean) {
-        val idx = learnedColors.indexOfFirst { it.typeInfo == "starlight" && it.simKey == packet.simKey }
+        // Matched by canonical hex (not simKey, which many wand codes share) and never rewrites hex
+        // or a user's name (spec §5.4): the row's key stays stable.
+        val key = HexUtils.canonicalHex(packet.hex)
+        val idx = learnedColors.indexOfFirst { it.typeInfo == "starlight" && HexUtils.canonicalHex(it.hex) == key }
         if (idx >= 0) {
             val existing = learnedColors[idx]
-            val updated = existing.copy(
-                hex = packet.hex,
-                label = packet.label,
-                colors = packet.colors,
-                wandVerified = verified || existing.wandVerified,
-            )
+            val updated = LibraryRows.relabelOnRehear(existing, packet, verified)
             // A wand broadcasts the same packet continuously; without this guard every repeat
             // rewrote the entire library to internal storage AND the SD card.
             if (updated != existing) {
@@ -1024,31 +1301,38 @@ class MagicStore(context: Context) {
         MagicMakerForegroundService.refreshRelayCache(appContext)
     }
 
+    // Deletes tombstone the hex when it is syncable and remove every learned row and user preset
+    // with it (the TOMBSTONE projection, D-P3-6); a learn path then never brings it back.
+
     @Synchronized
     fun deleteLearnedColor(id: Long) {
-        learnedColors = learnedColors.filter { it.id != id }
+        val row = learnedColors.firstOrNull { it.id == id } ?: return
+        librarySync.onDelete(listOf(row.hex))
         save()
         ServiceState.bumpStoreRevision()
     }
 
     @Synchronized
     fun deleteLearnedLibrary(id: Long) {
-        learnedLibrary = learnedLibrary.filter { it.id != id }
+        val row = learnedLibrary.firstOrNull { it.id == id } ?: return
+        librarySync.onDelete(listOf(row.hex))
         save()
         ServiceState.bumpStoreRevision()
     }
 
     @Synchronized
     fun deleteLearnedRaw(id: Long) {
-        learnedRaw = learnedRaw.filter { it.id != id }
-        rebuildRawIndex()
+        val row = learnedRaw.firstOrNull { it.id == id } ?: return
+        librarySync.onDelete(listOf(row.hex))
         save()
         ServiceState.bumpStoreRevision()
     }
 
     @Synchronized
     fun clearLearnedStarlight() {
-        learnedColors = learnedColors.filter { it.typeInfo != "starlight" }
+        val hexes = learnedColors.filter { it.typeInfo == "starlight" }.map { it.hex }
+        if (hexes.isEmpty()) return
+        librarySync.onDelete(hexes, bulk = true)
         save()
         ServiceState.bumpStoreRevision()
     }
@@ -1219,6 +1503,22 @@ class MagicStore(context: Context) {
             )
         }
         file.writeText(sb.toString())
+    }
+
+    // Kept after every property: Kotlin runs initializers in textual order, and load() / save()
+    // use the save executor, the sync state and externalAuthoritative declared above.
+    init {
+        load()
+        if (presets.isEmpty()) {
+            presets = PresetCatalog.asMagicPackets().mapIndexed { index, packet ->
+                packet.copy(id = index + 1L)
+            }
+            nextPacketId = maxOf(nextPacketId, presets.size + 1L)
+            save()
+        } else {
+            mergeBuiltInPresets()
+        }
+        refreshSessions()
     }
 
     companion object {

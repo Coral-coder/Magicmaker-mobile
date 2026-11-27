@@ -6,6 +6,12 @@ object RelayProtocol {
     const val COMMAND_UUID = "A7830003-0000-1000-8000-00805F9B34FB"
     const val STATUS_UUID = "A7830004-0000-1000-8000-00805F9B34FB"
     const val CATALOG_UUID = "A7830005-0000-1000-8000-00805F9B34FB"
+
+    /** SYNC (docs/SYNC_PROTOCOL.md §9): WRITE | WRITE_NO_RESPONSE | NOTIFY, framed SYNC v1 messages. */
+    const val SYNC_UUID = "A7830006-0000-1000-8000-00805F9B34FB"
+
+    /** Client Characteristic Configuration descriptor. */
+    const val CCCD_UUID = "00002902-0000-1000-8000-00805F9B34FB"
     const val HTTP_PORT = 8765
 
     /**
@@ -25,6 +31,15 @@ object RelayProtocol {
 
     /** [RELAY_TAG] as the service-data bytes put in the scan response. */
     fun relayTagBytes(): ByteArray = RELAY_TAG.toByteArray(Charsets.US_ASCII)
+
+    /**
+     * The sync-era tag (SYNC_HUB_SPEC §3.1): [RELAY_TAG] + the first two bytes of the sync group id
+     * (`00 00` while ungrouped), 8 bytes. iOS matches the tag by prefix, so older builds still find it.
+     */
+    fun relayTagBytes(groupId: ByteArray?): ByteArray {
+        val g = if (groupId != null && groupId.size >= 2 && groupId.any { it.toInt() != 0 }) groupId.copyOf(2) else ByteArray(2)
+        return relayTagBytes() + g
+    }
 
     /** Same wire format as ESP32: `{hex}|{durationMs}` */
     fun parseTransmitPayload(text: String): Pair<String, Int>? {

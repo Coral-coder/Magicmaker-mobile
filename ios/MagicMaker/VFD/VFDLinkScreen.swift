@@ -377,7 +377,8 @@ extension VFDLinkScreen {
         }
     }
 
-    /// IPHONE, HINT, STATUS, EVENT, LIB SYNC, LIB, ANDROID, STORE, GATT (or ESP32, RADIO, BATTERY).
+    /// IPHONE, HINT, STATUS, EVENT, LIB SYNC, LIB, ANDROID, STORE, GATT (or ESP32, RADIO, BATTERY,
+    /// LINK).
     private static func statusRows(_ ctx: VFDContext, _ fb: VFDFrameBuffer, _ c: Int, _ top: Int, _ w: Int) -> Int {
         let vm: AppViewModel = ctx.vm
         let txStatus: String = ctx.tx.status
@@ -410,12 +411,17 @@ extension VFDLinkScreen {
                 y = infoRow(fb, c, y, w, "GATT", "LINKED")
             }
         }
-        // The ESP32 (firmware 1.2+): the board, what it runs by itself, and its battery (Heltec V3).
+        // The ESP32 (firmware 1.2+): the board, what it runs by itself, its battery (Heltec V3; ALARM
+        // with LOW while the board warns of a low battery) and, from 1.5, its link with this iPhone.
         if vm.relayBackend == .esp32, let s = vm.androidRemote, s.proto != nil {
             y = infoRow(fb, c, y, w, "ESP32", s.esp32DeviceText)
             y = infoRow(fb, c, y, w, "RADIO", s.esp32ProgramText)
             if let battery = s.esp32BatteryText {
-                y = infoRow(fb, c, y, w, "BATTERY", battery)
+                let low: Bool = s.batteryLow && !s.charging
+                y = infoRow(fb, c, y, w, "BATTERY", battery, color: low ? VFDInk.alarm : VFDInk.text)
+            }
+            if let link = s.esp32LinkText {
+                y = infoRow(fb, c, y, w, "LINK", link)
             }
         }
         return y

@@ -112,6 +112,9 @@ struct WatchEsp32Status: Codable, Equatable {
     var board: String?
     var uptimeS: Int?
     var outdated: Bool
+    /// The board warns of a low battery (firmware 1.5+ `batLow`). Optional so that a peer from
+    /// before it decodes this status (nil = not reported) and an older watch simply ignores it.
+    var batteryLow: Bool?
 }
 
 /// The Android phone as the iPhone knows it (relay backend and scanner).

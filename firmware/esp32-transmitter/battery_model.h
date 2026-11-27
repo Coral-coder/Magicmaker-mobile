@@ -10,23 +10,27 @@
 // the % slope of the readings, smoothed, kept within BAT_EST_MIN/MAX_FACTOR of the model (the
 // flat middle of a LiPo's curve makes single slopes noisy).
 //
-//   runtime = charge left (capacity x %) / estimated draw
+//   runtime = charge above the cutoff (capacity x (% - the cutoff's %)) / estimated draw
+//
+// LowCutoff (bottom of this file) decides the low-battery warning and the automatic power-off
+// from the same readings (power.h acts on it).
 #pragma once
 
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
 
-// ---- Estimated draw per state (mA): SEEDS, tune them with a USB power meter --------------
-// How: power the board from a USB meter with the battery unplugged, screen dark, no phone
-// linked, nothing transmitting; DRAW_BASE_MA + DRAW_ADV_MA is that reading. Then link a phone
-// (DRAW_LINK_MA), start keep-awake (DRAW_BEACON_MA) and light the screen (DRAW_SCREEN_MA), one
-// at a time, and note what each adds. Only the first ~20-60 minutes of a charge use these
-// numbers alone; the measured drain corrects them after that.
-static const float DRAW_BASE_MA   = 37.5f;  // ESP32-S3 at 80 MHz + BLE controller (no modem sleep in this core), LoRa asleep, screen off
+// ---- Estimated draw per state (mA): SEEDS, measure them IN THE BATTERY LEAD ---------------
+// How: a current meter in series with the battery (USB unplugged: a USB meter on a PC port also
+// counts ~20 mA of the enumerated CP2102), screen dark, no phone linked, nothing transmitting;
+// DRAW_BASE_MA + DRAW_ADV_MA is that reading. Then link a phone (DRAW_LINK_MA), start keep-awake
+// (DRAW_BEACON_MA) and light the screen (DRAW_SCREEN_MA), one at a time, and note what each adds.
+// Only the first ~20-60 minutes of a charge use these numbers alone; the measured drain corrects
+// them after that.
+static const float DRAW_BASE_MA   = 37.5f;  // ESP32-S3 at 80 MHz + BLE controller; modem sleep only in builds with the link wrap (btsleep.h); LoRa asleep, screen off
 static const float DRAW_ADV_MA    = 0.5f;   // + connectable advertising while no phone is linked
 static const float DRAW_LINK_MA   = 1.0f;   // + a phone linked (connection events every 30-50 ms)
-static const float DRAW_BEACON_MA = 8.0f;   // + a beacon on air (20-30 ms advertising: sends, keep-awake, loops)
+static const float DRAW_BEACON_MA = 10.0f;  // + a beacon on air (20-30 ms advertising: sends, keep-awake, loops)
 static const float DRAW_SCREEN_MA = 8.0f;   // + the OLED lit
 
 // ---- Model constants -----------------------------------------------------------------------
@@ -45,6 +49,22 @@ static const float    BAT_MEAS_MIN_DROP_PCT  = 2.0f;    // ... and at least this
 static const float    BAT_SLOPE_SMOOTH       = 0.3f;    // successive measured slopes, smoothed
 static const float    BAT_EST_MIN_FACTOR     = 0.5f;    // measured drain kept within these factors of the model
 static const float    BAT_EST_MAX_FACTOR     = 2.5f;
+
+// ---- Low-battery cutoff (LowCutoff) ----------------------------------------------------------
+static const int32_t  CUT_PRESETS_MV[]       = {3200, 3300, 3400};  // the levels besides OFF (0)
+static const uint8_t  CUT_PRESET_COUNT       = sizeof(CUT_PRESETS_MV) / sizeof(CUT_PRESETS_MV[0]);
+static const int32_t  CUT_DEFAULT_MV         = 3300;    // a board with no saved choice (also after 1.4.x)
+static const int32_t  LOW_WARN_BASE_MV       = 3300;    // warning base while the cutoff is OFF
+static const int32_t  LOW_WARN_MARGIN_MV     = 100;     // warning below cutoff + this
+static const int32_t  LOW_WARN_HYST_MV       = 50;      // ... and off again from warning + this
+static const uint8_t  CUT_READINGS           = 3;       // consecutive clean readings below the cutoff
+static const int32_t  CUT_RESET_MARGIN_MV    = 50;      // the count restarts from cutoff + this
+static const int32_t  CUT_COLLAPSE_MV        = 3100;    // fast path: two readings below this ...
+static const uint32_t CUT_COLLAPSE_GAP_S     = 5;       // ... at least this far apart
+static const int32_t  CUT_UNSTABLE_MV        = 300;     // sample spread / jump between readings: not counted
+static const int32_t  CUT_STEP_RISE_MV       = 50;      // a rise this big (charger plugged in) ...
+static const uint32_t CUT_STEP_HOLDOFF_S     = 600;     // ... stops the counting this long
+static const int32_t  BOOT_MARGIN_MV         = 100;     // boot refused below cutoff + this
 
 // Rough state of charge of a single LiPo cell from its resting voltage (10 % steps, linear between).
 static inline float batteryPercentFromMv(float mv) {
@@ -88,6 +108,8 @@ struct BatteryModel {
   uint32_t drawLastMs;
   float    drawInstMa;    // the state since drawLastMs
   float    drawAvgMa;
+  // runtime floor
+  float    floorPct;      // the cutoff's % (0 when the cutoff is off): the runtime ends there
 
   void begin(uint16_t capacityMah) {
     memset((void*)this, 0, sizeof(*this));
@@ -218,6 +240,10 @@ struct BatteryModel {
     }
   }
 
+  // The % at which the board turns itself off (the low-battery cutoff), 0 when it never does.
+  // The runtime counts down to it; % and charge left stay the cell's own.
+  void setFloorPct(float p) { floorPct = p < 0.0f ? 0.0f : (p > 100.0f ? 100.0f : p); }
+
   // ---- Results ---------------------------------------------------------------------------
   int percent() const { return have ? (int)(pct + 0.5f) : -1; }
   int32_t leftMah() const { return have ? (int32_t)((float)capMah * pct / 100.0f + 0.5f) : -1; }
@@ -233,10 +259,143 @@ struct BatteryModel {
     return meas;
   }
 
-  // Minutes left on the battery; -1 without a reading, while charging or on USB power.
+  // Minutes until the cutoff (or empty, with the cutoff off); -1 without a reading, while
+  // charging or on USB power.
   int32_t runtimeMin() const {
     if (!have || charging || usb) return -1;
-    const float left = (float)capMah * pct / 100.0f;
+    float usable = pct - floorPct;
+    if (usable < 0.0f) usable = 0.0f;
+    const float left = (float)capMah * usable / 100.0f;
     return (int32_t)(left / estimateMa() * 60.0f + 0.5f);
+  }
+};
+
+// Low-battery warning and automatic power-off, from the battery readings (power.h calls
+// onReading() for each one; it turns the board off when that returns true).
+//
+//   warning  the filtered voltage below warnMv() (cutoff + 0.10 V, or 3.40 V with the cutoff off);
+//            off again from warnMv() + 50 mV; never while charging or on USB power.
+//   cutoff   CUT_READINGS consecutive clean readings below the cutoff with the filtered value below
+//            it too; or, fast, two clean readings below CUT_COLLAPSE_MV at least CUT_COLLAPSE_GAP_S
+//            apart. The count restarts once a reading is back at cutoff + CUT_RESET_MARGIN_MV
+//            (between the two it is kept).
+//   not counted (both counts restart): cutoff off; an unstable reading (sample spread or a jump
+//            from the previous reading over CUT_UNSTABLE_MV); USB power (filtered > 4.25 V, the
+//            model's charging trend, or the USB hint); and for CUT_STEP_HOLDOFF_S after a rise of
+//            CUT_STEP_RISE_MV or more between two readings (a charger plugged in).
+struct LowCutoff {
+  int32_t  cutMv;         // 0 = off
+  bool     low;           // warning stage
+  uint8_t  below;         // consecutive clean readings below the cutoff
+  uint8_t  collapse;      // clean readings below CUT_COLLAPSE_MV
+  uint32_t collapseT;     // uptime (s) of the first one
+  bool     haveLast;      // lastMv is the previous clean reading
+  int32_t  lastMv;
+  bool     holdOff;       // counting stopped until holdOffUntil (s) after a step rise
+  uint32_t holdOffUntil;
+
+  void begin(int32_t mv) {
+    memset((void*)this, 0, sizeof(*this));
+    cutMv = isSetting(mv) ? mv : CUT_DEFAULT_MV;
+  }
+
+  // A new level (0 = off): the counts restart.
+  void setCut(int32_t mv) {
+    cutMv = isSetting(mv) ? mv : CUT_DEFAULT_MV;
+    below = 0;
+    collapse = 0;
+  }
+
+  int32_t warnMv() const { return (cutMv ? cutMv : LOW_WARN_BASE_MV) + LOW_WARN_MARGIN_MV; }
+
+  // In the warning zone with the cutoff on: power.h reads more often there.
+  bool near(float filtMv) const { return cutMv != 0 && filtMv < (float)warnMv(); }
+
+  // No plausible reading (no battery, unplugged): nothing to warn about or count.
+  void noReading() {
+    low = false;
+    below = 0;
+    collapse = 0;
+    haveLast = false;
+  }
+
+  // One reading: `cleanMv` the p75 of its samples, `unstable` their spread over CUT_UNSTABLE_MV,
+  // `m` the model after it took this reading, `usbHint` the board's USB-power hint. True = power
+  // off now. Updates `low`.
+  bool onReading(uint32_t tS, int32_t cleanMv, bool unstable, const BatteryModel& m, bool usbHint) {
+    const float f = m.filtMv;
+    const bool onUsb = usbHint || m.charging || m.usb || f > BAT_USB_MV;
+    const int32_t w = warnMv();
+    if (onUsb) low = false;
+    else if (!low && f < (float)w) low = true;
+    else if (low && f >= (float)(w + LOW_WARN_HYST_MV)) low = false;
+
+    const bool had = haveLast;
+    const int32_t step = had ? cleanMv - lastMv : 0;
+    haveLast = true;
+    lastMv = cleanMv;
+    if (had && step >= CUT_STEP_RISE_MV) {
+      holdOff = true;
+      holdOffUntil = tS + CUT_STEP_HOLDOFF_S;
+    }
+    if (holdOff && (int32_t)(tS - holdOffUntil) >= 0) holdOff = false;
+    const bool jump = had && (step > CUT_UNSTABLE_MV || -step > CUT_UNSTABLE_MV);
+    if (cutMv == 0 || unstable || jump || onUsb || holdOff) {
+      below = 0;
+      collapse = 0;
+      return false;
+    }
+
+    if (cleanMv < CUT_COLLAPSE_MV) {
+      if (collapse == 0) {
+        collapse = 1;
+        collapseT = tS;
+      } else if (tS - collapseT >= CUT_COLLAPSE_GAP_S) {
+        return true;
+      }
+    } else {
+      collapse = 0;
+    }
+
+    if (cleanMv < cutMv && f < (float)cutMv) {
+      if (below < 255) below++;
+      if (below >= CUT_READINGS) return true;
+    } else if (cleanMv >= cutMv + CUT_RESET_MARGIN_MV) {
+      below = 0;
+    }
+    return false;
+  }
+
+  // Boot check (power.h): refuse to start below cutoff + BOOT_MARGIN_MV, unless off or on USB.
+  static bool bootRefuse(int32_t cut, int32_t mv, bool usbHint) {
+    return cut != 0 && !usbHint && mv < cut + BOOT_MARGIN_MV;
+  }
+
+  // A stored or picked level: 0 or one of CUT_PRESETS_MV.
+  static bool isSetting(int32_t mv) {
+    if (mv == 0) return true;
+    for (uint8_t i = 0; i < CUT_PRESET_COUNT; i++) {
+      if (CUT_PRESETS_MV[i] == mv) return true;
+    }
+    return false;
+  }
+
+  // The app's value: 0 = off; 3000..3600 to the nearest level (< 3250 -> 3200, < 3350 -> 3300,
+  // else 3400); -1 for anything else. (relay_proto.h relayCutoffSnap() is the same rule.)
+  static int32_t snap(int32_t mv) {
+    if (mv == 0) return 0;
+    if (mv < 3000 || mv > 3600) return -1;
+    if (mv < 3250) return 3200;
+    if (mv < 3350) return 3300;
+    return 3400;
+  }
+
+  // The next level when PRG is held on the LOW BATTERY page: 3200 -> 3300 -> 3400 -> OFF -> 3200.
+  static int32_t next(int32_t mv) {
+    if (mv == 0) return CUT_PRESETS_MV[0];
+    for (uint8_t i = 0; i < CUT_PRESET_COUNT; i++) {
+      if (CUT_PRESETS_MV[i] > mv) return CUT_PRESETS_MV[i];
+    }
+    return 0;
   }
 };

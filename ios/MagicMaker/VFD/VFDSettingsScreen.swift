@@ -7,7 +7,9 @@ import SwiftUI
 /// the standard screen's preference key: relay note, TX MODE switch, BROADCAST STRENGTH, the WAKE
 /// SLICE / COMMAND BURST / STARLIGHT WAND sliders), SCAN FILTER, BACKGROUND, APPLE WATCH (the watch
 /// favourites, Watch/VFDWatchSection.swift), BOARD FIRMWARE (the
-/// ESP32's firmware and its Bluetooth update, FirmwareUpdater) and ABOUT.
+/// ESP32's firmware and its Bluetooth update, FirmwareUpdater), BOARD POWER (while the ESP32 is the
+/// backend: its battery, the LOW CUTOFF chips and POWER OFF, AppViewModel.esp32PowerSummary) and
+/// ABOUT.
 @MainActor
 enum VFDSettingsScreen: VFDScreen {
     static let title: String = "SETTINGS"
@@ -32,6 +34,7 @@ enum VFDSettingsScreen: VFDScreen {
         y = background(ctx, c, y, w)
         y = VFDWatchSection.draw(ctx, c, y, w)
         y = firmware(ctx, c, y, w)
+        y = boardPower(ctx, c, y, w)
         y = about(ctx, c, y, w)
         return y
     }
@@ -290,6 +293,50 @@ extension VFDSettingsScreen {
         ctx.confirm(title: "Install firmware?", message: message, confirmLabel: "INSTALL", action: {
             ctx.vm.firmware.startUpdate()
         })
+    }
+
+    /// BOARD POWER (SettingsBoardPowerSection), only while the ESP32 is the backend: BATTERY (ALARM
+    /// while the board warns of a low battery), LOW CUTOFF [OFF] [3.20V] [3.30V] [3.40V] with its
+    /// caption (only when the board reports its cutoff; dim and ignoring taps while not linked), the
+    /// state note (highlight when the board was powered off from here) and [POWER OFF] (alarm,
+    /// asks first; linked, firmware 1.5+).
+    fileprivate static func boardPower(_ ctx: VFDContext, _ c: Int, _ top: Int, _ w: Int) -> Int {
+        if ctx.vm.relayBackend != .esp32 {
+            return top
+        }
+        let fb: VFDFrameBuffer = ctx.fb
+        let L: VFDLayout = ctx.L
+        let p: Esp32PowerSummary = ctx.vm.esp32PowerSummary
+        var y: Int = VFDW.section(fb, L, c, top, w, "BOARD POWER")
+        if let battery = p.batteryText {
+            y = VFDW.kv(fb, L, c, y, w, "BATTERY", VFDW.upper(battery),
+                        color: p.batteryLow ? VFDInk.alarm : VFDInk.highlight)
+        }
+        if let mv = p.cutoffMv {
+            let labels: [String] = Esp32PowerCopy.cutoffLabels
+            y = VFDW.options(fb, L, c, y, w, labels, selected: Esp32PowerCopy.cutoffIndex(mv), label: "LOW CUTOFF",
+                             enabled: p.cutoffEnabled, columns: labels.count,
+                             onSelect: { (index: Int) -> Void in
+                                 let options: [Int] = Esp32PowerCopy.cutoffOptionsMv
+                                 if index >= 0 && index < options.count {
+                                     ctx.vm.setEsp32LowCutoff(options[index])
+                                 }
+                             })
+            y = hint(fb, c, y, w, Esp32PowerCopy.cutoffCaption)
+        }
+        if !p.note.isEmpty {
+            y = VFDW.textBlock(fb, L, c, y + 1, w, p.note, color: p.noteIsWarning ? VFDInk.highlight : VFDInk.dim)
+        }
+        if !p.canPowerOff {
+            return y
+        }
+        return VFDW.button(fb, L, c, y + 4, nil, Esp32PowerCopy.powerOffLabel, name: "button:POWER OFF", alarm: true,
+                           action: {
+                               ctx.confirm(title: Esp32PowerCopy.powerOffTitle, message: Esp32PowerCopy.powerOffMessage,
+                                           confirmLabel: Esp32PowerCopy.powerOffLabel, destructive: true, action: {
+                                               ctx.vm.powerOffEsp32()
+                                           })
+                           })
     }
 
     /// ABOUT: MAGICMAKER v<version> (<build>).

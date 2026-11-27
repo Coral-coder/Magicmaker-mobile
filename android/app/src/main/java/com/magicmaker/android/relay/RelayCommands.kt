@@ -44,7 +44,16 @@ object RelayCommands {
         val setShowControlOnly: (Boolean) -> Unit = { },
         /** Replay step: the packet alone for exactly durationMs, with no wake and no stored timing. */
         val rawBurst: (hex: String, durationMs: Int) -> Unit = { _, _ -> },
+        /** Loops by hex (HELLO caps bit5): the library row with that hex, else the hex as given. */
+        val setTxLoopHex: ((enabled: Boolean, hex: String, label: String?, intervalMs: Long?) -> Unit)? = null,
+        val setStarlightLoopHex: ((enabled: Boolean, hex: String, label: String?, intervalMs: Long?) -> Unit)? = null,
     )
+
+    /** SYNC v1 caps this relay serves (docs/SYNC_PROTOCOL.md §11.1): feed, events, transmitter, programs, loops by hex. */
+    const val CAPS: Int = 0x003B
+
+    private fun loopHex(body: JSONObject): String? =
+        body.optString("hex", "").trim().takeIf { it.isNotEmpty() && !body.has("packetId") }?.let { HexUtils.canonicalHex(it) }
 
     fun execute(body: JSONObject, handlers: Handlers): JSONObject {
         return try {
@@ -89,14 +98,20 @@ object RelayCommands {
                     val enabled = body.optBoolean("enabled", false)
                     val packetId = if (body.has("packetId")) body.getLong("packetId") else null
                     val intervalMs = if (body.has("intervalMs")) body.getLong("intervalMs") else null
-                    handlers.setStarlightLoop(enabled, packetId, intervalMs)
+                    val hex = loopHex(body)
+                    val byHex = handlers.setStarlightLoopHex
+                    if (hex != null && byHex != null) byHex(enabled, hex, body.optString("label", "").ifBlank { null }, intervalMs)
+                    else handlers.setStarlightLoop(enabled, packetId, intervalMs)
                     ok().put("enabled", enabled)
                 }
                 "set_tx_loop", "tx_loop", "repeat_tx" -> {
                     val enabled = body.optBoolean("enabled", false)
                     val packetId = if (body.has("packetId")) body.getLong("packetId") else null
                     val intervalMs = if (body.has("intervalMs")) body.getLong("intervalMs") else null
-                    handlers.setTxLoop(enabled, packetId, intervalMs)
+                    val hex = loopHex(body)
+                    val byHex = handlers.setTxLoopHex
+                    if (hex != null && byHex != null) byHex(enabled, hex, body.optString("label", "").ifBlank { null }, intervalMs)
+                    else handlers.setTxLoop(enabled, packetId, intervalMs)
                     ok().put("enabled", enabled)
                 }
                 "set_wakeup_preamble", "preamble" -> {
@@ -180,7 +195,7 @@ object RelayCommands {
                     val index = body.optInt("index", 0)
                     CatalogSync.buildChunk(handlers.catalogJson(), section, index)
                 }
-                "status" -> handlers.statusJson().put("ok", true)
+                "status" -> handlers.statusJson().put("ok", true).put("caps", CAPS)
                 "live" -> if (body.has("index")) {
                     buildLivePage(handlers.liveJson(), body.optInt("index", 0))
                 } else {
