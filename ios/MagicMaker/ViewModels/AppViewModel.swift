@@ -61,6 +61,8 @@ final class AppViewModel: ObservableObject {
                 self?.esp32SettingsPushed = false
                 // A board that was powered off from here has been turned on again (RST).
                 self?.esp32PoweredOff = false
+                // RADIO SLEEP is read again from this link's STATUS (a restart for it is over).
+                self?.resetEsp32RadioSleep()
                 self?.refreshAndroidCatalog()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self?.refreshAndroidRemote()
@@ -98,6 +100,19 @@ final class AppViewModel: ObservableObject {
     private var pendingEsp32Commands: [(action: String, params: [String: Any])] = []
     /// The ESP32 took POWER OFF from this iPhone (SETTINGS → BOARD POWER); cleared on the next link.
     @Published private(set) var esp32PoweredOff = false
+    /// RADIO SLEEP as this link last reported it (noteEsp32RadioSleep): 1 = on, 0 = turned off from
+    /// an app, 2 = turned off by the board; nil until a STATUS has said. Kept through a STATUS that
+    /// left its diagnostics out; cleared on the next link, like esp32PoweredOff.
+    @Published private(set) var esp32RadioSleep: Int?
+    /// Modem sleep runs on the board now (`btSleep`, as last seen with the setting). It changes
+    /// only when the board boots, so it says whether a RADIO SLEEP change restarts the board.
+    private var esp32RadioSleepActive = false
+    /// The board answered set_radio_sleep with "unsupported" on this link: RADIO SLEEP stays hidden.
+    private var esp32RadioSleepUnsupported = false
+    /// The board took a RADIO SLEEP change and restarts to apply it. Until it links again (or 15 s
+    /// pass) the link loss is not read as the board being off or its battery low.
+    @Published private(set) var esp32RadioSleepRestarting = false
+    private var esp32RadioSleepRestartTimeout: DispatchWorkItem?
 
     /// Opt-in "Keep running in background" (SETTINGS). Device-only: capitalised key, kept out of library exports.
     private static let keepRunningInBackgroundKey = "MMKeepRunningInBackground"
@@ -471,6 +486,8 @@ final class AppViewModel: ObservableObject {
             // Before the link check: a connect to the locked board stays pending while it is off.
             if esp32PoweredOff { return "The ESP32 is off — press RST on the board, then tap Retry BLE." }
             if ble.bleCentral.relayGatt.isLinkInProgress { return "Finishing ESP32 link…" }
+            // Restarting to apply RADIO SLEEP: it is not off, and links again by itself.
+            if esp32RadioSleepRestarting { return "The ESP32 is restarting — linking again…" }
             return "Power on the ESP32 — tap Retry BLE."
         case .androidBle:
             if relayCommandReady { return "" }
@@ -588,6 +605,7 @@ final class AppViewModel: ObservableObject {
             esp32FirmwareOutdated = false
             esp32StatusMisses = 0
             esp32PoweredOff = false
+            resetEsp32RadioSleep()
             if keepAwakeActive { keepAwakeActive = false }
             // A link to the other relay would keep taking every send and command: drop it so
             // discovery starts over for the selected backend.
@@ -752,6 +770,7 @@ final class AppViewModel: ObservableObject {
         if let status {
             esp32StatusMisses = 0
             if esp32FirmwareOutdated { esp32FirmwareOutdated = false }
+            noteEsp32RadioSleep(status)
             reconcileEsp32(status)
             return
         }
@@ -903,11 +922,26 @@ final class AppViewModel: ObservableObject {
         // disconnects (it answers every command with "powering off" by then), so no second POWER
         // OFF and no cutoff taps.
         out.cutoffEnabled = linked && !esp32PoweredOff
+        // RADIO SLEEP (Heltec V3 builds with modem sleep): as last seen on this link, so a STATUS
+        // without its diagnostics keeps the row. While the board restarts for a change made here,
+        // the new choice stays up (dimmed) with the restart note until the board links again.
+        let reported: Bool = (shown?.proto ?? 0) >= Esp32PowerCopy.minProto
+        if let setting = esp32RadioSleep, reported || esp32RadioSleepRestarting {
+            out.radioSleep = setting
+            out.radioSleepEnabled = linked && !esp32PoweredOff && !firmware.isBusy && !esp32RadioSleepRestarting
+            if esp32RadioSleepRestarting {
+                out.radioSleepNote = Esp32PowerCopy.radioSleepRestartingNote
+            } else {
+                out.radioSleepNote = Esp32PowerCopy.radioSleepNote(setting, active: esp32RadioSleepActive)
+                out.radioSleepNoteIsWarning = setting == Esp32PowerCopy.radioSleepOffByBoard
+            }
+        }
         guard linked, !esp32PoweredOff else {
             if esp32PoweredOff {
                 out.note = Esp32PowerCopy.poweredOffNote
                 out.noteIsWarning = true
-            } else {
+            } else if !esp32RadioSleepRestarting {
+                // Restarting for RADIO SLEEP: the row's own note says so.
                 out.note = Esp32PowerCopy.notLinkedNote
             }
             return out
@@ -968,6 +1002,122 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// RADIO SLEEP (asked to confirm first): the Heltec V3's Bluetooth modem sleep on or off
+    /// (`set_radio_sleep`). The board keeps it in its own flash and applies it only at boot, so it
+    /// restarts about a second after taking a change its radio is not running yet (a running
+    /// program stops); the link drops and comes back by itself. As for the cutoff, nothing is
+    /// pushed on link and a change made while it is not linked is not kept for later.
+    func setEsp32RadioSleep(_ enabled: Bool) {
+        guard esp32Linked else {
+            statusMessage = "ESP32 not linked — link it to change its radio sleep"
+            return
+        }
+        // The relay link takes no commands while a firmware update runs (BOARD FIRMWARE).
+        guard !firmware.isBusy else {
+            statusMessage = "ESP32 is receiving a firmware update — change its radio sleep when it is done"
+            return
+        }
+        guard !esp32PoweredOff else {
+            statusMessage = "ESP32 is powering off"
+            return
+        }
+        guard !esp32RadioSleepRestarting else {
+            statusMessage = "ESP32 is restarting — change its radio sleep once it has linked again"
+            return
+        }
+        let body: [String: Any] = ["action": "set_radio_sleep", "enabled": enabled]
+        ble.bleCentral.relayGatt.sendRemoteCommandJson(body, coalesceKind: "set_radio_sleep") { [weak self] json in
+            Task { @MainActor in
+                guard let self else { return }
+                guard let json else {
+                    self.statusMessage = "ESP32 radio sleep not sent — try again"
+                    return
+                }
+                let ok: Bool = json["ok"] as? Bool == true
+                // The reply is the chip's whole status from before the change (it applies at boot);
+                // it still says whether modem sleep runs now, which decides the restart below.
+                if json["running"] != nil {
+                    let status = AndroidRemoteStatus.parse(json)
+                    self.androidRemote = status
+                    self.esp32StatusRead(status)
+                }
+                if ok {
+                    self.esp32RadioSleepAccepted(enabled)
+                } else {
+                    let error: String = json["error"] as? String ?? "no reply"
+                    switch error {
+                    case "busy":
+                        self.statusMessage = "ESP32 is receiving a firmware update — change its radio sleep when it is done"
+                    case "unsupported", "unknown action":
+                        // No such setting on this board (or firmware from before it): the row goes.
+                        self.esp32RadioSleepUnsupported = true
+                        self.esp32RadioSleep = nil
+                        self.statusMessage = "ESP32 has no radio sleep setting"
+                    default:
+                        self.statusMessage = "ESP32 radio sleep failed: " + error
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.refreshAndroidRemote()
+                }
+            }
+        }
+    }
+
+    /// An accepted RADIO SLEEP change is shown at once. When the radio has to change, the board
+    /// restarts to apply it: until it links again, or 15 s pass, the row stays on the new choice
+    /// (dimmed) with the restart note, and the link loss is not read as the board being off.
+    private func esp32RadioSleepAccepted(_ enabled: Bool) {
+        esp32RadioSleep = enabled ? Esp32PowerCopy.radioSleepOn : 0
+        let state: String = enabled ? "ON" : "OFF"
+        guard enabled != esp32RadioSleepActive else {
+            // The newest choice wins: an earlier one coalesced into this command expected a restart.
+            endEsp32RadioSleepRestart()
+            statusMessage = "ESP32 radio sleep " + state
+            return
+        }
+        statusMessage = "ESP32 radio sleep " + state + " — the board restarts to apply it"
+        esp32RadioSleepRestarting = true
+        esp32RadioSleepRestartTimeout?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in
+            self?.endEsp32RadioSleepRestart()
+        }
+        esp32RadioSleepRestartTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + Esp32PowerCopy.radioSleepRestartSeconds, execute: timeout)
+    }
+
+    /// RADIO SLEEP from one STATUS: `radioSleep` (0 / 2) while the setting is off, else on while
+    /// `btSleep` shows modem sleep running. Both are diagnostics a full STATUS leaves out, so one
+    /// with neither keeps what this link showed last. While the board restarts for a change made
+    /// here, that change stands (a STATUS from before it may still be on its way).
+    private func noteEsp32RadioSleep(_ s: AndroidRemoteStatus) {
+        if esp32RadioSleepUnsupported || esp32RadioSleepRestarting { return }
+        let setting: Int
+        if let off = s.radioSleep {
+            setting = off
+        } else if s.btModemSleep {
+            setting = Esp32PowerCopy.radioSleepOn
+        } else {
+            return
+        }
+        esp32RadioSleepActive = s.btModemSleep
+        if esp32RadioSleep != setting { esp32RadioSleep = setting }
+    }
+
+    /// A new link, or another backend: RADIO SLEEP is read again, and a restart for it is over.
+    private func resetEsp32RadioSleep() {
+        if esp32RadioSleep != nil { esp32RadioSleep = nil }
+        esp32RadioSleepActive = false
+        esp32RadioSleepUnsupported = false
+        endEsp32RadioSleepRestart()
+    }
+
+    private func endEsp32RadioSleepRestart() {
+        esp32RadioSleepRestartTimeout?.cancel()
+        esp32RadioSleepRestartTimeout = nil
+        if esp32RadioSleepRestarting { esp32RadioSleepRestarting = false }
+    }
+
     /// POWER OFF (asked to confirm first): the board answers, then disconnects and goes into deep
     /// sleep; only RST (EN on a DevKit) turns it on again. Firmware 1.5+, both boards.
     func powerOffEsp32() {
@@ -1010,10 +1160,10 @@ final class AppViewModel: ObservableObject {
 
     /// The ESP32's link went down. With a low battery in its last status the board has most likely
     /// turned itself off at its cutoff (one told to power off from here, or restarting after a
-    /// firmware update, is not reported as that).
+    /// firmware update or for RADIO SLEEP, is not reported as that).
     private func noteEsp32LinkLost() {
-        guard relayBackend == .esp32, !esp32PoweredOff, !firmware.isBusy, let last = androidRemote,
-              last.batteryLow, !last.charging else { return }
+        guard relayBackend == .esp32, !esp32PoweredOff, !firmware.isBusy, !esp32RadioSleepRestarting,
+              let last = androidRemote, last.batteryLow, !last.charging else { return }
         statusMessage = "ESP32 off: battery low — charge it, then press RST"
     }
 
@@ -1531,6 +1681,17 @@ struct Esp32PowerSummary: Equatable {
     var cutoffMv: Int? = nil
     /// The chips take taps (the board is linked); otherwise they are drawn dimmed.
     var cutoffEnabled: Bool = false
+    /// RADIO SLEEP, the Heltec V3's Bluetooth modem sleep (firmware 1.5+ builds with it): 1 = on,
+    /// 0 = turned off from an app, 2 = turned off by the board; nil hides the row (no such setting,
+    /// none reported on this link yet, or the board is not linked).
+    var radioSleep: Int? = nil
+    /// The RADIO SLEEP chips take taps: linked, not powering off, no firmware update and no restart
+    /// for RADIO SLEEP running; otherwise they are drawn dimmed.
+    var radioSleepEnabled: Bool = false
+    /// The line under the RADIO SLEEP chips ("" for none): the saving, off, off by the board, restarting.
+    var radioSleepNote: String = ""
+    /// The RADIO SLEEP note is a warning (the board turned it off itself).
+    var radioSleepNoteIsWarning: Bool = false
     /// POWER OFF is offered: linked, relay protocol 3 (firmware 1.5) or newer.
     var canPowerOff: Bool = false
     /// The line under the section ("" for none): powered off, not linked, reading, needs 1.5.
@@ -1539,7 +1700,7 @@ struct Esp32PowerSummary: Equatable {
     var noteIsWarning: Bool = false
 }
 
-/// The BOARD POWER texts and the cutoff choices, shared by both themes.
+/// The BOARD POWER texts and the cutoff and RADIO SLEEP choices, shared by both themes.
 enum Esp32PowerCopy {
     /// Relay protocol 3 (firmware 1.5) added power_off and set_low_cutoff.
     static let minProto: Int = 3
@@ -1559,5 +1720,46 @@ enum Esp32PowerCopy {
     /// The chip index for a cutoff in mV, or nil for a value the chips do not list.
     static func cutoffIndex(_ mv: Int) -> Int? {
         return cutoffOptionsMv.firstIndex(of: mv)
+    }
+
+    /// RADIO SLEEP (`set_radio_sleep`, Heltec V3): ON and OFF, as the chips list them.
+    static let radioSleepLabels: [String] = ["ON", "OFF"]
+    static let radioSleepTitle: String = "RADIO SLEEP"
+    /// The setting values in Esp32PowerSummary.radioSleep (0, turned off from an app, is the rest).
+    static let radioSleepOn: Int = 1
+    static let radioSleepOffByBoard: Int = 2
+    static let radioSleepMessage: String = "The board restarts to apply this. A running loop on the board stops."
+    static let radioSleepActiveNote: String = "Saves an estimated 3–10 mA (unmeasured)."
+    static let radioSleepOffNote: String = "Off."
+    static let radioSleepOffByBoardNote: String = "Turned off automatically after link trouble or a crash. Tap ON to try again."
+    static let radioSleepRestartingNote: String = "Restarting the board…"
+    /// How long the restart note (and the link hint that goes with it) waits for the board to link again.
+    static let radioSleepRestartSeconds: Double = 15
+
+    /// "Turn radio sleep on?" / "Turn radio sleep off?" for the confirm.
+    static func radioSleepConfirmTitle(_ enabled: Bool) -> String {
+        return enabled ? "Turn radio sleep on?" : "Turn radio sleep off?"
+    }
+
+    /// The confirm's button: TURN ON / TURN OFF.
+    static func radioSleepConfirmLabel(_ enabled: Bool) -> String {
+        return enabled ? "TURN ON" : "TURN OFF"
+    }
+
+    /// The chip index for a setting: ON for 1, OFF for 0 (from an app) and 2 (by the board).
+    static func radioSleepIndex(_ setting: Int) -> Int {
+        return setting == radioSleepOn ? 0 : 1
+    }
+
+    /// The setting a chip stands for: true = ON.
+    static func radioSleepEnabled(index: Int) -> Bool {
+        return index == 0
+    }
+
+    /// The note under the chips for a setting; `active`: modem sleep runs on the board now.
+    static func radioSleepNote(_ setting: Int, active: Bool) -> String {
+        if setting == radioSleepOn { return active ? radioSleepActiveNote : "" }
+        if setting == radioSleepOffByBoard { return radioSleepOffByBoardNote }
+        return radioSleepOffNote
     }
 }

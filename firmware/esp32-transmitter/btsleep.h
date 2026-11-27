@@ -149,7 +149,10 @@ static int btsGapEvent(struct ble_gap_event* ev, void* arg) {
         gBtsFailures = 0;
         gBtsFirstFailureMs = now;
       }
-      if (++gBtsFailures >= BTS_TRIP_LINKS) gBtsTrip = true;
+      if (++gBtsFailures >= BTS_TRIP_LINKS) {
+        gBtsFailures = 0;
+        gBtsTrip = true;  // taken (and cleared) by loop()'s btSleepTakeTrip()
+      }
     }
   }
   return 0;
@@ -165,8 +168,11 @@ static void btSleepStart() {
 }
 
 // loop(): true once the guard turned modem sleep off this boot (stored at once; restart pending).
+// One trip is taken once: a later set_radio_sleep ON (still in this boot) is not undone by it.
 static bool btSleepTakeTrip() {
-  if (!gBtsTrip || gBtSleepCfg != BTS_CFG_ON) return false;
+  if (!gBtsTrip) return false;
+  gBtsTrip = false;
+  if (gBtSleepCfg != BTS_CFG_ON) return false;  // already off (the user chose so meanwhile)
   gBtSleepCfg = BTS_CFG_OFF_AUTO;
   btSleepStore(gBtSleepCfg);
   return true;

@@ -713,11 +713,16 @@ private struct SettingsFirmwareSection: View {
 /// BOARD POWER (docs/POWER_V3.md B11), while the ESP32 is the backend: the board's battery (amber
 /// with LOW while it warns of a low battery), the LOW-BATTERY CUTOFF chips OFF · 3.20V · 3.30V ·
 /// 3.40V (only when the board reports its cutoff, Heltec V3 firmware 1.5+; dimmed and ignoring taps
-/// while it is not linked), the state note and POWER OFF with a confirm (linked, firmware 1.5+).
-/// The board keeps the cutoff in its own flash; nothing is pushed to it on link.
+/// while it is not linked), the RADIO SLEEP chips ON · OFF with their note (only when the board
+/// reports the setting; the other chip asks first, as the board restarts to apply it), the state
+/// note and POWER OFF with a confirm (linked, firmware 1.5+). The board keeps the cutoff and RADIO
+/// SLEEP in its own flash; nothing is pushed to it on link.
 private struct SettingsBoardPowerSection: View {
     @EnvironmentObject var vm: AppViewModel
     @State private var confirmPresented: Bool = false
+    @State private var radioSleepConfirmPresented: Bool = false
+    /// The RADIO SLEEP choice the confirm asks about (true = ON).
+    @State private var radioSleepChoice: Bool = false
 
     init() {}
 
@@ -730,6 +735,14 @@ private struct SettingsBoardPowerSection: View {
                 Button("CANCEL", role: .cancel) { }
             } message: {
                 Text(Esp32PowerCopy.powerOffMessage)
+            }
+            .alert(Esp32PowerCopy.radioSleepConfirmTitle(radioSleepChoice), isPresented: $radioSleepConfirmPresented) {
+                Button(Esp32PowerCopy.radioSleepConfirmLabel(radioSleepChoice)) {
+                    vm.setEsp32RadioSleep(radioSleepChoice)
+                }
+                Button("CANCEL", role: .cancel) { }
+            } message: {
+                Text(Esp32PowerCopy.radioSleepMessage)
             }
     }
 
@@ -744,6 +757,10 @@ private struct SettingsBoardPowerSection: View {
             if let mv = p.cutoffMv {
                 cutoffBlock(selectedMv: mv, enabled: p.cutoffEnabled)
                     .padding(.top, 2)
+            }
+            if let setting = p.radioSleep {
+                radioSleepBlock(setting: setting, p)
+                    .padding(.top, 4)
             }
             if !p.note.isEmpty {
                 Text(p.note)
@@ -802,6 +819,57 @@ private struct SettingsBoardPowerSection: View {
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.5)
         .accessibilityLabel("Low-battery cutoff " + name)
+        .accessibilityAddTraits(traits)
+    }
+
+    private func radioSleepBlock(setting: Int, _ p: Esp32PowerSummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(Esp32PowerCopy.radioSleepTitle)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(MMTheme.textDim)
+            HStack(spacing: 4) {
+                ForEach(0..<Esp32PowerCopy.radioSleepLabels.count, id: \.self) { index in
+                    radioSleepChip(index, selected: Esp32PowerCopy.radioSleepIndex(setting),
+                                   enabled: p.radioSleepEnabled)
+                }
+            }
+            if !p.radioSleepNote.isEmpty {
+                Text(p.radioSleepNote)
+                    .font(MMTheme.techLabel())
+                    .foregroundStyle(p.radioSleepNoteIsWarning ? MMTheme.amber : MMTheme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The current chip does nothing; the other one asks first (the board restarts to apply it).
+    private func radioSleepChip(_ index: Int, selected selectedIndex: Int, enabled: Bool) -> some View {
+        let labels: [String] = Esp32PowerCopy.radioSleepLabels
+        let name: String = index < labels.count ? labels[index] : ""
+        let selected: Bool = index == selectedIndex
+        let lineColor: Color = selected ? (enabled ? MMTheme.cyan : MMTheme.cyanDim) : MMTheme.panelLine
+        let textColor: Color = selected ? (enabled ? MMTheme.cyan : MMTheme.cyanDim) : MMTheme.textDim
+        let traits: AccessibilityTraits = selected ? .isSelected : []
+        return Button {
+            if !selected {
+                radioSleepChoice = Esp32PowerCopy.radioSleepEnabled(index: index)
+                radioSleepConfirmPresented = true
+            }
+        } label: {
+            Text(name)
+                .font(MMTheme.techLabel())
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .frame(height: 28)
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(lineColor, lineWidth: 0.5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.5)
+        .accessibilityLabel("Radio sleep " + name)
         .accessibilityAddTraits(traits)
     }
 

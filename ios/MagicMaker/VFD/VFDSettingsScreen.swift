@@ -8,7 +8,8 @@ import SwiftUI
 /// SLICE / COMMAND BURST / STARLIGHT WAND sliders), SCAN FILTER, BACKGROUND, APPLE WATCH (the watch
 /// favourites, Watch/VFDWatchSection.swift), BOARD FIRMWARE (the
 /// ESP32's firmware and its Bluetooth update, FirmwareUpdater), BOARD POWER (while the ESP32 is the
-/// backend: its battery, the LOW CUTOFF chips and POWER OFF, AppViewModel.esp32PowerSummary) and
+/// backend: its battery, the LOW CUTOFF and RADIO SLEEP chips and POWER OFF,
+/// AppViewModel.esp32PowerSummary) and
 /// ABOUT.
 @MainActor
 enum VFDSettingsScreen: VFDScreen {
@@ -297,9 +298,11 @@ extension VFDSettingsScreen {
 
     /// BOARD POWER (SettingsBoardPowerSection), only while the ESP32 is the backend: BATTERY (ALARM
     /// while the board warns of a low battery), LOW CUTOFF [OFF] [3.20V] [3.30V] [3.40V] with its
-    /// caption (only when the board reports its cutoff; dim and ignoring taps while not linked), the
-    /// state note (highlight when the board was powered off from here) and [POWER OFF] (alarm,
-    /// asks first; linked, firmware 1.5+).
+    /// caption (only when the board reports its cutoff; dim and ignoring taps while not linked),
+    /// RADIO SLEEP [ON] [OFF] with its note (only when the board reports the setting; the chip that
+    /// is not current asks first; highlight when the board turned it off itself), the state note
+    /// (highlight when the board was powered off from here) and [POWER OFF] (alarm, asks first;
+    /// linked, firmware 1.5+).
     fileprivate static func boardPower(_ ctx: VFDContext, _ c: Int, _ top: Int, _ w: Int) -> Int {
         if ctx.vm.relayBackend != .esp32 {
             return top
@@ -324,6 +327,21 @@ extension VFDSettingsScreen {
                              })
             y = hint(fb, c, y, w, Esp32PowerCopy.cutoffCaption)
         }
+        if let setting = p.radioSleep {
+            let labels: [String] = Esp32PowerCopy.radioSleepLabels
+            let current: Int = Esp32PowerCopy.radioSleepIndex(setting)
+            y = VFDW.options(fb, L, c, y, w, labels, selected: current, label: Esp32PowerCopy.radioSleepTitle,
+                             enabled: p.radioSleepEnabled, columns: labels.count,
+                             onSelect: { (index: Int) -> Void in
+                                 if index != current {
+                                     VFDSettingsScreen.confirmRadioSleep(ctx, Esp32PowerCopy.radioSleepEnabled(index: index))
+                                 }
+                             })
+            if !p.radioSleepNote.isEmpty {
+                y = VFDW.textBlock(fb, L, c, y + 1, w, p.radioSleepNote,
+                                   color: p.radioSleepNoteIsWarning ? VFDInk.highlight : VFDInk.dim)
+            }
+        }
         if !p.note.isEmpty {
             y = VFDW.textBlock(fb, L, c, y + 1, w, p.note, color: p.noteIsWarning ? VFDInk.highlight : VFDInk.dim)
         }
@@ -337,6 +355,14 @@ extension VFDSettingsScreen {
                                                ctx.vm.powerOffEsp32()
                                            })
                            })
+    }
+
+    /// RADIO SLEEP: the chip that is not current asks first, as the board restarts to apply it.
+    fileprivate static func confirmRadioSleep(_ ctx: VFDContext, _ enabled: Bool) {
+        ctx.confirm(title: Esp32PowerCopy.radioSleepConfirmTitle(enabled), message: Esp32PowerCopy.radioSleepMessage,
+                    confirmLabel: Esp32PowerCopy.radioSleepConfirmLabel(enabled), action: {
+                        ctx.vm.setEsp32RadioSleep(enabled)
+                    })
     }
 
     /// ABOUT: MAGICMAKER v<version> (<build>).

@@ -55,6 +55,10 @@ struct AndroidRemoteStatus: Equatable {
     var linkParams: [Int]? = nil
     /// `btSleep`: the board's Bluetooth modem sleep is on (a diagnostic, like `conn`).
     var btModemSleep = false
+    /// `radioSleep`: why the RADIO SLEEP setting is off, 0 = turned off from an app, 2 = turned off
+    /// by the board itself (it crashed, or links kept failing, with modem sleep on). Sent only by a
+    /// Heltec V3 build with modem sleep and only while the setting is off; a diagnostic like `btSleep`.
+    var radioSleep: Int? = nil
     var keepAwakeHex: String? = nil
     var txLoopHex: String? = nil
     var starlightLoopHex: String? = nil
@@ -106,6 +110,7 @@ struct AndroidRemoteStatus: Equatable {
         s.batteryLow = json["batLow"] as? Bool ?? false
         s.linkParams = json["conn"] as? [Int]
         s.btModemSleep = json["btSleep"] as? Bool ?? false
+        s.radioSleep = json["radioSleep"] as? Int
         s.keepAwakeHex = json["keepAwakeHex"] as? String
         s.txLoopHex = json["txLoopHex"] as? String
         s.starlightLoopHex = json["starlightLoopHex"] as? String

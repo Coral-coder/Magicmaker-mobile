@@ -747,7 +747,12 @@ void loop() {
 #endif
     if (cmd.type == RELAY_CMD_SET_RADIO_SLEEP) {
       // Applies at boot only: restart once the app has read this command's STATUS.
-      if (btSleepSet(cmd.en) && gRestartAt == 0) gRestartAt = millis() + RESTART_GRACE_MS;
+      // A choice that needs no restart also cancels the guard's pending one (the user decided).
+      if (btSleepSet(cmd.en)) {
+        if (gRestartAt == 0) gRestartAt = millis() + RESTART_GRACE_MS;
+      } else {
+        gRestartWhenIdle = false;
+      }
       continue;
     }
     gEngine.apply(cmd, millis());
