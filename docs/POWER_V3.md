@@ -33,10 +33,11 @@ Base: firmware 1.4.1, Arduino-ESP32 2.0.17 (IDF 4.4.7, `CONFIG_PM_ENABLE` off), 
 | 7 | **Cutoff rule:** 3 consecutive clean readings below the threshold **and** the filtered value below it. Fast path: 2 readings below 3.10 V at least 5 s apart. Reset at threshold + 50 mV. No cutoff on USB, while charging, on unstable readings, or for 10 min after a step rise. |
 | 8 | **Boot check:** after RST / power-on / brownout, if the battery is below cutoff + 0.10 V and not on USB, the OLED shows `TOO LOW TO START` for 2 s and the board goes back off. **PRG during the notice = start anyway.** It is skipped after a software restart (OTA). |
 | 9 | On-device cutoff setting: **LOW BATTERY page, hold PRG 1 s = next level** (the same gesture and limits as the capacity on DEVICE). It is a different page from POWER, with a different hold time and look. |
-| 10 | Wire: CMD **`power_off`** `{"confirm":true}` (both boards) and **`set_low_cutoff`** `{"mv":3300}` (0 = off; Heltec). STATUS: **`cutMv`**, **`batLow`**, and the diagnostics **`conn`** and **`btSleep`**. |
-| 11 | iPhone: new **BOARD POWER** section in SETTINGS (standard + VFD): cutoff chips and **POWER OFF** with a confirm. LINK tab: `LOW` and a `LINK` diagnostics row. |
+| 10 | Wire: CMD **`power_off`** `{"confirm":true}` (both boards), **`set_low_cutoff`** `{"mv":3300}` (0 = off; Heltec) and **`set_radio_sleep`** `{"enabled":bool}` (Heltec images with the wrap, C5). STATUS: **`cutMv`**, **`batLow`**, and the diagnostics **`conn`**, **`btSleep`** and **`radioSleep`**. |
+| 11 | iPhone: new **BOARD POWER** section in SETTINGS (standard + VFD): cutoff chips, **RADIO SLEEP** chips (C5) and **POWER OFF**, each change that restarts or turns off the board with a confirm. LINK tab: `LOW` and a `LINK` diagnostics row. |
 | 12 | Efficiency now: **BLE modem sleep on the S3** via a link-time wrap (est. −3…10 mA, gated by a soak test), **UART0 pads released** (est. 0…~1 mA), **CPU 80 MHz from the first line**, the real off state, the cutoff. Connection parameters are **unchanged**, so sends get no extra lag. |
 | 13 | Rejected for 1.5 (with reasons in C2): 40 MHz CPU, slower idle advertising, lower OLED contrast, lower link/idle power, non-connectable beacons and a slower keep-awake (both need a band test first), higher slave latency, switching parameters on activity, a PM build, USB-JTAG gating, NimBLE deinit before sleep. |
+| 14 | **RADIO SLEEP** (added after the plan, C5): modem sleep is a per-board setting (NVS `mm`/`radioSleep`, on by default) that the app can turn off and on, and that the board turns off by itself when modem sleep looks like the cause of a crash or of a radio that cannot hold a link. It applies at boot, so a change restarts the board ~1 s later. |
 
 ---
 
@@ -177,9 +178,12 @@ struct MmPadLevel { uint8_t pin; uint8_t level; };
 static const MmPadLevel HV3_SLEEP_HOLD[] = {
     {HV3_LORA_NSS_PIN, 1}, {HV3_LORA_SCK_PIN, 0}, {HV3_LORA_MOSI_PIN, 0}, {HV3_LORA_RST_PIN, 1}};
 // RTC pads isolated (no input, no output, no pulls, held): VBAT ADC, header pins, LoRa MISO /
-// BUSY, OLED SDA / SCL / RST.
+// BUSY / DIO1, OLED SDA / SCL / RST.
 static const uint8_t HV3_SLEEP_ISOLATE[] = {1, 2, 3, 4, 5, 6, 7, 11, 13, 14, 17, 18, 21};
-// Never touched: 0 (PRG: strapping, R7 pull-up), 15/16 (32 kHz crystal), 19/20 (USB pads, NC).
+// Never touched: 0 (PRG: strapping, R7 pull-up), 15/16 (32 kHz crystal pads), 19/20 (USB D- / D+,
+// header pins left to the USB PHY).
+// Digital pads (26-48): IDF isolates every one that is not held (35 LED, 36 Vext) at sleep entry,
+// which covers 37 (divider switch) and 43 / 44 (UART to the unpowered CP2102).
 #endif
 
 // setup(), right after setCpuFrequencyMhz(80): undo any hold left by a previous sleep (a no-op
@@ -191,7 +195,7 @@ static void mmReleaseSleepHolds() {
   gpio_hold_dis((gpio_num_t)HV3_VEXT_PIN);
   for (const MmPadLevel& h : HV3_SLEEP_HOLD) { rtc_gpio_hold_dis((gpio_num_t)h.pin); rtc_gpio_deinit((gpio_num_t)h.pin); }
   for (uint8_t p : HV3_SLEEP_ISOLATE)        { rtc_gpio_hold_dis((gpio_num_t)p);     rtc_gpio_deinit((gpio_num_t)p); }
-#else
+#elif defined(CONFIG_IDF_TARGET_ESP32)
   rtc_gpio_hold_dis(GPIO_NUM_12);
   rtc_gpio_deinit(GPIO_NUM_12);
 #endif
@@ -217,11 +221,17 @@ static void mmReleaseSleepHolds() {
     rtc_gpio_set_level(g, h.level);
     rtc_gpio_hold_en(g);
   }
-  for (uint8_t p : HV3_SLEEP_ISOLATE) rtc_gpio_isolate((gpio_num_t)p);
+  // Each isolated pad goes to the RTC side first (rtc_gpio_init), then rtc_gpio_isolate().
+  for (uint8_t p : HV3_SLEEP_ISOLATE) {
+    rtc_gpio_init((gpio_num_t)p);
+    rtc_gpio_isolate((gpio_num_t)p);
+  }
   gpio_deep_sleep_hold_en();           // 35/36 keep their level; IDF isolates 37, 43, 44, 33-48 at entry
 #else
-  digitalWrite(STATUS_LED, LOW);
+  digitalWrite(MM_STATUS_LED_PIN, LOW);
+#if defined(CONFIG_IDF_TARGET_ESP32)
   rtc_gpio_isolate(GPIO_NUM_12);       // IDF's own deep-sleep advice (WROVER pull-up on MTDI)
+#endif
 #endif
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);   // no PRG wake: ext0 alone costs ~120 uA
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
@@ -230,6 +240,16 @@ static void mmReleaseSleepHolds() {
   for (;;) {}
 }
 ```
+
+**Why `rtc_gpio_init()` before `rtc_gpio_isolate()`** (firmware review). `rtc_gpio_isolate()`
+turns the RTC side's input, output and pulls off and holds the pad, but it does not route the pad
+to the RTC mux. A pad still in digital mode would keep its IO_MUX input enable latched through the
+sleep: a floating input. GPIO1–3 come out of reset with the input enabled, 9–14 and 17/18 after
+the ROM, and MISO, BUSY, SDA and SCL are inputs while the board runs. So each pad in
+`HV3_SLEEP_ISOLATE` is switched to its sleep-mode (RTC) controls with `rtc_gpio_init()` first, as
+IDF's own ext1 wake-up set-up does, and then isolated. `mmReleaseSleepHolds()` routes them back to
+digital (`rtc_gpio_deinit()`) at the next boot. The classic build only isolates GPIO12, and only on
+the classic ESP32 target (`CONFIG_IDF_TARGET_ESP32`).
 
 Expected battery current when off: S3 ~7 µA + LDO 6 µA + charger ≤ 1–2 µA + SX1262 0.16 µA +
 Vext LDO ≤ 1 µA, so **~14–20 µA on V3.2**. V3.0/V3.1 can add up to ~8.6 µA while the cell is above
@@ -243,20 +263,26 @@ keep drawing 5–15 mA. The README says so.
 
 ### A5. Boot, and what the user sees after RST
 
-`setup()` order (Heltec; the classic build keeps steps 1, 2, 9 onward):
+`setup()` order (Heltec; the classic build keeps steps 1, 2 and 9, where `btSleepStart()` does
+nothing):
 
 1. `setCpuFrequencyMhz(80)`: first line (it was after `powerBegin`). It saves ~10 mA for the
    ~0.1 s of boot work.
 2. `mmReleaseSleepHolds()`.
 3. `screenBegin(SCREEN_ON_MS, DEVICE_NAME)`: Vext off, PRG interrupt.
-4. `uartRelease()` (power.h, `MM_UART_RELEASE`): GPIO43 `INPUT` (no pull), GPIO44
-   `INPUT_PULLDOWN` (the USB hint, B5).
+4. `uartRelease()` (power.h, `MM_UART_RELEASE`): GPIO43 switched off entirely: `INPUT` (the
+   GPIO function takes U0TXD off the pad, no pull), then `gpio_set_direction(GPIO_MODE_DISABLE)`
+   so its input buffer is off as well (nothing reads it, and a floating input can draw current).
+   GPIO44 `INPUT_PULLDOWN` (the USB hint, B5).
 5. `loraSleep()`.
 6. `powerBegin(BATTERY_MAH)`: reads `batMah` and `lowCut`, detects the divider level from
    GPIO37's idle level (the LOW-then-HIGH trial stays as a fallback).
 7. `powerBootCheck(esp_reset_reason())` (B6). It may end in `screenBootLowNotice()` +
    `mmDeepSleepForever()`.
-8. LED, engine defaults, `gShadow.hasBattery = true`, then NimBLE init as today.
+8. `btSleepBegin(reset)` (btsleep.h, C5): the RADIO SLEEP setting and its crash / no-link boot
+   rules, before NimBLE starts.
+9. LED, engine defaults, `gShadow.hasBattery = true`, then NimBLE init as today, then
+   `btSleepStart()` (the modem-sleep guard) and `gShadow.hasRadioSleep = mmBtSleepAvailable()`.
 
 After **RST** (PRG not held) the board boots like any power-up: the screen stays **dark** (press
 PRG to light STATUS), the LED blinks once a second (waiting), and fast advertising runs for 30 s.
@@ -363,7 +389,7 @@ Neither VBUS nor VDD_5V has a sense pin. 1.5 uses:
 
 - **Voltage heuristics** (B4): above 4.25 V, the charging trend, a step rise.
 - **USB hint** (`MM_USB_SENSE` 1, power.h). GPIO44 is `INPUT_PULLDOWN` (~45 kΩ) and GPIO43 is
-  released, so nothing back-feeds the CP2102. A **powered** CP2102 holds its TXD (GPIO44) HIGH at
+  switched off (no output, no pull, no input buffer), so nothing back-feeds the CP2102. A **powered** CP2102 holds its TXD (GPIO44) HIGH at
   UART idle; an unpowered one cannot, so the pin reads LOW. HIGH ⇒ on USB. When the hint is HIGH
   the board runs from USB (Q2 off), so the cell is not at risk. It is sampled with every battery
   reading and at boot.
@@ -377,8 +403,9 @@ Neither VBUS nor VDD_5V has a sense pin. 1.5 uses:
 ### B6. Boot check (`powerBootCheck(reason)`)
 
 - It runs for `ESP_RST_POWERON`, `ESP_RST_EXT`, `ESP_RST_BROWNOUT`, `ESP_RST_DEEPSLEEP` and
-  `ESP_RST_UNKNOWN`. It is skipped for `ESP_RST_SW` (OTA restart: the app expects the board
-  back), `PANIC` and the WDTs; the running cutoff covers those within a minute.
+  `ESP_RST_UNKNOWN`. It is skipped for `ESP_RST_SW` (the restart after an OTA update or a RADIO
+  SLEEP change, C5: the app expects the board back), `PANIC` and the WDTs; the running cutoff
+  covers those within a minute.
 - Cutoff OFF → skipped.
 - Two blocking readings (B2 sampling) 50 ms apart, before NimBLE, with Vext off. Value = their
   mean. Skipped if either is implausible, unstable, or they differ by > 300 mV.
@@ -400,7 +427,8 @@ with power-off. `%` and "charge left" stay absolute (the cell's own state).
 Namespace `mm` (unchanged): `batMah` u16 (unchanged) and **`lowCut` u16 mV**. A missing key →
 3300; a value not in {0, 3200, 3300, 3400} → 3300. Saves are deferred
 (`BAT_CAP_SAVE_DELAY_MS` = 3 s after the last change, one shared timer, each key written only if
-it changed) and flushed by power-off. These remain the only flash writes.
+it changed) and flushed by power-off. Besides these two, only the RADIO SLEEP setting writes
+flash: `radioSleep` and `rsNoLink` (C5), a byte each, written only when they change.
 
 ### B9. Wire
 
@@ -410,6 +438,7 @@ it changed) and flushed by power-off. These remain the only flash writes.
 |---|---|---|
 | `power_off` (`poweroff`, `shutdown`) | `confirm` must be `true` | ok → `RELAY_CMD_POWER_OFF`; errors `"confirm required"`, `"busy"` (OTA receiving) |
 | `set_low_cutoff` (`low_cutoff`, `set_cutoff`) | `mv` int: `0` = off, `3200`/`3300`/`3400`; 3000–3600 snaps (< 3250 → 3200, < 3350 → 3300, else 3400) | ok → `RELAY_CMD_SET_CUTOFF` (`c.ms` = mV); `"bad mv"` (missing, not a number, out of range); `"unsupported"` when `!sh.hasBattery` (classic) |
+| `set_radio_sleep` (`radio_sleep`, `set_bt_sleep`) | `enabled` bool, required (C5) | ok → `RELAY_CMD_SET_RADIO_SLEEP` (`c.en`); `"bad enabled"` (missing or not a boolean); `"unsupported"` when `!sh.hasRadioSleep` (classic, or a Heltec image without the wrap); `"busy"` (OTA receiving) |
 
 During an off sequence every CMD answers `"powering off"`. All error strings fit `RelayReply.error[25]`.
 
@@ -423,17 +452,20 @@ is reached:
 | `batLow` | bool | with the battery keys, only when true | warning stage (B3) |
 | `cutMv` | int | Heltec, always (even without a reading) | 0 = off, 3200 / 3300 / 3400 |
 | `conn` | [int, int, int] | over BLE (diagnostic, last) | the **reading phone's** link: interval (1.25 ms units), peripheral latency, supervision timeout (10 ms units), from `onRead(c, desc)` |
-| `btSleep` | bool | when modem sleep is active (diagnostic, last) | the wrap took effect (C1) |
+| `btSleep` | bool | when modem sleep runs this boot (diagnostic, last) | the wrap took effect with the setting on (C1, C5) |
+| `radioSleep` | int | only while the RADIO SLEEP setting is off (diagnostic, last) | `0` = turned off by the user (`set_radio_sleep`), `2` = turned off by the board (C5) |
 | `advMaxUs` | int | `MM_DEBUG_TIMING` builds only | longest `advApply()` since boot, µs |
 
 Key order: `ok, error, running, proto, fw, board, keepAwake, …loops…, wakeupPreambleMs,
 commandBurstMs, starlightBurstMs, txPowerLevel, txInterleave, uptimeS, sent, batMv, batPct,
-batMah, runMin|charging, batLow, cutMv, items, <program hex>, <label>, conn, btSleep, advMaxUs`.
+batMah, runMin|charging, batLow, cutMv, items, <program hex>, <label>, conn, btSleep,
+radioSleep, advMaxUs`.
 
 Size check (worst case: an error, the wand loop at 60000 ms, every battery key, batLow): the
 short fields are ~406 bytes, + hex (29 bytes) = ~486 ≤ 508, so the hex always fits. The label is
 dropped in that extreme case, which is the existing documented rule. `conn` and `btSleep` fit in
-every normal status.
+every normal status; `radioSleep` (≤ 15 bytes) can fall off next to a running loop with a long
+packet and label, which is why the app keeps what the link showed last (C5).
 
 Example (Heltec, 1.5, idle, low):
 ```
@@ -472,6 +504,9 @@ the ESP32), in both themes:
   `set_low_cutoff {"mv":…}` → STATUS refresh. Caption: "Turns the board off at this voltage
   (about 5 / 10 / 18 % left) so the battery is never run flat. Press RST on the board to turn it
   on again after charging." State line `BATTERY  LOW · 8%` in amber/ALARM while `batLow`.
+- `RADIO SLEEP` chips **ON · OFF** after the cutoff chips (Heltec images with the wrap; details
+  and texts in C5). The chip that is not current asks first, because the board restarts to apply
+  it.
 - **POWER OFF** button (error / ALARM colour). Shown when linked and `proto ≥ 3`. Confirm:
   title "Power off the ESP32?", message "It stops transmitting and disconnects. Press RST (EN on
   a DevKit) on the board to turn it on again. It still charges while off.", buttons
@@ -482,8 +517,8 @@ the ESP32), in both themes:
   `proto < 3` → "Needs board firmware 1.5 — update it in BOARD FIRMWARE."
 - Unexpected link loss when the last status had `batLow` → status message "ESP32 off: battery
   low — charge it, then press RST".
-- No settings push on link: **the board is the authority** for the cutoff (NVS), and both UIs
-  edit it.
+- No settings push on link: **the board is the authority** for the cutoff and RADIO SLEEP (NVS);
+  both UIs edit the cutoff, the iPhone RADIO SLEEP.
 
 **LINK tab** (standard + VFD): `BATTERY` text gets the `LOW · ` prefix, and a new row
 **`LINK  30 MS · LAT 2 · TO 4 S`** (+ ` · MODEM SLEEP`) from `conn` / `btSleep`.
@@ -505,8 +540,8 @@ wake-up (C4), each with a ship gate.
 |---|---|---|---|
 | **Real off** (A) | ~35 mA → ~15–25 µA while off | — | E3-1: ≤ 30 µA (V3.2) / ≤ 40 µA (V3.0/3.1) in the battery lead |
 | **Low-battery cutoff** (B) | keeps 5–18 % in the cell; no deep discharge | — | E3-5 |
-| **BLE modem sleep (S3)**: link-time wrap of `esp_bt_controller_init`, `sleep_mode = ESP_BT_SLEEP_MODE_1`, `sleep_clock = ESP_BT_SLEEP_CLOCK_MAIN_XTAL` | **est. 3–10 mA** of the ~35 mA base (PHY/RF off between radio events; unmeasured) | phone→board writes: none (they arrive in events the controller wakes for). Host commands to a sleeping controller: ≤ 2.5 ms (`BTDM_MODEM_WAKE_UP_DELAY`), bounded at ~15 ms for the ~6 HCI commands of an advert restart | E3-2/E3-3: soak; `advApply` p99 ≤ 20 ms; OTA throughput within 10 %. Fallback: remove the link flag (CI, one line) or `-DMM_BT_MODEM_SLEEP=0` |
-| **UART0 pads released** (`MM_UART_RELEASE` 1): GPIO43 → INPUT, GPIO44 → INPUT_PULLDOWN after boot | **0 – ~1 mA** (no 3.3 V drive through 499 Ω into the unpowered CP2102) + ≤ 60 µA (ROM pull-up on GPIO44) | none | E3-2 A/B. Cost: no serial logs or panic text after boot (the firmware never uses `Serial`; flashing is unaffected, the ROM re-muxes the pads). `MM_UART_RELEASE 0` restores them |
+| **BLE modem sleep (S3)**: link-time wrap of `esp_bt_controller_init`, `sleep_mode = ESP_BT_SLEEP_MODE_1`, `sleep_clock = ESP_BT_SLEEP_CLOCK_MAIN_XTAL` | **est. 3–10 mA** of the ~35 mA base (PHY/RF off between radio events; unmeasured) | phone→board writes: none (they arrive in events the controller wakes for). Host commands to a sleeping controller: ≤ 2.5 ms (`BTDM_MODEM_WAKE_UP_DELAY`), bounded at ~15 ms for the ~6 HCI commands of an advert restart | E3-2/E3-3: soak; `advApply` p99 ≤ 20 ms; OTA throughput within 10 %. Fallback per board, no rebuild: **RADIO SLEEP OFF** in the iPhone app, and the board turns it off by itself after a crash or repeated radio failures (C5). For every board: remove the link flag (CI, one line) or `-DMM_BT_MODEM_SLEEP=0` |
+| **UART0 pads released** (`MM_UART_RELEASE` 1): after boot GPIO43 is switched off (GPIO function, no pull, input buffer off: `GPIO_MODE_DISABLE`), GPIO44 → INPUT_PULLDOWN | **0 – ~1 mA** (no 3.3 V drive through 499 Ω into the unpowered CP2102) + ≤ 60 µA (ROM pull-up on GPIO44) | none | E3-2 A/B. Cost: no serial logs or panic text after boot (the firmware never uses `Serial`; flashing is unaffected, the ROM re-muxes the pads). `MM_UART_RELEASE 0` restores them |
 | **CPU 80 MHz first** (setup line 1) | ~10 mA × ~0.1 s per boot | none | — |
 | **Model seeds**: `DRAW_BEACON_MA` 8 → **10** (from PDU timings); `DRAW_BASE_MA` stays 37.5 until measured | better runtime numbers | — | E3-2: re-seed both from the battery-lead readings |
 
@@ -543,31 +578,43 @@ USB meter on a PC port includes ~20 mA of enumerated CP2102 drawn from USB.
 
 ### C4. Modem sleep mechanics
 
-`btsleep.h` (new, included once by the `.ino`):
+`btsleep.h` (new, included once by the `.ino`; the setting around it is C5). The wrapper, as
+shipped:
 
 ```cpp
-#pragma once
-#include "board.h"
-#if MM_HELTEC_V3 && defined(CONFIG_IDF_TARGET_ESP32S3)
-#include <esp_bt.h>
-#ifndef MM_BT_MODEM_SLEEP
-#define MM_BT_MODEM_SLEEP 1
-#endif
-static volatile bool gBtModemSleep = false;   // STATUS "btSleep"
+static volatile bool gBtModemSleep = false;   // modem sleep is on now (STATUS "btSleep")
+static volatile bool gBtWrapRan = false;      // linked with the wrap: the setting exists
+static volatile bool gBtInitRetried = false;  // the controller refused to start with sleep on
+static uint8_t       gBtSleepCfg = BTS_CFG_ON; // the stored setting, read by btSleepBegin()
 // Active only when linked with -Wl,--wrap=esp_bt_controller_init (CI / PlatformIO). Without the
 // flag nothing references it and --gc-sections drops it: Arduino IDE builds stay as they are.
 extern "C" esp_err_t __real_esp_bt_controller_init(esp_bt_controller_config_t* cfg) __attribute__((weak));
 extern "C" esp_err_t __wrap_esp_bt_controller_init(esp_bt_controller_config_t* cfg) {
-#if MM_BT_MODEM_SLEEP
-  cfg->sleep_mode = ESP_BT_SLEEP_MODE_1;            // PHY/RF off between radio events
-  cfg->sleep_clock = ESP_BT_SLEEP_CLOCK_MAIN_XTAL;  // the only LP clock without PM in this core
-#endif
-  const esp_err_t err = __real_esp_bt_controller_init(cfg);
-  gBtModemSleep = MM_BT_MODEM_SLEEP && err == ESP_OK;
+  gBtWrapRan = true;
+  const bool want = MM_BT_MODEM_SLEEP && gBtSleepCfg == BTS_CFG_ON;
+  const uint8_t mode0 = cfg->sleep_mode, clock0 = cfg->sleep_clock;
+  if (want) {
+    cfg->sleep_mode = ESP_BT_SLEEP_MODE_1;            // PHY/RF off between radio events
+    cfg->sleep_clock = ESP_BT_SLEEP_CLOCK_MAIN_XTAL;  // the only LP clock without PM in this core
+  }
+  esp_err_t err = __real_esp_bt_controller_init(cfg);
+  if (want && err != ESP_OK) {  // never lose Bluetooth over it: start it the usual way
+    cfg->sleep_mode = mode0;
+    cfg->sleep_clock = clock0;
+    err = __real_esp_bt_controller_init(cfg);
+    gBtInitRetried = true;      // btSleepStart() stores "off by the board" (C5)
+    gBtModemSleep = false;
+    return err;
+  }
+  gBtModemSleep = want && err == ESP_OK;
   return err;
 }
-#endif
 ```
+
+The retry is safe because IDF 4.4.7's S3 init frees everything it set up and returns to IDLE on
+each failure after its argument checks (and fails those the same way with or without sleep), so a
+second call starts clean. `btsWrapLinked()` (`&__real_esp_bt_controller_init != nullptr`) tells
+`btSleepBegin()` before NimBLE starts whether this image has the setting at all.
 
 - **CI** (`esp32-firmware.yml`, Heltec compile only): `arduino-cli compile --build-property
   "compiler.c.elf.extra_flags=-Wl,--wrap=esp_bt_controller_init" …`. Then a check step fails the
@@ -578,6 +625,116 @@ extern "C" esp_err_t __wrap_esp_bt_controller_init(esp_bt_controller_config_t* c
 - **Classic ESP32:** untouched. Its core already runs ORIG modem sleep.
 - **Timing hook:** `MM_DEBUG_TIMING` (default 0) wraps `advApply()` with `esp_timer_get_time()`
   and keeps the maximum (`advMaxUs` in STATUS), for E3-3.
+
+### C5. RADIO SLEEP: the setting and its guard (`btsleep.h`, `btsleep_guard.h`)
+
+Added after the plan. Modem sleep on the S3 without PM is unmeasured (C1, F). A board whose radio
+misbehaved with it might not hold a link long enough to take the Bluetooth update that fixes it.
+So modem sleep is a per-board setting: the user can turn it off from the iPhone, and the board
+turns it off by itself when it looks like the cause. The rules are plain C++ in
+`btsleep_guard.h`, host-tested in `test/host/test_relay.cc` (`testRadioSleepBoot`,
+`testRadioSleepReasons`, `testRadioSleepGuard`; the command in `testSetRadioSleep`).
+
+**The setting.** NVS namespace `mm` (the one `power.h` uses):
+
+| Key | Type | Values |
+|---|---|---|
+| `radioSleep` | u8 | `1` = on (also when missing: a fresh board, or one updated from 1.4), `0` = off by the user (`set_radio_sleep`), `2` = off by the board. Any other value reads as on |
+| `rsNoLink` | u8 | boots in a row with modem sleep on that never had a phone link (rule 2 below) |
+
+`btSleepBegin(reset)` reads both once in `setup()`, before `NimBLEDevice::init()`, applies the
+boot rules and stores what changed. The wrapper (C4) then starts the controller with or without
+sleep mode 1. The controller's sleep mode can only be chosen there, so **a change applies at the
+next boot**. Each key is written only when it changes: with modem sleep on that is `rsNoLink` +1 at
+boot and back to 0 at the first link, two one-byte writes per boot. An image without the wrap, or
+built with `MM_BT_MODEM_SLEEP 0`, never reads or writes either key and has no setting
+(`gShadow.hasRadioSleep = mmBtSleepAvailable()` after init, so `set_radio_sleep` answers
+`"unsupported"`).
+
+**When the board turns it off** (stored as `2`). Every rule applies only while modem sleep is on:
+
+| # | Rule | Numbers | Takes effect |
+|---|---|---|---|
+| 1 | **Crash:** the previous boot ended in a panic or a watchdog reset (`ESP_RST_PANIC`, `ESP_RST_INT_WDT`, `ESP_RST_TASK_WDT`, `ESP_RST_WDT`) | — | this boot starts without modem sleep |
+| 2 | **No link:** boots in a row with modem sleep on where no phone ever linked (a radio that cannot advertise or accept a link). The count goes +1 at each such boot and back to 0 at the boot's first link (`btSleepLinked()`: linked, and not in the middle of a send) or at a `set_radio_sleep` | `BTS_NOLINK_BOOTS` = **3**: the 4th boot starts without | this boot |
+| 3 | **Controller refused:** `esp_bt_controller_init()` failed with sleep mode 1; the wrapper starts it the usual way (C4) and `btSleepStart()` stores `2` | — | this boot already runs without |
+| 4 | **Host lost the controller:** NimBLE's host reset callback ran (an HCI command timed out, a controller hardware error; the stack resets and every link ends). `btSleepStart()` chains it after `NimBLEDevice::init()`'s own `reset_cb` | — | stored at once; restart when idle (below) |
+| 5 | **Links keep failing:** links in a row that ended in a radio failure less than `BTS_SHORT_LINK_MS` after they began, within `BTS_TRIP_WINDOW_MS` of the first such failure. Radio failure = HCI reason 0x08 supervision timeout, 0x22 LL response timeout, 0x28 instant passed, 0x3D MIC failure, 0x3E failed to be established. A link that lasted `BTS_SHORT_LINK_MS` or more clears the count; a clean end (0x13 remote user, 0x16 local host) or a host error code changes nothing. Up to `BTS_MAX_TRACKED` = 4 links are tracked at once; one the guard did not see begin counts as a long link | `BTS_TRIP_LINKS` = **4** links, each under **2 min** (`BTS_SHORT_LINK_MS` = 120000), within **30 min** (`BTS_TRIP_WINDOW_MS`) | stored at once; restart when idle |
+
+Rules 1 and 2 run in `btsBootRule()` at boot. Rules 4 and 5 run on the NimBLE host task (a GAP
+event listener registered in `btSleepStart()`, and the reset callback) and only raise `gBtsTrip`.
+loop()'s `restartService()` takes it with `btSleepTakeTrip()`: it stores `2` at once and sets
+`gRestartWhenIdle`, so the board restarts as soon as **no phone is linked and no program or job
+runs** (nothing is lost); otherwise the next boot applies it. A trip is taken once: if the user
+picks ON again in the same boot, the earlier trip does not undo it.
+
+**Restart.** `set_radio_sleep` is handled in loop()'s command drain: `btSleepSet(on)` stores `1` or
+`0` (and resets `rsNoLink`) and returns whether the radio has to change, i.e. the choice differs
+from what the controller runs now (`gBtModemSleep`).
+
+- It has to change: `restartSoon()` sets `gRestartAt` to now + `RESTART_GRACE_MS` (**1000 ms**), so
+  the app's STATUS read after the CMD write completes first. loop()'s sleep (`waitMs`) wakes for
+  that deadline.
+- It does not (for example ON while modem sleep still runs after a trip): any pending restart is
+  cancelled, an earlier choice's or the guard's (`gRestartAt = 0`, `gRestartWhenIdle = false`).
+  The user decided.
+- A due restart is **held** while a Bluetooth update is being received (`otaBusy()`) or a
+  finished update's own restart is pending (`otaNextDueMs()`), checked every
+  `RESTART_HELD_POLL_MS` (100 ms). `set_radio_sleep` itself answers `"busy"` while an update is
+  being received.
+- `restartNow()`: every phone is disconnected with reason 0x13 (the app sees it at once), loop
+  waits for the disconnects at most `RESTART_LINK_WAIT_MS` (500 ms), `powerFlushSaves()` writes a
+  capacity or cutoff picked in the last seconds, the LED goes low, `esp_restart()`.
+- The restart is `ESP_RST_SW`: no boot check (B6), and it is not a crash for rule 1. The board
+  boots like after an update: idle (a running keep-awake or loop stops), screen dark, LED blinking
+  once a second; the app relinks by itself and pushes its settings.
+- A power-off wins: `offService()` runs before the command drain, and once a power-off began every
+  command (this one too) answers `"powering off"`.
+
+**Wire** (relay_proto.h, both sides of B9):
+
+- CMD `{"action":"set_radio_sleep","enabled":true|false}`, aliases `radio_sleep`, `set_bt_sleep`.
+  `enabled` must be given as a boolean (quoted `"true"` / `"false"` are accepted, as everywhere);
+  missing, `1`, `"yes"`, `null` or anything else → `"bad enabled"`, and the radio never changes.
+  Replies: ok, `"unsupported"` (classic ESP32, or a Heltec image without the wrap or with
+  `MM_BT_MODEM_SLEEP 0`), `"bad enabled"`, `"busy"` (an update is being received, or the command
+  queue is full), `"powering off"`. The STATUS read right after an ok still shows the radio as it
+  is now; the restart follows about 1 s later when the radio has to change.
+- STATUS `"btSleep":true` while modem sleep runs this boot. `"radioSleep":0` (off by the user) or
+  `"radioSleep":2` (off by the board) only while the stored setting is off; no key while it is on.
+  Between a change (or a trip) and the restart both can show, for example
+  `"btSleep":true,"radioSleep":2`. Neither key: the setting is on but modem sleep does not run
+  this boot, or the image has no setting. Both are diagnostics, after `conn` and before
+  `advMaxUs`, and are dropped first at the 508-byte limit.
+
+**App** (iPhone, SETTINGS → BOARD POWER, both themes; `AppViewModel.setEsp32RadioSleep`,
+`Esp32PowerCopy`, `SettingsBoardPowerSection`, `VFDSettingsScreen.boardPower`):
+
+- `RADIO SLEEP` chips **ON · OFF** after the cutoff chips (VFD: `RADIO SLEEP [ON] [OFF]`). Shown
+  once the board has reported the setting on this link (`btSleep` or `radioSleep` with relay
+  protocol 3); remembered per link, so a STATUS that left its diagnostics out keeps the row, and
+  read again on the next link. Hidden on a classic ESP32, on an image without the setting, and
+  after `"unsupported"` / `"unknown action"`. Dimmed, ignoring taps, while not linked, powering
+  off, receiving a firmware update or restarting for RADIO SLEEP.
+- The current chip does nothing; the other asks first: **Turn radio sleep on?** / **Turn radio
+  sleep off?**, "The board restarts to apply this. A running loop on the board stops.", **TURN
+  ON** / **TURN OFF** and **CANCEL**.
+- The note under the chips: ON with modem sleep running "Saves an estimated 3–10 mA
+  (unmeasured)."; OFF by the user "Off."; OFF by the board, in amber (VFD: highlight) "Turned off
+  automatically after Bluetooth trouble. Tap ON to try again."; restarting "Restarting the
+  board…".
+- On ok: "ESP32 radio sleep ON — the board restarts to apply it" (or OFF), or just "ESP32 radio
+  sleep ON" when no restart is needed. While the board restarts, the row stays on the new choice
+  (dimmed), LINK shows the hint "The ESP32 is restarting — linking again…", and for up to 15 s
+  the link loss is not read as the board being off or its battery low. A board that has not linked
+  again after 15 s is treated like any lost link, from its last status before the restart (a low
+  battery there: "ESP32 off: battery low — charge it, then press RST").
+- Other messages: "ESP32 not linked — link it to change its radio sleep", "ESP32 is receiving a
+  firmware update — change its radio sleep when it is done", "ESP32 is restarting — change its
+  radio sleep once it has linked again", "ESP32 has no radio sleep setting", "ESP32 radio sleep
+  not sent — try again", "ESP32 radio sleep failed: <error>".
+- Nothing is pushed on link and a change made while not linked is not kept: the board is the
+  authority, as for the cutoff. Android has no RADIO SLEEP row.
 
 ---
 
@@ -592,7 +749,12 @@ Firmware folder `firmware/esp32-transmitter/` (do not touch `sync_*.h`).
 - Defaults with `#ifndef`: `MM_USB_SENSE 1`, `MM_UART_RELEASE 1`, `MM_DEBUG_TIMING 0`. Document
   `MM_BT_MODEM_SLEEP` (btsleep.h) and the link flag.
 
-**`btsleep.h`** (new): as in C4.
+**`btsleep.h`** (new): the wrapper (C4) and the RADIO SLEEP setting: `btSleepBegin(reset)`,
+`btSleepStart()`, `btSleepLinked()`, `btSleepTakeTrip()`, `btSleepSet(on)`,
+`mmBtSleepAvailable()`, `mmBtSleepOffReason()` (C5). Stubs that do nothing on other boards.
+
+**`btsleep_guard.h`** (new, pure C++, host-tested): `BTS_*` constants, `btsBootRule()`,
+`btsRadioFailure()`, `struct BtsGuard` (C5).
 
 **`shutdown.h`** (new, both boards): `MmOffReason`, `mmReleaseSleepHolds()`,
 `mmDeepSleepForever()` exactly as in A4. Included after `oled_ui.h` (it uses `screenPowerOff`
@@ -658,14 +820,15 @@ and `loraSleep`).
 - `screenDraw()` fills the new model fields.
 
 **`relay_proto.h`** (pure; host-tested)
-- `RelayAction` += `RELAY_ACT_POWER_OFF`, `RELAY_ACT_SET_CUTOFF`; names `power_off`,
-  `poweroff`, `shutdown`, `set_low_cutoff`, `low_cutoff`, `set_cutoff`.
-- `RelayCmdType` += `RELAY_CMD_POWER_OFF`, `RELAY_CMD_SET_CUTOFF`.
-- `RelayShadow` += `bool hasBattery`.
+- `RelayAction` += `RELAY_ACT_POWER_OFF`, `RELAY_ACT_SET_CUTOFF`, `RELAY_ACT_SET_RADIO_SLEEP`;
+  names `power_off`, `poweroff`, `shutdown`, `set_low_cutoff`, `low_cutoff`, `set_cutoff`,
+  `set_radio_sleep`, `radio_sleep`, `set_bt_sleep`.
+- `RelayCmdType` += `RELAY_CMD_POWER_OFF`, `RELAY_CMD_SET_CUTOFF`, `RELAY_CMD_SET_RADIO_SLEEP`.
+- `RelayShadow` += `bool hasBattery`, `bool hasRadioSleep`.
 - `relayParseCommand()`: B9 rules (`relayBoolParam(…"confirm", false)`, `relayIntParam(…"mv",
   INT32_MIN)` + snap).
-- `RelaySnapshot` += `int16_t cutMv` (−1 = absent), `bool batLow`, `bool btSleep`, `uint32_t
-  advMaxUs`.
+- `RelaySnapshot` += `int16_t cutMv` (−1 = absent), `bool batLow`, `bool btSleep`, `uint8_t
+  radioSleepOff` (`RELAY_RSOFF_NONE` / `_USER` / `_AUTO`), `uint32_t advMaxUs`.
 - `struct RelayLinkInfo { bool valid; uint16_t itvl, latency, timeout; }`;
   `relayFormatStatus(s, r, uptimeS, proto, fw, board, link, out, cap)`: key order and drop
   order from B9.
@@ -679,19 +842,24 @@ else changes (unknown command types already fall through `apply()`).
 **`esp32-transmitter.ino`**
 - Includes `btsleep.h` (after board.h) and `shutdown.h`; the header comment's Power paragraph is
   updated.
-- Constants `POWER_OFF_NOTICE_MS 1000`, `POWER_OFF_GRACE_MS 750`, `POWER_OFF_LINK_WAIT_MS 500`.
+- Constants `POWER_OFF_NOTICE_MS 1000`, `POWER_OFF_GRACE_MS 750`, `POWER_OFF_LINK_WAIT_MS 500`;
+  for RADIO SLEEP `RESTART_GRACE_MS 1000`, `RESTART_LINK_WAIT_MS 500`, `RESTART_HELD_POLL_MS 100`.
 - `setup()` order from A5. Classic: `setCpuFrequencyMhz(80)` and `mmReleaseSleepHolds()` first,
   `gShadow.hasBattery = false`.
-- `CommandCallbacks::onWrite`: `gOffPending` → `"powering off"`; `RELAY_CMD_POWER_OFF` with
-  `otaBusy()` → `"busy"`, not queued.
+- `CommandCallbacks::onWrite`: `gOffPending` → `"powering off"`; `RELAY_CMD_POWER_OFF` or
+  `RELAY_CMD_SET_RADIO_SLEEP` with `otaBusy()` → `"busy"`, not queued.
 - `StatusCallbacks`: override `onRead(NimBLECharacteristic*, ble_gap_conn_desc*)`, building
   `RelayLinkInfo` from `desc->conn_itvl`, `conn_latency`, `supervision_timeout`.
 - `loop()`: `if (offService(millis())) return;` after `otaLoop()`. Command drain intercepts
   `POWER_OFF` → `beginPowerOff(MM_OFF_APP)` and `SET_CUTOFF` → `powerSetCutoff()`; the rest goes
   to `gEngine.apply()`. After `screenPoll()`/`powerPoll()`: `screenTakePowerOffRequest()` →
   `MM_OFF_BUTTON`; `powerTakeCutoff()` → `MM_OFF_LOW`.
+- RADIO SLEEP (C5): the drain also intercepts `SET_RADIO_SLEEP` → `btSleepSet()` +
+  `restartSoon()` (or cancels a pending restart); `restartService()` after the drain
+  (`btSleepLinked()`, `btSleepTakeTrip()` → `gRestartWhenIdle`, `restartNow()` when due and not
+  held by an update); loop()'s sleep also wakes for `gRestartAt`.
 - `heartbeatBytes()`: `if (powerBatteryLow()) flags |= 0x08;`.
-- `publishSnapshot()`: `cutMv` (Heltec), `batLow`, `btSleep`, `advMaxUs`.
+- `publishSnapshot()`: `cutMv` (Heltec), `batLow`, `btSleep`, `radioSleepOff`, `advMaxUs`.
 - `ServerCallbacks::onConnect`: request **unchanged** (`24, 40, 2, 400`), with a comment
   pointing to C2.
 
@@ -702,7 +870,10 @@ else changes (unknown command types already fall through `apply()`).
   `relayJsonInt` allows), `"bad mv"` (2999, 3601, missing, a non-numeric string),
   `"unsupported"` without a battery; STATUS: `proto 3`, `cutMv` with no reading, `batLow` only
   when true, key order, `conn` / `btSleep` after the hex and label, worst case ≤ 508 with the hex
-  kept, diagnostics dropped first.
+  kept, diagnostics dropped first. RADIO SLEEP: `set_radio_sleep` and its aliases, quoted
+  booleans, `"bad enabled"` for a missing or odd `enabled`, `"unsupported"` without the setting;
+  STATUS `radioSleep` only while off (`0` / `2`), after `btSleep`; the guard rules of
+  `btsleep_guard.h` (boot rule, radio-failure reasons, the link guard).
 - `Makefile`: `$(BUILD)/test_relay` in `all` and `test`, plus a `relay` target that builds and
   runs only it.
 
@@ -721,7 +892,8 @@ else changes (unknown command types already fall through `apply()`).
 - Tuning table: `POWER_HOLD_MS`, `BAT_PERIOD_NEAR_MS`, `MM_USB_SENSE`, `MM_UART_RELEASE`,
   `MM_BT_MODEM_SLEEP`.
 - PlatformIO note: the Heltec `build_flags`.
-- Protocol reference: the two actions, the STATUS keys, proto 3, heartbeat bit 3, the 1.5 example.
+- Protocol reference: the three actions, the STATUS keys, proto 3, heartbeat bit 3, the 1.5 example.
+- RADIO SLEEP: the setting, the guard and the restart (C5).
 
 **CI `.github/workflows/esp32-firmware.yml`**: a "Relay protocol host test" step (`make -C
 firmware/esp32-transmitter/test/host relay`); the Heltec compile with `--build-property`; the
@@ -735,11 +907,15 @@ compile is unchanged.
   "+ · MODEM SLEEP"; interval × 1.25 ms, timeout × 10 ms).
 - `Views/AppTheme.swift` `esp32BatteryToken`: `ESP32:8% LOW ~25M`.
 - `ViewModels/AppViewModel.swift`: `setEsp32LowCutoff(_:)`, `powerOffEsp32()`, `@Published
-  esp32PoweredOff`, the low-battery disconnect message (B11).
+  esp32PoweredOff`, the low-battery disconnect message (B11). RADIO SLEEP (C5):
+  `setEsp32RadioSleep(_:)`, the per-link `esp32RadioSleep` (and whether modem sleep runs now),
+  `esp32RadioSleepRestarting` with its 15 s window, the `Esp32PowerSummary` fields `radioSleep`,
+  `radioSleepEnabled`, `radioSleepNote`, `radioSleepNoteIsWarning`, and the shared texts in
+  `Esp32PowerCopy`. `AndroidRemoteClient.swift` also parses `radioSleep` → `radioSleep: Int?`.
 - `Views/SettingsScreen.swift`: `SettingsBoardPowerSection` after `SettingsFirmwareSection`.
 - `VFD/VFDSettingsScreen.swift`: `boardPower(ctx, c, y, w)` after `firmware()`
-  (`VFDW.section`, `VFDW.options` label `LOW CUTOFF`, `VFDW.kv`, `VFDW.button` alarm →
-  `ctx.confirm`); header comment lists the section. No VFD golden impact (the goldens cover only
+  (`VFDW.section`, `VFDW.options` labels `LOW CUTOFF` and `RADIO SLEEP`, `VFDW.kv`,
+  `VFDW.button` alarm → `ctx.confirm`); header comment lists the section. No VFD golden impact (the goldens cover only
   `vfd.py` / `widgets.py`).
 - `Views/LinkScreen.swift`, `VFD/VFDLinkScreen.swift`: the `LINK` row.
 
@@ -761,6 +937,9 @@ tools/guide/build_guide.py`)
 - 6.3 LINK rows (`LOW`, `LINK`); 6.7/6.8 `LOW` tokens; **new 6.9 BOARD POWER** (both themes);
   9.5 cross-reference; 11.1 STATUS fields; 11.4 heartbeat bit 3; 11.5 the two commands; 11.7
   build-time settings.
+- Later: the RADIO SLEEP row in 6.9 (what turns it off, how to turn it on, the restart), 5.5, the
+  STATUS and command entries in 11.1 / 11.5; the shelved web flasher is no longer offered as a
+  way to flash (its section and troubleshooting rows are gone; download mode is now 9.4).
 
 ---
 
@@ -784,6 +963,7 @@ two arduino-cli builds; the ELF wrap check; Heltec image size within the OTA slo
 3. **Modem-sleep soak:** 2 h linked to an iPhone. No unexpected disconnects; 200 sends with none
    lost; `advMaxUs` (debug build) p99 ≤ 20 ms; one full OTA update with throughput within 10 % of
    the wrap-off build; bands still wake on keep-awake. Any failure → ship without the flag.
+   Also: STATUS shows no `radioSleep` (the guard did not trip) at the end of the soak.
 4. **Power cycle:** POWER hold → RST → normal boot (dark screen, 1 s blinks, relink, programs
    off). PRG held over RST → download mode (documented).
 5. **Cutoff** with a bench supply on the battery connector, stepping down 10 mV / 30 s from
@@ -798,13 +978,23 @@ two arduino-cli builds; the ELF wrap check; Heltec image size within the OTA slo
    restarts.
 9. **STATUS `conn`** on the iPhone: record what iOS actually negotiated (input for the 1.5.x
    latency decision).
+10. **RADIO SLEEP:** OFF from the iPhone → the board restarts ~1 s later, relinks, STATUS has
+    `"radioSleep":0` and no `btSleep`; ON → restart, `btSleep` back. The same choice twice →
+    no restart. During a Bluetooth update → `"busy"`. Three RSTs with no phone in range → the
+    4th boot shows `"radioSleep":2`.
 
 ---
 
 ## F. Risks and open items
 
 - **Modem sleep on the S3 without PM is unmeasured at runtime** (link stability, OTA, beacon
-  start). Gated by E3-3, and reversible by removing one link flag.
+  start). Gated by E3-3. Reversible per board without a rebuild (RADIO SLEEP OFF in the iPhone
+  app, or the board's own guard, C5) and for every board by removing one link flag.
+- **The RADIO SLEEP guard can trip on a healthy radio:** three boots in a row with no phone
+  linking (the board turned on away from the iPhone), or four links within 30 min that each end
+  in a supervision timeout less than 2 min after they began (a phone at the edge of range), turn
+  modem sleep off. The cost is the estimated
+  3–10 mA until the user taps ON again; the app says why.
 - **USB hint unverified.** A false HIGH would disable the cutoff. Gated by E3-6; `MM_USB_SENSE 0`.
 - **Off current depends on the revision** (V3.0/3.1 leak) and on the cell's own protection
   circuit. Which revision and cell the user has is unknown.

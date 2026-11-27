@@ -102,6 +102,7 @@ static const uint32_t POWER_OFF_GRACE_MS     = 750;   // dark screen / app: time
 static const uint32_t POWER_OFF_LINK_WAIT_MS = 500;   // disconnects (reason 0x15) acknowledged, at most
 static const uint32_t RESTART_GRACE_MS       = 1000;  // set_radio_sleep: the app reads STATUS, then the restart
 static const uint32_t RESTART_LINK_WAIT_MS   = 500;   // restart: disconnects acknowledged, at most
+static const uint32_t RESTART_HELD_POLL_MS   = 100;   // a due restart waiting for an update: checked this often
 static const uint32_t POWER_OFF_LOOP_MS      = 20;    // loop()'s longest sleep while the sequence runs
 static const uint8_t  MAX_LINKS              = 4;     // connection handles tracked for the power-off disconnect
 
@@ -641,14 +642,26 @@ static void restartNow() {
   esp_restart();  // never returns
 }
 
-// After the commands: a restart that is due (and no firmware update is being received).
+// A firmware update is being received, or one finished and restarts the board by itself (its
+// reply still going out): a due restart waits for it.
+static bool restartHeld() { return otaBusy() || otaNextDueMs(millis()) != 0xFFFFFFFFu; }
+
+// A restart RESTART_GRACE_MS from now (0 means none, so never 0).
+static void restartSoon() {
+  gRestartAt = millis() + RESTART_GRACE_MS;
+  if (gRestartAt == 0) gRestartAt = 1;
+}
+
+// After the commands: the modem-sleep guard, and a restart that is due.
 static void restartService(uint32_t now) {
+  // A phone linked this boot (also one already gone): the radio works (once; not mid-send).
+  if ((gLinked > 0 || gDisconnects != 0) && !gEngine.timedJob()) btSleepLinked();
   if (btSleepTakeTrip()) gRestartWhenIdle = true;  // stored; the next boot starts without modem sleep
   if (gRestartWhenIdle && gRestartAt == 0 && gLinked == 0 && gEngine.program == RELAY_PROG_NONE &&
       gEngine.job.type == RELAY_JOB_NONE) {
-    gRestartAt = now;  // nobody is linked and nothing runs: nothing is lost
+    gRestartAt = now ? now : 1;  // nobody is linked and nothing runs: nothing is lost
   }
-  if (gRestartAt != 0 && (int32_t)(now - gRestartAt) >= 0 && !otaBusy()) restartNow();
+  if (gRestartAt != 0 && (int32_t)(now - gRestartAt) >= 0 && !restartHeld()) restartNow();
 }
 
 // ---- Setup / loop --------------------------------------------------------------------
@@ -667,7 +680,7 @@ void setup() {
     // TO START", and PRG during them starts the board anyway.
     if (reset == ESP_RST_BROWNOUT || !screenBootLowNotice()) mmDeepSleepForever();
   }
-  btSleepBegin(reset);                    // the modem-sleep setting (+ the crash rule), before NimBLE starts
+  btSleepBegin(reset);                    // the modem-sleep setting (+ crash / no-link boot rules), before NimBLE starts
 #endif
   pinMode(STATUS_LED, OUTPUT);
   digitalWrite(STATUS_LED, LOW);
@@ -746,11 +759,12 @@ void loop() {
     }
 #endif
     if (cmd.type == RELAY_CMD_SET_RADIO_SLEEP) {
-      // Applies at boot only: restart once the app has read this command's STATUS.
-      // A choice that needs no restart also cancels the guard's pending one (the user decided).
+      // Applies at boot only: restart once the app has read this command's STATUS. A choice the
+      // radio already runs cancels a pending restart (an earlier choice's, or the guard's).
       if (btSleepSet(cmd.en)) {
-        if (gRestartAt == 0) gRestartAt = millis() + RESTART_GRACE_MS;
+        restartSoon();
       } else {
+        gRestartAt = 0;
         gRestartWhenIdle = false;
       }
       continue;
@@ -824,8 +838,8 @@ void loop() {
   if (otaMs < waitMs) waitMs = otaMs;
   if (gRestartAt != 0) {
     const int32_t restartMs = (int32_t)(gRestartAt - after);
-    if (restartMs <= 0) waitMs = 1;
-    else if ((uint32_t)restartMs < waitMs) waitMs = (uint32_t)restartMs;
+    const uint32_t r = restartMs > 0 ? (uint32_t)restartMs : (restartHeld() ? RESTART_HELD_POLL_MS : 1);
+    if (r < waitMs) waitMs = r;
   }
   if (waitMs < 1) waitMs = 1;
   ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(waitMs));

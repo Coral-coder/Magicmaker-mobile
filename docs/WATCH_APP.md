@@ -573,6 +573,9 @@ struct WatchEsp32Status: Codable, Equatable {
     var board: String?
     var uptimeS: Int?
     var outdated: Bool
+    /// The board warns of a low battery (firmware 1.5+ `batLow`). Optional so that a peer from
+    /// before it decodes this status (nil = not reported) and an older watch simply ignores it.
+    var batteryLow: Bool?
 }
 
 /// The Android phone as the iPhone knows it (relay backend and scanner).
@@ -763,6 +766,14 @@ struct WatchReply {
     }
 }
 ```
+
+**Added with the board power work (firmware 1.5):** `WatchEsp32Status.batteryLow` (`Bool?`).
+It is `true` while the ESP32 reports its low-battery warning (STATUS `batLow`: the warning stage
+before the cutoff) and is not charging, `false` when a status without the warning was read, and
+nil when the iPhone has no status for the board (backend not ESP32, or not linked). It is
+optional, so `v` stays 1 (§3.4): an older watch ignores it, and a newer watch decodes a context
+from an older iPhone with nil. The watch's STATUS page draws the battery in alarm with it and
+adds `BATTERY LOW — CHARGE SOON` (§5.3).
 
 ---
 
@@ -961,6 +972,7 @@ WatchSendResult?) -> WatchContext }`. It fills `favorites` (with `onAirMs`, afte
 | `esp32.state` | backend ≠ `.esp32` → `NOT SELECTED`; `remoteLinkReady` → `LINKED`; hint starts with "Finishing" → `LINKING`; else `NOT LINKED` |
 | `esp32` numbers | only when `.esp32 && vm.relayGattReady`, from `vm.androidRemote`: `batteryPercent`, `batteryMv`, `runtimeMinutes`, `charging`, `esp32ProgramText`, `firmware`, `board`, `uptimeS` |
 | `esp32.outdated` | `vm.esp32FirmwareOutdated` |
+| `esp32.batteryLow` | with the `esp32` numbers: `batteryLow && !charging` from `vm.androidRemote` (STATUS `batLow`, firmware 1.5+); nil otherwise |
 | `android.state` / `transport` | as ESP32 for `.androidBle` (`"BLE"`) / `.androidWifi` (`"WIFI"`); otherwise `NOT SELECTED`, `""` |
 | `android` details | only when linked, from `vm.androidRemote`: `scanActive`, `autoEnabled`, `keepAwake`, `esp32ProgramText` (generic over the status fields), `lastHeardLabel` (nil if empty) |
 | `phone.batteryPct` / `charging` | `UIDevice.current.batteryLevel` (`-1` → nil, else `Int((level * 100).rounded())`), `batteryState == .charging \|\| .full` |
@@ -1163,7 +1175,7 @@ pager would have to be scrolled to its end to reach STATUS.
 
 | Section | Rows |
 |---|---|
-| ESP32 | state (`LINKED` highlight / `LINKING…` dim / `NOT LINKED` alarm / `NOT SELECTED` dim); battery `68%` in `WatchFont.hero` + `~9H 40M` (`AndroidRemoteStatus.runtimeText` rule: `~40M`, `~9H 40M`, `~99H+`), or `CHARGING · 4.18V`, or `4.05V` (alarm when ≤ 20 % or ≤ 3.55 V); program; `FW 1.2 · HELTEC V3 · UP 2H 14M`; `outdated` → `REFLASH — FIRMWARE TOO OLD` (alarm) |
+| ESP32 | state (`LINKED` highlight / `LINKING…` dim / `NOT LINKED` alarm / `NOT SELECTED` dim); battery `68%` in `WatchFont.hero` + `~9H 40M` (`AndroidRemoteStatus.runtimeText` rule: `~40M`, `~9H 40M`, `~99H+`), or `CHARGING · 4.18V`, or `4.05V` (alarm when ≤ 20 %, ≤ 3.55 V or `batteryLow`); `BATTERY LOW — CHARGE SOON` (alarm, small) under it while `batteryLow` and not charging; program; `FW 1.2 · HELTEC V3 · UP 2H 14M`; `outdated` → `REFLASH — FIRMWARE TOO OLD` (alarm) |
 | ANDROID | state + transport (`LINKED · BLE`); `SCAN ON · AUTO ON`; program; `HEARD <label>` |
 | IPHONE | `81%` + `CHG`; `SCAN ON · AUTO ARMED`, or `SCAN ON · PAUSED (IPHONE APP IN BACKGROUND)`, or `BLUETOOTH OFF`; `LAST HEARD <label> · 12S AGO` (age from `lastHeardAt`, ticking); TX status; programs |
 | footer | `UPDATED 12S AGO` (from `updatedAt`, ticking via `TimelineView(.periodic(from: .now, by: 1))`), `PULL TO REFRESH`, and a `REFRESH` button row (spinner text `REFRESHING…` while `refreshing`) |

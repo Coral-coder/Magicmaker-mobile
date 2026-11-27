@@ -8,7 +8,8 @@
 #   test_sync    (C++17)  every group of tools/sync/vectors.json + every transcript (README schema)
 #   cxx11_smoke  (gnu++11, the Arduino-ESP32 sketch standard) the headers compile C++11-clean with
 #                -Werror, and a phone/hub Session pair handshakes and syncs through the framer
-#   test_relay   (C++17)  CMD parsing (power_off, set_low_cutoff, ...) and the STATUS object
+#   test_relay   (C++17)  CMD parsing (power_off, set_low_cutoff, ...), the STATUS object and the
+#                         modem-sleep safety net (btsleep_guard.h)
 #
 # Build outputs go to build/ (git-ignored).
 
@@ -22,7 +23,7 @@ HERE := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 SYNC_DIR ?= $(abspath $(HERE)/../../../../tools/sync)
 BUILD := $(HERE)build
 HEADERS := $(wildcard $(HERE)../../sync_*.h)
-RELAY_HEADERS := $(HERE)../../relay_proto.h $(HERE)../../relay_engine.h
+RELAY_HEADERS := $(HERE)../../relay_proto.h $(HERE)../../relay_engine.h $(HERE)../../btsleep_guard.h
 
 .PHONY: all test relay clean
 

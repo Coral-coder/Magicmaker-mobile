@@ -1,6 +1,7 @@
 // Host test of the relay protocol (../../relay_proto.h): the power commands (power_off,
-// set_low_cutoff), the commands they sit beside, and the STATUS object of protocol 3 (key order,
-// the 508-byte limit, what is dropped first).
+// set_low_cutoff, set_radio_sleep), the commands they sit beside, the STATUS object of protocol 3
+// (key order, the 508-byte limit, what is dropped first), and the BLE modem-sleep safety net's
+// rules (../../btsleep_guard.h).
 //
 //   make -C firmware/esp32-transmitter/test/host relay     (this test only)
 //   make -C firmware/esp32-transmitter/test/host test      (every host test)
@@ -16,6 +17,7 @@
 
 #include "../../relay_proto.h"
 #include "../../relay_engine.h"
+#include "../../btsleep_guard.h"
 #include "json_mini.hpp"
 
 namespace {
@@ -464,10 +466,154 @@ void testStatusLimits() {
 
 }  // namespace
 
+// ---- the modem-sleep safety net (btsleep_guard.h) ----------------------------------------------
+const int kSpvnTmo = BTS_HS_HCI_BASE + 0x08;      // supervision timeout
+const int kNoEstablish = BTS_HS_HCI_BASE + 0x3E;  // failed to be established
+const int kRemoteUser = BTS_HS_HCI_BASE + 0x13;   // the phone ended it
+const int kLocal = BTS_HS_HCI_BASE + 0x16;        // the board ended it
+
+void testRadioSleepBoot() {
+  // A fresh board (nothing stored): on, and this boot counts until a phone links.
+  BtsBoot b = btsBootRule(BTS_CFG_ON, 0, false, true);
+  CHECK(b.cfg == BTS_CFG_ON && b.noLink == 1 && b.counted);
+  // Boots without a link add up: BTS_NOLINK_BOOTS of them still run modem sleep, the next does not.
+  uint8_t n = 0;
+  for (int boot = 1; boot <= BTS_NOLINK_BOOTS; boot++) {
+    b = btsBootRule(BTS_CFG_ON, n, false, true);
+    CHECK_MSG(b.cfg == BTS_CFG_ON && b.counted && b.noLink == boot, std::to_string(boot));
+    n = b.noLink;
+  }
+  b = btsBootRule(BTS_CFG_ON, n, false, true);
+  CHECK(b.cfg == BTS_CFG_OFF_AUTO && b.noLink == 0 && !b.counted);
+  b = btsBootRule(BTS_CFG_ON, 250, false, true);
+  CHECK(b.cfg == BTS_CFG_OFF_AUTO && b.noLink == 0);
+  // A crash with modem sleep on turns it off (and the count starts again).
+  for (uint8_t count : {0, 1, 2}) {
+    b = btsBootRule(BTS_CFG_ON, count, true, true);
+    CHECK(b.cfg == BTS_CFG_OFF_AUTO && b.noLink == 0 && !b.counted);
+  }
+  // Off stays off and nothing is counted or changed, crash or not.
+  for (uint8_t cfg : {(uint8_t)BTS_CFG_OFF_USER, (uint8_t)BTS_CFG_OFF_AUTO}) {
+    for (bool crashed : {false, true}) {
+      b = btsBootRule(cfg, 5, crashed, true);
+      CHECK(b.cfg == cfg && b.noLink == 5 && !b.counted);
+    }
+  }
+  // Anything else stored reads as on.
+  b = btsBootRule(7, 0, false, true);
+  CHECK(b.cfg == BTS_CFG_ON && b.noLink == 1 && b.counted);
+  b = btsBootRule(0xFF, 0, true, true);
+  CHECK(b.cfg == BTS_CFG_OFF_AUTO);
+  // An image without modem sleep (no wrap, MM_BT_MODEM_SLEEP 0): no rule applies, nothing counts.
+  for (bool crashed : {false, true}) {
+    b = btsBootRule(BTS_CFG_ON, 9, crashed, false);
+    CHECK(b.cfg == BTS_CFG_ON && b.noLink == 9 && !b.counted);
+  }
+}
+
+void testRadioSleepReasons() {
+  for (int hci : {0x08, 0x22, 0x28, 0x3D, 0x3E}) CHECK_MSG(btsRadioFailure(BTS_HS_HCI_BASE + hci), std::to_string(hci));
+  for (int hci : {0x00, 0x05, 0x13, 0x15, 0x16, 0x1A, 0x3B, 0xFF}) {
+    CHECK_MSG(!btsRadioFailure(BTS_HS_HCI_BASE + hci), std::to_string(hci));
+  }
+  // NimBLE's own codes (no HCI base) and other bases are never radio failures.
+  for (int v : {-1, 0, 0x08, 0x0D, 0x3E, BTS_HS_HCI_BASE, BTS_HS_HCI_BASE + 0x100 + 0x08}) {
+    CHECK_MSG(!btsRadioFailure(v), std::to_string(v));
+  }
+}
+
+// One link on `handle` from t, ending `ms` later with `reason`; t moves past it. True: tripped.
+bool guardLink(BtsGuard& g, uint16_t handle, uint32_t& t, uint32_t ms, int reason) {
+  g.onConnect(handle, t);
+  t += ms;
+  const bool trip = g.onDisconnect(handle, reason, t);
+  t += 1000;
+  return trip;
+}
+
+void testRadioSleepGuard() {
+  BtsGuard g;
+  g.reset();
+  uint32_t t = 1000;
+  // Short links ending in a radio failure: the BTS_TRIP_LINKS-th trips, then the count starts again.
+  for (int round = 0; round < 2; round++) {
+    for (int i = 1; i <= BTS_TRIP_LINKS; i++) {
+      const bool trip = guardLink(g, 1, t, 5000, i % 2 ? kSpvnTmo : kNoEstablish);
+      CHECK_MSG(trip == (i == BTS_TRIP_LINKS), std::to_string(round) + "/" + std::to_string(i));
+    }
+  }
+  CHECK(g.count == 0 && g.failures == 0);
+
+  // Just under BTS_SHORT_LINK_MS counts; a link that lasted that long clears the count.
+  g.reset();
+  for (int i = 0; i < BTS_TRIP_LINKS - 1; i++) CHECK(!guardLink(g, 1, t, BTS_SHORT_LINK_MS - 1, kSpvnTmo));
+  CHECK(g.failures == BTS_TRIP_LINKS - 1);
+  CHECK(!guardLink(g, 2, t, BTS_SHORT_LINK_MS, kSpvnTmo));  // the phone walked away after a good link
+  CHECK(g.failures == 0);
+  for (int i = 0; i < BTS_TRIP_LINKS - 1; i++) CHECK(!guardLink(g, 1, t, 100, kSpvnTmo));
+  CHECK(guardLink(g, 1, t, 100, kSpvnTmo));
+
+  // Clean ends (the phone or the board ended it) neither count nor clear.
+  g.reset();
+  for (int i = 0; i < BTS_TRIP_LINKS - 1; i++) CHECK(!guardLink(g, 3, t, 2000, kSpvnTmo));
+  for (int i = 0; i < 6; i++) CHECK(!guardLink(g, 3, t, 500, i % 2 ? kRemoteUser : kLocal));
+  CHECK(g.failures == BTS_TRIP_LINKS - 1);
+  CHECK(guardLink(g, 3, t, 2000, kSpvnTmo));
+
+  // The window runs from the first failure: one later than that starts a new count.
+  g.reset();
+  t = 50000;
+  const uint32_t first = t + 1000;  // the first failure: the end of the first link
+  for (int i = 0; i < BTS_TRIP_LINKS - 1; i++) CHECK(!guardLink(g, 4, t, 1000, kSpvnTmo));
+  t = first + BTS_TRIP_WINDOW_MS;  // ends 1 ms past the window
+  CHECK(!guardLink(g, 4, t, 1, kSpvnTmo));
+  CHECK(g.failures == 1);
+  for (int i = 0; i < BTS_TRIP_LINKS - 2; i++) CHECK(!guardLink(g, 4, t, 1000, kSpvnTmo));
+  CHECK(guardLink(g, 4, t, 1000, kSpvnTmo));
+  // ... and one that ends exactly at the window's end still counts.
+  g.reset();
+  t = 50000;
+  for (int i = 0; i < BTS_TRIP_LINKS - 1; i++) CHECK(!guardLink(g, 4, t, 1000, kSpvnTmo));
+  t = 50000 + 1000 + BTS_TRIP_WINDOW_MS - 10;
+  CHECK(guardLink(g, 4, t, 10, kSpvnTmo));
+
+  // Across the millis() wrap: links are still short, the window still holds.
+  g.reset();
+  t = 0xFFFFF000u;
+  for (int i = 1; i <= BTS_TRIP_LINKS; i++) CHECK(guardLink(g, 5, t, 10000, kSpvnTmo) == (i == BTS_TRIP_LINKS));
+
+  // A link the guard did not see begin counts as a long one: it clears.
+  g.reset();
+  for (int i = 0; i < BTS_TRIP_LINKS - 1; i++) CHECK(!guardLink(g, 6, t, 1000, kSpvnTmo));
+  CHECK(!g.onDisconnect(77, kSpvnTmo, t) && g.failures == 0);
+
+  // More links at once than tracked: the extra one is untracked (long, clears), the others count.
+  g.reset();
+  for (uint16_t h = 1; h <= BTS_MAX_TRACKED + 1; h++) g.onConnect(h, t);
+  CHECK(g.count == BTS_MAX_TRACKED);
+  t += 3000;
+  CHECK(!g.onDisconnect(BTS_MAX_TRACKED + 1, kSpvnTmo, t));
+  for (uint16_t h = 1; h <= BTS_MAX_TRACKED; h++) {
+    CHECK(g.onDisconnect(h, kSpvnTmo, t) == (h == BTS_TRIP_LINKS));
+  }
+  CHECK(g.count == 0);
+
+  // A handle seen again without its end starts afresh (no second entry).
+  g.reset();
+  g.onConnect(8, t);
+  g.onConnect(8, t + BTS_SHORT_LINK_MS);
+  CHECK(g.count == 1);
+  t += BTS_SHORT_LINK_MS + 1000;
+  CHECK(!g.onDisconnect(8, kSpvnTmo, t) && g.failures == 1 && g.count == 0);
+}
+
 int main() {
   testPowerOff();
   testSetCutoff();
   testSetRadioSleep();
+  testRadioSleepBoot();
+  testRadioSleepReasons();
+  testRadioSleepGuard();
   testNeighbours();
   testStatusExample();
   testStatusKeys();

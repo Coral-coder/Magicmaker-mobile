@@ -35,6 +35,10 @@ protocol has to change — the app already knows how to drive this service.
 - **Low-battery cutoff** (firmware 1.5, Heltec V3): the board turns itself off at **3.30 V** (or
   3.20 / 3.40 V, or never) so the cell is not run flat, and warns before that (`LOW`). On by
   default, also on boards updated from 1.4. See **Low-battery cutoff** below.
+- **Radio sleep** (firmware 1.5, Heltec V3 release images): Bluetooth modem sleep saves an
+  estimated 3–10 mA. It is a setting, **RADIO SLEEP** in the iPhone app (on by default), and the
+  board turns it off by itself if it looks like the cause of a crash or of a radio that cannot
+  hold a link. A change restarts the board. See **Radio sleep setting** below.
 
 ## Hardware
 
@@ -91,14 +95,17 @@ into `.tools/venv` on first run if no esptool is installed.
 ## Updating
 
 CI (`.github/workflows/esp32-firmware.yml`) builds every firmware change and puts the
-latest images in four places:
+latest images in three places:
 
 | Where | What | Used for |
 |---|---|---|
 | The iPhone app | app images, bundled from `ios/MagicMaker/Firmware/` | Bluetooth update (firmware 1.2+) |
-| [Web flasher](https://coral-coder.github.io/Magicmaker-mobile/flasher/) | merged images, from `web/flasher/` | flashing from Chrome / Edge |
 | [`esp32-firmware` release](https://github.com/Coral-coder/Magicmaker-mobile/releases/tag/esp32-firmware) | merged + app images, `firmware.json`, `MagicMaker-Flasher-Windows.zip` | downloads |
 | This folder | merged images | `flash.ps1` / `flash.sh` |
+
+CI also copies the merged images into `web/flasher/`, but that browser flasher is shelved and not
+published (GitHub Pages is not enabled), so it is not a way to flash the board. Use `flash.bat` /
+`flash.ps1` / `flash.sh` by cable, or the iPhone app over Bluetooth.
 
 The **merged** image (`magicmaker-<board>.bin`) is bootloader + partition table + app, flashed
 at `0x0`. The **app** image (`magicmaker-<board>-app.bin`) is the same file from `0x10000` on,
@@ -122,13 +129,6 @@ cable):
    board keeps running its current firmware.
 
 A board on firmware older than 1.2 has no Bluetooth update: flash it once by cable (below).
-
-**From the browser:** [coral-coder.github.io/Magicmaker-mobile/flasher](https://coral-coder.github.io/Magicmaker-mobile/flasher/).
-Chrome or Edge on a computer, or Chrome on Android with a USB OTG adapter (Safari and iPhone
-browsers can't reach a serial port). Click **Connect**, pick the port, then **Install**: the page
-asks the chip what it is and writes the matching merged image (**ESP32 → classic**,
-**ESP32-S3 → Heltec V3**), erasing the board first. Same boot-button and driver tips as
-**Won't connect?** above. Built with ESP Web Tools; deployed by `.github/workflows/pages.yml`.
 
 **Windows, one click:** download
 [`MagicMaker-Flasher-Windows.zip`](https://github.com/Coral-coder/Magicmaker-mobile/releases/download/esp32-firmware/MagicMaker-Flasher-Windows.zip),
@@ -171,8 +171,9 @@ No secrets, no Wi-Fi, no config. It just works once flashed.
 > Heltec V3: `board = heltec_wifi_lora_32_V3`, add `olikraus/U8g2@2.35.30` to `lib_deps`, and
 > `build_flags = -Wl,--wrap=esp_bt_controller_init` for BLE modem sleep (see **Power**).
 >
-> An Arduino IDE build has no modem sleep (the IDE has no per-sketch linker flags); everything
-> else is the same.
+> An Arduino IDE build has no modem sleep and so no RADIO SLEEP setting (the IDE has no
+> per-sketch linker flags; `set_radio_sleep` answers `"unsupported"`); everything else is the
+> same.
 
 ## Use it with the app
 
@@ -310,8 +311,10 @@ current). Screen code: `oled_ui.h` (power, button), `oled_pages.h` (layout). Bat
 - **Charge current** is set by the board's charger at ~500 mA, i.e. **1.25 C for a 400 mAh cell**
   (hardware, not firmware): use a cell rated for it.
 - **Flash writes:** the capacity and the cutoff level (NVS namespace `mm`, keys `batMah` and
-  `lowCut`) are the only things the firmware ever writes to flash: each 3 s after its last change,
-  only if it changed, and at once by a power-off.
+  `lowCut`), each 3 s after its last change, only if it changed, and at once by a power-off; and
+  in images with modem sleep the RADIO SLEEP setting (keys `radioSleep` and `rsNoLink`, one byte
+  each, only when they change: with modem sleep on that is twice per boot, see **Radio sleep
+  setting**). Nothing else is written to flash.
 
 **Low-battery cutoff** (firmware 1.5)
 
@@ -346,6 +349,48 @@ if it has one. So 1.5 turns the board off before the cell runs flat:
 - After a cutoff the cell holds ~20–40 mAh, enough for weeks at the off current, but
   **recharge it within a month**, then press RST.
 
+**Radio sleep setting** (firmware 1.5, Heltec V3 images linked with the modem-sleep wrap)
+
+BLE modem sleep (see **Power** below) is on by default, but it is new and unmeasured on this
+board, and a board whose radio misbehaved with it might not hold a link long enough to take the
+update that fixes it. So it is a setting the board keeps (NVS `mm`/`radioSleep`: `1` on, also
+when missing; `0` off by the user; `2` off by the board), and the board turns it off by itself
+when it looks like the cause (`btsleep.h`; the rules are in `btsleep_guard.h`, host-tested).
+
+- **In the app:** SETTINGS → BOARD POWER → **RADIO SLEEP** `ON` · `OFF` (both themes). The row
+  shows once the board has reported the setting on this link. Tapping the other chip asks first
+  (**Turn radio sleep off?** "The board restarts to apply this. A running loop on the board
+  stops."). The note under it says `Saves an estimated 3–10 mA (unmeasured).`, `Off.`, or, in
+  amber, `Turned off automatically after Bluetooth trouble. Tap ON to try again.`
+- **It applies at boot.** When the choice differs from what the radio runs now, the board
+  restarts about **1 s** later (after the app's status read): it disconnects the phone (reason
+  0x13), saves a capacity or cutoff picked in the last seconds and restarts. It boots idle like
+  after an update (keep-awake and loops off, screen dark, LED blinking once a second, no boot
+  check), and the app relinks by itself; meanwhile the app shows `Restarting the board…` and the
+  LINK hint `The ESP32 is restarting — linking again…`. A choice the radio already runs needs no
+  restart and cancels a pending one. A restart waits while a Bluetooth update is being received
+  or is about to restart the board itself.
+- **The board turns it off** (stored as `2`, only while modem sleep is on) when:
+  - the previous boot ended in a **crash** (panic or watchdog reset): this boot starts without it;
+  - **3 boots in a row** with modem sleep on never had a phone link (the count starts again at
+    the first link, or at a RADIO SLEEP change): the 4th boot starts without it. Turning the
+    board on three times without the iPhone linking counts too. On a board that never shows up
+    in the app, press RST three times, a few seconds apart, and the next boot starts without it;
+  - the Bluetooth controller **refused to start** with it: it is started without, at once;
+  - the NimBLE host **lost the controller** (an HCI command timed out, a controller hardware
+    error), or **4 links in a row** within **30 min** ended in a radio failure (supervision
+    timeout, LL response timeout, a missed instant, MIC failure, a link that failed to be set
+    up) less than **2 min** after they began; a link that lasted 2 min or more clears the count.
+    Then it is stored at once and the board restarts as soon as no phone is linked and nothing
+    runs (keep-awake, a loop or a send), otherwise at the next boot.
+- **To turn it back on:** tap **ON** (the board restarts). If the radio really is the problem, the
+  same rules turn it off again.
+- **Wire:** `set_radio_sleep` (see **Protocol reference**); STATUS `"btSleep":true` while modem
+  sleep runs, `"radioSleep":0` / `2` while the setting is off. Between a change and its restart
+  both can show. Both are diagnostics: a STATUS at the 508-byte limit can leave them out.
+- Images without the wrap (Arduino IDE builds) or built with `-DMM_BT_MODEM_SLEEP=0` have no
+  setting: they never read or write these keys, and `set_radio_sleep` answers `"unsupported"`.
+
 ## Power (backpack use)
 
 The board sits idle between transmissions and does what it can to save battery. Each measure,
@@ -378,10 +423,15 @@ honestly:
   `build_flags` below) have it, STATUS says `"btSleep":true`; a plain Arduino IDE build does not
   (it runs exactly as 1.4 did). The controller wakes itself 2.5 ms before each radio event, so
   connection parameters, beacon timing and send latency are unchanged. `-DMM_BT_MODEM_SLEEP=0`
-  keeps the wrap but leaves sleep off.
+  keeps the wrap but leaves sleep off (and removes the setting). The app's **RADIO SLEEP**
+  setting (`set_radio_sleep`, default on) turns it off and on (the board restarts to apply it),
+  and a safety net turns it off by itself if it looks like the cause of a crash or of link
+  trouble (STATUS `"radioSleep":2`; tap ON in the app to try again): see **Radio sleep
+  setting**.
 - **Off and cutoff:** a real off state (~15–25 µA, see **Turning it off and on**) and the
   low-battery cutoff, so a forgotten board neither drains for days nor runs the cell flat.
-- **No Wi-Fi, nothing else written to flash** (only a battery capacity or cutoff level you pick).
+- **No Wi-Fi, nothing else written to flash** (only a battery capacity, cutoff level or radio
+  sleep setting you pick, and the radio-sleep safety net's boot count).
 
 What it can't do in this core (Arduino-ESP32 2.0.17):
 
@@ -422,6 +472,7 @@ lower beacon power in the app (shorter range), and turning the board off when it
 | `SCREEN_ON_MS` | Heltec V3: how long the screen stays lit after the last PRG press | 10 s |
 | `BATTERY_MAH` | Heltec V3: LiPo capacity until one is picked on the screen (STATUS `batMah`) | 400 mAh |
 | `POWER_OFF_NOTICE_MS` / `POWER_OFF_GRACE_MS` | power-off: the off frame on a lit screen / the app's STATUS read, before the disconnect | 1000 / 750 ms |
+| `RESTART_GRACE_MS` | RADIO SLEEP: the app's STATUS read, before the restart | 1000 ms |
 
 Elsewhere:
 
@@ -433,7 +484,9 @@ Elsewhere:
 | `CUT_DEFAULT_MV` | `battery_model.h` | cutoff level when none was picked | 3300 mV |
 | `MM_USB_SENSE` | build flag (`board.h`) | the CP2102 USB hint; `0` if a board reads USB on battery | 1 |
 | `MM_UART_RELEASE` | build flag (`board.h`) | release the UART pads after boot; `0` for serial logs | 1 |
-| `MM_BT_MODEM_SLEEP` | build flag (`btsleep.h`) | BLE modem sleep in wrap-linked builds; `0` to leave it off | 1 |
+| `MM_BT_MODEM_SLEEP` | build flag (`btsleep.h`) | BLE modem sleep in wrap-linked builds; `0` to leave it off (no RADIO SLEEP setting then) | 1 |
+| `BTS_NOLINK_BOOTS` | `btsleep_guard.h` | RADIO SLEEP guard: boots in a row with no phone link before the next starts without modem sleep | 3 |
+| `BTS_TRIP_LINKS` / `BTS_SHORT_LINK_MS` / `BTS_TRIP_WINDOW_MS` | `btsleep_guard.h` | RADIO SLEEP guard: this many links ending in a radio failure, each this soon after it began, within this window | 4 / 2 min / 30 min |
 | `MM_DEBUG_TIMING` | build flag (`board.h`) | STATUS `advMaxUs`: the longest advertising restart (bench) | 0 |
 
 The wire clamps (TX-characteristic duration 60–12000 ms, `raw_burst` 60–10000 ms, loop interval
@@ -489,15 +542,17 @@ STATUS read: `ok`, plus `error` when it failed.
 | library, auto-rule, scan-filter, live-feed edits, `pairing` | — | `"unsupported"` |
 | `power_off` (`poweroff`, `shutdown`) | `confirm` must be `true` | firmware 1.5, both boards: the power-off sequence (STATUS still readable for ~0.75 s, 1 s with the screen lit, then a disconnect with reason 0x15 and deep sleep until RST / EN); `"confirm required"` without it, `"busy"` while a Bluetooth update is being received |
 | `set_low_cutoff` (`low_cutoff`, `set_cutoff`) | `mv` | firmware 1.5, Heltec V3: the cutoff level. `0` = off, `3200` / `3300` / `3400`; 3000–3600 snaps (< 3250 → 3200, < 3350 → 3300, else 3400); anything else (missing, not a number, out of range) → `"bad mv"`; a classic ESP32 → `"unsupported"`. Kept in NVS |
+| `set_radio_sleep` (`radio_sleep`, `set_bt_sleep`) | `enabled` (a bool, required) | firmware 1.5, Heltec V3 images linked with the modem-sleep wrap: BLE modem sleep on / off, kept in NVS and applied at boot, so when it differs from what the radio runs now the board restarts ~1 s later (after the app's STATUS read, and not while a Bluetooth update runs; the phone sees reason 0x13 and relinks; a running program stops); a choice the radio already runs restarts nothing and cancels a pending restart. `"bad enabled"` without a bool, `"busy"` while a Bluetooth update is being received, `"unsupported"` on a classic ESP32 or an image without the wrap |
 | anything else | — | `"unknown action"` |
 
 Errors: `bad json`, `bad hex`, `packet too long`, `no packet`, `bad token`, `unsupported`,
-`unknown action`, `busy` (command queue full, or `power_off` during an update), `confirm
-required`, `bad mv`, `powering off` (every command once a power-off began). Programs: at most one runs; turning one on turns
+`unknown action`, `busy` (command queue full, or `power_off` / `set_radio_sleep` during an
+update), `confirm required`, `bad mv`, `bad enabled`, `powering off` (every command once a
+power-off began). Programs: at most one runs; turning one on turns
 the others off (a loop burst on air finishes first; a keep-awake stream stops at once). A user
 send or MBLE tap preempts anything; a preempted loop burst re-arms one interval after the job
-that replaced it. Disconnects change nothing; nothing but the cutoff level (and the capacity
-picked on the screen) is stored in flash.
+that replaced it. Disconnects change nothing; nothing but the cutoff level, the radio-sleep
+setting (and the capacity picked on the screen) is stored in flash.
 
 **STATUS** (one object, ≤ 508 bytes, keys in this order; protocol 3 from firmware 1.5):
 
@@ -520,7 +575,8 @@ picked on the screen) is stored in flash.
 | `txLoopHex`, `txLoopLabel` | TX LOOP runs | its packet and label |
 | `starlightLoopHex`, `starlightLoopLabel` | WAND LOOP runs | same |
 | `conn` | 1.5, a BLE read (diagnostic) | the reading phone's link: `[interval in 1.25 ms units, peripheral latency, supervision timeout in 10 ms units]` |
-| `btSleep` | 1.5, when BLE modem sleep is on (diagnostic) | `true` |
+| `btSleep` | 1.5, when BLE modem sleep runs this boot (diagnostic) | `true` |
+| `radioSleep` | 1.5, images with the setting, only while it is off (diagnostic) | `0` = turned off from an app, `2` = turned off by the board (see **Radio sleep setting**) |
 | `advMaxUs` | `MM_DEBUG_TIMING` builds only (diagnostic) | the longest advertising restart since boot, µs |
 
 When the object would exceed 508 bytes the diagnostics are left out first, then the label, then

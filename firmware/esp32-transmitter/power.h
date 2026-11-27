@@ -25,7 +25,7 @@
 // if a board reads HIGH on battery alone.
 //
 // Settings: the capacity (hold PRG on the DEVICE page) and the cutoff level are kept in NVS
-// (namespace "mm": "batMah", "lowCut"). Those are the only flash writes in this firmware: each
+// (namespace "mm": "batMah", "lowCut"; btsleep.h keeps "radioSleep" / "rsNoLink" there too). Each
 // key is written BAT_CAP_SAVE_DELAY_MS after its last change, only if it changed, and at once by
 // a power-off.
 #pragma once

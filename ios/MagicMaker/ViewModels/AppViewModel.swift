@@ -112,6 +112,9 @@ final class AppViewModel: ObservableObject {
     /// The board took a RADIO SLEEP change and restarts to apply it. Until it links again (or 15 s
     /// pass) the link loss is not read as the board being off or its battery low.
     @Published private(set) var esp32RadioSleepRestarting = false
+    /// The board's last status before that restart: the polls in the restart window clear
+    /// androidRemote, and a board that does not link again may have turned off at a low battery.
+    private var esp32RadioSleepRestartLast: AndroidRemoteStatus?
     private var esp32RadioSleepRestartTimeout: DispatchWorkItem?
 
     /// Opt-in "Keep running in background" (SETTINGS). Device-only: capitalised key, kept out of library exports.
@@ -1078,9 +1081,10 @@ final class AppViewModel: ObservableObject {
         }
         statusMessage = "ESP32 radio sleep " + state + " — the board restarts to apply it"
         esp32RadioSleepRestarting = true
+        esp32RadioSleepRestartLast = androidRemote
         esp32RadioSleepRestartTimeout?.cancel()
         let timeout = DispatchWorkItem { [weak self] in
-            self?.endEsp32RadioSleepRestart()
+            self?.esp32RadioSleepRestartTimedOut()
         }
         esp32RadioSleepRestartTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + Esp32PowerCopy.radioSleepRestartSeconds, execute: timeout)
@@ -1096,6 +1100,9 @@ final class AppViewModel: ObservableObject {
         if let off = s.radioSleep {
             setting = off
         } else if s.btModemSleep {
+            // `radioSleep` follows `btSleep` and is dropped first at the size limit (a loop with a
+            // long packet): with modem sleep still running, an OFF seen on this link stays.
+            if esp32RadioSleepActive, let last = esp32RadioSleep, last != Esp32PowerCopy.radioSleepOn { return }
             setting = Esp32PowerCopy.radioSleepOn
         } else {
             return
@@ -1115,7 +1122,16 @@ final class AppViewModel: ObservableObject {
     private func endEsp32RadioSleepRestart() {
         esp32RadioSleepRestartTimeout?.cancel()
         esp32RadioSleepRestartTimeout = nil
+        esp32RadioSleepRestartLast = nil
         if esp32RadioSleepRestarting { esp32RadioSleepRestarting = false }
+    }
+
+    /// The board has not linked again in time: its link loss is read as any other now, from its
+    /// last status before the restart (a low battery there most likely turned it off).
+    private func esp32RadioSleepRestartTimedOut() {
+        let last: AndroidRemoteStatus? = esp32RadioSleepRestartLast
+        endEsp32RadioSleepRestart()
+        if !relayGattReady { noteEsp32LinkLost(last) }
     }
 
     /// POWER OFF (asked to confirm first): the board answers, then disconnects and goes into deep
@@ -1141,6 +1157,8 @@ final class AppViewModel: ObservableObject {
                 }
                 if json["ok"] as? Bool == true {
                     self.esp32PoweredOff = true
+                    // Taken in the second before a RADIO SLEEP restart: the board turns off instead.
+                    self.endEsp32RadioSleepRestart()
                     self.statusMessage = "ESP32 powering off — press RST on the board to turn it on"
                     return
                 }
@@ -1150,6 +1168,7 @@ final class AppViewModel: ObservableObject {
                     self.statusMessage = "ESP32 is receiving a firmware update — power it off when it is done"
                 case "powering off":
                     self.esp32PoweredOff = true
+                    self.endEsp32RadioSleepRestart()
                     self.statusMessage = "ESP32 is already powering off"
                 default:
                     self.statusMessage = "ESP32 power off failed: " + error
@@ -1160,10 +1179,11 @@ final class AppViewModel: ObservableObject {
 
     /// The ESP32's link went down. With a low battery in its last status the board has most likely
     /// turned itself off at its cutoff (one told to power off from here, or restarting after a
-    /// firmware update or for RADIO SLEEP, is not reported as that).
-    private func noteEsp32LinkLost() {
+    /// firmware update or for RADIO SLEEP, is not reported as that). `saved`: the last status, when
+    /// androidRemote no longer holds it.
+    private func noteEsp32LinkLost(_ saved: AndroidRemoteStatus? = nil) {
         guard relayBackend == .esp32, !esp32PoweredOff, !firmware.isBusy, !esp32RadioSleepRestarting,
-              let last = androidRemote, last.batteryLow, !last.charging else { return }
+              let last = saved ?? androidRemote, last.batteryLow, !last.charging else { return }
         statusMessage = "ESP32 off: battery low — charge it, then press RST"
     }
 
@@ -1731,7 +1751,7 @@ enum Esp32PowerCopy {
     static let radioSleepMessage: String = "The board restarts to apply this. A running loop on the board stops."
     static let radioSleepActiveNote: String = "Saves an estimated 3–10 mA (unmeasured)."
     static let radioSleepOffNote: String = "Off."
-    static let radioSleepOffByBoardNote: String = "Turned off automatically after link trouble or a crash. Tap ON to try again."
+    static let radioSleepOffByBoardNote: String = "Turned off automatically after Bluetooth trouble. Tap ON to try again."
     static let radioSleepRestartingNote: String = "Restarting the board…"
     /// How long the restart note (and the link hint that goes with it) waits for the board to link again.
     static let radioSleepRestartSeconds: Double = 15

@@ -43,7 +43,6 @@ RELAY_PROTO = 3
 DOC_TITLE = "MagicMaker ESP32 Transmitter — User Guide"
 ZIP_URL = ("https://github.com/Coral-coder/Magicmaker-mobile/releases/download/esp32-firmware/"
            "MagicMaker-Flasher-Windows.zip")
-WEB_FLASHER = "https://coral-coder.github.io/Magicmaker-mobile/flasher/"
 RELEASE_URL = "https://github.com/Coral-coder/Magicmaker-mobile/releases/tag/esp32-firmware"
 
 # --------------------------------------------------------------------------------------------
@@ -1260,7 +1259,7 @@ def build_story():
          f"{mb('flash.bat')}. It finds the board, works out which one it is and writes the "
          "right firmware. The first run downloads a flashing tool, so it needs internet "
          f"once. It ends with {mb('Done. … is now advertising as MM_ESP')}. "
-         "Mac, Linux, browser and over-the-air options are in section 9.",
+         "Mac, Linux and over-the-air options are in section 9.",
          P(link(ZIP_URL, 7.3, "/download/"), "small")],
         "<b>Power it.</b> USB or the battery. It always starts idle: nothing on air, no "
         "programs running. The LED gives a short blink <b>once a second</b>: it is waiting "
@@ -1551,7 +1550,7 @@ def build_story():
         (screen_off("boot_low"), "After RST with a low battery."),
     ], scale=1.0))
     S.append(callout("warn", "Do not hold PRG while you press RST", [
-        "That starts the chip's flashing (download) mode (9.5): the board looks dead but keeps "
+        "That starts the chip's flashing (download) mode (9.4): the board looks dead but keeps "
         "draining the battery. Tap RST again without touching PRG.",
     ]))
 
@@ -1700,7 +1699,9 @@ def build_story():
         "between its radio events instead of idling, an estimated 3–10 mA (not yet measured). "
         "The release images have it (they are built with a special linker flag); a build from "
         f"the Arduino IDE does not. The iPhone's LINK row (6.3) ends in {mb('MODEM SLEEP')} when "
-        "it is on.",
+        "it is on. It is a setting, <b>RADIO SLEEP</b> in BOARD POWER (6.9), on unless you or "
+        "the board turned it off: the board turns it off by itself if it looks like the cause "
+        "of a crash or of link trouble.",
         "<b>A real off state</b> (4.7) and <b>the low-battery cutoff</b> (5.7), so a forgotten "
         "board neither drains for days nor runs the cell flat.",
     ]))
@@ -1772,8 +1773,8 @@ def build_story():
         f"turns off. The iPhone says {mb('ESP32 off: battery low — charge it, then press RST')}.",
         "<b>To start again:</b> charge it, then press RST. Below the cutoff + 0.10 V the board "
         f"refuses to start ({mb('TOO LOW TO START')}, 4.7). That check runs after RST and "
-        "power-on, not after the restart that ends a Bluetooth update or a crash, and not with "
-        "the cutoff OFF.",
+        "power-on, not after the restart that ends a Bluetooth update or applies a RADIO SLEEP "
+        "change (6.9), not after a crash, and not with the cutoff OFF.",
     ]))
     S.append(KeepTogether([screen_row([
         (screen_status(bat=LOW_BAT, low=True), "The warning on STATUS."),
@@ -1848,7 +1849,8 @@ def build_story():
                    f"or {mc('Not connected — tap Retry below')}"],
         ["HINT", f"Only when there is one: {mc('Power on the ESP32 — tap Retry BLE.')}, "
                  f"{mc('Finishing ESP32 link…')}, {mc('The ESP32 is off — press RST on the board, then tap Retry BLE.')} "
-                 f"(after POWER OFF from this iPhone), or {mc('Reflash the ESP32 — its firmware has no chip-side loops.')}"],
+                 f"(after POWER OFF from this iPhone), {mc('The ESP32 is restarting — linking again…')} "
+                 f"(after a RADIO SLEEP change, 6.9), or {mc('Reflash the ESP32 — its firmware has no chip-side loops.')}"],
         ["STATUS", "The transmit engine's status, for example "
                    f"{mc('No relay linked — nothing sent')}"],
         ["EVENT", "The last app message (see 6.4)"],
@@ -1862,7 +1864,7 @@ def build_story():
         ["LINK", f"Firmware 1.5: the Bluetooth link this iPhone actually has with the board, "
                  f"for example {mc('30 MS · LAT 2 · TO 4 S · MODEM SLEEP')}: connection "
                  "interval, latency, timeout, and MODEM SLEEP when the board's Bluetooth modem "
-                 "sleep is on (5.5)."],
+                 "sleep is on (5.5, 6.9)."],
     ], [0.15, 0.85], first_bold=True))
     S.append(P("The ESP32, RADIO and BATTERY rows need firmware 1.2 or newer, LINK 1.5. Buttons: "
                "<b>Refresh</b> reads the status again; <b>Retry BLE</b> restarts the search. "
@@ -1969,6 +1971,12 @@ def build_story():
                                "(VFD theme: LOW CUTOFF). A tap sets the board's level (5.7) at "
                                "once. Only on a Heltec, which reports its level; dimmed and "
                                "ignoring taps while the board is not linked."],
+        ["RADIO SLEEP", f"Chips {mc('ON')} {mc('OFF')}: the board's Bluetooth modem sleep "
+                        "(5.5), with a note under them. Only on a Heltec with the release "
+                        "firmware, once the board has reported it after linking. The chip that is "
+                        "not lit asks first, because the board restarts to apply it (below). "
+                        "Dimmed while not linked, during a firmware update or while the board "
+                        "restarts."],
         ["POWER OFF", "Red (VFD: alarm colour), only while linked. Asks first: "
                       "<b>Power off the ESP32?</b> with <b>POWER OFF</b> / <b>CANCEL</b>. Works "
                       "on both boards."],
@@ -2000,6 +2008,69 @@ def build_story():
                "it on the board's LOW BATTERY page (4.6) shows up here at the next status "
                "read.", "small"))
 
+    S.append(H3("RADIO SLEEP"))
+    S.append(P("Bluetooth modem sleep saves an estimated 3–10 mA (not yet measured) and is "
+               "<b>on</b> unless you or the board turned it off. It is new on this board, so it "
+               "is a setting: you can turn it off here, and the board turns it off by itself "
+               "when it looks like the cause of trouble. The board keeps the setting in its own "
+               "memory, across restarts, power-offs and updates; the iPhone never pushes it."))
+    S.append(steps([
+        "Tap the chip that is not lit. The iPhone asks <b>Turn radio sleep off?</b> (or "
+        "<b>on?</b>): “The board restarts to apply this. A running loop on the board stops.” "
+        "Tap <b>TURN OFF</b> (<b>TURN ON</b>), or <b>CANCEL</b>.",
+        "The board uses the setting only when it starts, so about <b>1 s</b> later it "
+        "disconnects and restarts. The screen stays dark; the LED blinks once a second until "
+        "the iPhone links again by itself, a few seconds later. Meanwhile the chips are dimmed "
+        f"with {mb('Restarting the board…')}, and LINK shows "
+        f"{mb('The ESP32 is restarting — linking again…')}",
+        "Like after any restart the board is idle: turn KEEP BAND AWAKE or a loop back on if "
+        "you want them. A restart waits while a Bluetooth update is being received.",
+    ], TEAL))
+    S.append(table(["Note under the chips", "Means"], [
+        [mc("Saves an estimated 3–10 mA (unmeasured)."), "ON, and modem sleep runs."],
+        [mc("Off."), "You turned it off."],
+        [mc("Turned off automatically after Bluetooth trouble. Tap ON to try again."),
+         "The board turned it off itself (below). Amber (VFD: highlight)."],
+        [mc("Restarting the board…"), "The board is restarting to apply your change."],
+    ], [0.55, 0.45]))
+    S.append(KeepTogether([
+        P("<b>What turns it off by itself.</b> Only while it is on:"),
+        *bullets([
+            "<b>A crash:</b> the board restarted after a crash (a panic or a watchdog). That "
+            "start runs without radio sleep.",
+            "<b>Three starts in a row with no phone linking:</b> the fourth start is without "
+            "it. That also happens if you turn the board on three times while the iPhone is "
+            "away. A board that never shows up in the app: press RST three times, a few seconds "
+            "apart, and the next start is without radio sleep.",
+            "<b>The Bluetooth radio refused to start with it:</b> it starts without, at once.",
+            "<b>The radio stopped answering, or the link kept dropping:</b> four links in a row, "
+            "within 30 minutes, that dropped on the radio less than 2 minutes after they began "
+            "(a link that lasts 2 minutes clears the count). The board restarts as soon as no "
+            "phone is linked and nothing runs (keep-awake, a loop, a send), or else at its next "
+            "start.",
+        ]),
+    ]))
+    S.append(P("<b>To turn it back on</b>, tap <b>ON</b>; the board restarts. If the radio "
+               "really is the cause, the same rules turn it off again: then leave it OFF, which "
+               "costs the estimated 3–10 mA. If the board switched it off during this run "
+               "and has not restarted yet, ON needs no restart (modem sleep still runs) and "
+               "cancels the pending one."))
+    S.append(table(["RADIO SLEEP message", "Means"], [
+        [mc("ESP32 radio sleep OFF — the board restarts to apply it") + " (or ON)",
+         "The board took it and restarts."],
+        [mc("ESP32 radio sleep ON") + " / " + mc("ESP32 radio sleep OFF"),
+         "The board already runs that: nothing restarts."],
+        [mc("ESP32 not linked — link it to change its radio sleep"),
+         "Link first. A choice made while not linked is not kept for later."],
+        [mc("ESP32 is receiving a firmware update — change its radio sleep when it is done"),
+         "Wait for the update to finish."],
+        [mc("ESP32 is restarting — change its radio sleep once it has linked again"),
+         "A restart for the last change is still running."],
+        [mc("ESP32 has no radio sleep setting"),
+         "A classic ESP32, or firmware built without modem sleep: the row goes away."],
+        [mc("ESP32 radio sleep not sent — try again"), "The command did not get through."],
+    ], [0.55, 0.45]))
+
     # ======================================================================================
     section("7", "Chip-side programs",
             "Three programs run on the board itself: KEEP AWAKE, TX LOOP and WAND LOOP. Only "
@@ -2018,8 +2089,9 @@ def build_story():
         "<b>They survive the phone:</b> disconnect, lock the phone or close the app and the "
         "board keeps going. When the phone relinks, the app reads back what is running and "
         "sets its switches to match.",
-        "<b>They do not survive a restart.</b> RST, a power loss, a power-off or a firmware "
-        "update stops them: the board always boots idle. Turn them on again from the app.",
+        "<b>They do not survive a restart.</b> RST, a power loss, a power-off, a firmware "
+        "update or a RADIO SLEEP change (6.9) stops them: the board always boots idle. Turn "
+        "them on again from the app.",
         "<b>To stop one:</b> turn its switch off in the app. To stop everything at once with "
         "no phone, tap RST.",
     ], "callout_b")))
@@ -2130,13 +2202,10 @@ def build_story():
          "Normal updates. No cable."],
         ["Windows one-click zip", "Windows PC, USB data cable, internet once",
          "First flash, recovery"],
-        ["Web flasher", "Chrome or Edge on a computer, or Chrome on Android with USB OTG. "
-                        "GitHub Pages must be enabled.", "First flash without installing anything"],
         [f"{mc('flash.sh')}", "macOS or Linux with python3", "First flash, recovery"],
     ], [0.24, 0.46, 0.30], first_bold=True))
-    S.append(P("An iPhone cannot flash by cable (no browser on iPhone or iPad can open a USB "
-               "serial port), so the very first flash has to come from a computer or an "
-               "Android phone."))
+    S.append(P("An iPhone cannot flash the board by cable, so the very first flash (and a "
+               "board on firmware older than 1.2) has to come from a computer."))
 
     S.append(H2("9.1", "Over the air from the iPhone"))
     S.append(steps([
@@ -2157,7 +2226,8 @@ def build_story():
         f"Done: {mb('Updated — the HELTEC V3 now runs v' + FW_VERSION + '.')} The board "
         "restarted, so it is idle: turn keep-awake or loops back on if you want them.",
     ]))
-    S.append(P("An update keeps the battery capacity and the cutoff level you picked. A board "
+    S.append(P("An update keeps the battery capacity, the cutoff level and the RADIO SLEEP "
+               "setting you picked. A board "
                f"updated from 1.4 to {FW_VERSION} starts with the low-battery cutoff on at "
                f"{vt(CUT_MV)} (5.7); switch it OFF on the LOW BATTERY page or in BOARD POWER "
                "if you do not want it."))
@@ -2170,8 +2240,9 @@ def build_story():
         "current firmware.",
         f"<b>CANCEL</b> works until the last byte. After sending has started it shows "
         f"{mb('Update cancelled — the board keeps its current firmware.')}",
-        "<b>Turning off waits for the update:</b> the POWER page and the app's POWER OFF are "
-        "refused while an image is being received. If the low-battery cutoff turns the board "
+        "<b>Turning off waits for the update:</b> the POWER page, the app's POWER OFF and a "
+        "RADIO SLEEP change are refused while an image is being received. If the low-battery "
+        "cutoff turns the board "
         "off mid-update, it keeps its current firmware. A finished image that was waiting to "
         "restart starts at the next RST instead.",
     ], "callout_b")))
@@ -2183,7 +2254,7 @@ def build_story():
          "The app waited 180 s for the press. Tap UPDATE and press PRG (BOOT) when asked."],
         [mc("No HELTEC V3 firmware in the app — tap CHECK WEB."), "Tap CHECK WEB."],
         [mc("FIRMWARE BEFORE 1.2") + " / " + mc("This board's firmware has no Bluetooth updates…"),
-         "Flash 1.2 or newer once by cable (9.2–9.4). Later updates can come from the iPhone."],
+         "Flash 1.2 or newer once by cable (9.2, 9.3). Later updates can come from the iPhone."],
         [mc("The Bluetooth link dropped during the update — the board drops the partial image and keeps its current firmware…"),
          "Move closer, link again, retry."],
         [mc("The board stopped answering during the update — it keeps its current firmware. Try again."),
@@ -2195,6 +2266,8 @@ def build_story():
     ], [0.6, 0.4]))
 
     S.append(H2("9.2", "Windows: the one-click zip"))
+    S.append(P("For a first flash or a recovery on a Windows PC. Nothing needs installing "
+               "first; the zip holds the flasher and both firmware images."))
     S.append(steps([
         [f"Download {mb('MagicMaker-Flasher-Windows.zip')}:", P(link(ZIP_URL, 7.3, "/download/"), "small")],
         f"Unzip it. The {mb('MagicMaker-Flasher')} folder holds {mb('flash.bat')}, "
@@ -2222,37 +2295,16 @@ def build_story():
         [mc("More than one COM port and none obviously the ESP32. Rerun with -Port"),
          f"Run {mc('flash.bat -Port COMx')} with the right port."],
         [mc("Couldn't talk to the board on COMx to see which one it is…"),
-         "Put it in download mode (9.5), close Arduino IDE or any serial monitor, try another "
+         "Put it in download mode (9.4), close Arduino IDE or any serial monitor, try another "
          "cable, then run again."],
         [mc("This board is an <chip>, which this firmware doesn't support…"),
          "An S2, C3, C6, H2 or P4 chip is not supported. Nothing was written. Tap RST (or "
          "replug) to restart it."],
         [mc("Flashing failed. Common fixes:"),
-         f"Download mode (9.5), close other programs on the port, or {mc('-Baud 460800')}."],
+         f"Download mode (9.4), close other programs on the port, or {mc('-Baud 460800')}."],
     ], [0.5, 0.5]))
 
-    S.append(H2("9.3", "Web flasher"))
-    S.append(callout("warn", "Needs GitHub Pages switched on first", [
-        f"The page at {link(WEB_FLASHER, 8.7)} is published by the repository's Pages workflow. "
-        "Until the owner sets <b>Settings → Pages → Build and deployment → Source: GitHub "
-        "Actions</b> once, that address does not work. Use the Windows zip meanwhile.",
-    ]))
-    S.append(steps([
-        "Open the page in <b>Chrome or Edge</b> on Windows, macOS, Linux or ChromeOS, or "
-        "<b>Chrome on Android</b> with a USB OTG adapter or a USB-C cable to the board. Not "
-        "Safari, and no browser on iPhone or iPad.",
-        "Plug the board into the computer with a USB data cable.",
-        "Click <b>Connect</b> and pick the board's port (CP210x, USB to UART or USB Serial).",
-        "Click <b>Install MagicMaker ESP32 transmitter</b>. It asks the chip what it is, erases "
-        "the board and writes the matching firmware, in about a minute.",
-        "The board restarts as MM_ESP. Choose the ESP32 backend in the app. On a Heltec the "
-        "screen stays dark until you press PRG.",
-    ]))
-    S.append(P("No port in the list: install the CP210x or CH340 driver, replug, or try another "
-               "cable. Port busy: close Arduino IDE, flash.ps1 / flash.sh, or another tab with "
-               "the page. Linux: add yourself to the dialout group, then log out and in."))
-
-    S.append(H2("9.4", "macOS and Linux: flash.sh"))
+    S.append(H2("9.3", "macOS and Linux: flash.sh"))
     S.append(P(f"In {mb('firmware/esp32-transmitter/')} run {mb('./flash.sh')}. It works like the "
                "Windows flasher: finds the port, detects the board, flashes the matching image. "
                f"It needs {mb('python3')} and, unless esptool 4 or newer is already installed, "
@@ -2263,10 +2315,10 @@ def build_story():
                f"flasher it does not retry slower by itself: add {mb('--baud 460800')} if it "
                "fails. Linux needs serial access (dialout group; Arch: uucp)."))
 
-    S.append(H2("9.5", "Download mode for cable flashing"))
+    S.append(H2("9.4", "Download mode for cable flashing"))
     S.append(table(["Board", "How"], [
         ["Heltec V3", "Hold <b>PRG</b>, tap <b>RST</b>, release <b>PRG</b>. Run the flasher "
-                      "again (or click Connect again). After flashing in this mode, tap "
+                      "again. After flashing in this mode, tap "
                       "<b>RST</b> once to start the new firmware. (This is why PRG must stay "
                       "untouched when you press RST to turn the board on, 4.7.)"],
         ["Classic ESP32", f"Hold <b>BOOT</b> while the flasher says {mc('Connecting...')}; let "
@@ -2299,11 +2351,18 @@ def build_story():
          "without touching PRG (4.7)."],
         [f"HINT {mc('Reflash the ESP32 — its firmware has no chip-side loops.')} or EVENT "
          f"{mc('ESP32 firmware is outdated…')}",
-         "Firmware older than 1.2", "Flash it once by cable (9.2–9.4)."],
+         "Firmware older than 1.2", "Flash it once by cable (9.2, 9.3)."],
         [f"{mc('No relay linked — nothing sent')} / {mc('Transmit failed — check relay')}",
          "The link is down", "Tap Retry BLE on LINK and wait for ESP32 READY."],
         ["EVENT messages say “Android”", "Shared wording with the Android relay",
          "Nothing to fix: they mean the ESP32 (6.4)."],
+        ["The link drops for a few seconds right after a RADIO SLEEP change",
+         "Normal: the board restarts to apply it",
+         "Wait: the iPhone links again by itself. Turn loops back on (6.9)."],
+        [f"RADIO SLEEP shows {mc('Turned off automatically after Bluetooth trouble…')}",
+         "The board turned modem sleep off itself: a crash, three starts with no phone "
+         "linking, or link trouble", "Tap ON to try again. If it turns off again, leave it OFF "
+                                    "(6.9)."],
         ["Screen and battery"],
         ["Heltec screen is dark", "Normal: only PRG lights it, and it goes dark after 10 s",
          "Press PRG. If it stays dark on battery, the board is off or the cell is flat: press "
@@ -2350,8 +2409,8 @@ def build_story():
         ["A loop or keep-awake keeps running after I closed the app or changed Backend",
          "By design: the board runs it by itself",
          "Switch back to ESP32 and turn it off, or tap RST."],
-        ["Loops and keep-awake are gone", "The board restarted (RST, power, power-off, update): "
-                                          "it boots idle", "Turn them on again."],
+        ["Loops and keep-awake are gone", "The board restarted (RST, power, power-off, update, "
+                                          "a RADIO SLEEP change): it boots idle", "Turn them on again."],
         ["Band does not react", "Out of range, low BROADCAST STRENGTH, or the band is not "
                                 "listening", "Keep the board close, use MAX strength, try KEEP "
                                              "BAND AWAKE so the band is already listening."],
@@ -2359,13 +2418,9 @@ def build_story():
         ["Flasher finds no port", "Missing driver or charge-only cable",
          "Install CP210x or CH340 driver; another cable."],
         ["Flasher cannot talk to the board", "Not in download mode, or the port is busy",
-         "Download mode (9.5); close Arduino IDE / serial monitors."],
+         "Download mode (9.4); close Arduino IDE / serial monitors."],
         ["Board does nothing after a flash", "Flashed in download mode; still in the "
                                              "bootloader", "Tap RST."],
-        ["Web flasher address does not open", "GitHub Pages not enabled yet",
-         "Enable Pages (9.3) or use the Windows zip."],
-        ["Browser says it can't open USB serial ports", "Safari, iPhone/iPad or old Chrome",
-         "Use Chrome or Edge on a computer."],
         [f"{mc('PRG was not pressed — tap UPDATE to try again.')}", "No press within 180 s",
          "Tap UPDATE and press PRG (BOOT) when the prompt shows."],
     ]
@@ -2378,8 +2433,8 @@ def build_story():
     S.append(H2("11.1", "STATUS fields (read by the iPhone)"))
     S.append(P("The STATUS characteristic returns one JSON object of at most 508 bytes, keys in "
                "this order. The iPhone's LINK tab and BOARD POWER are built from it. When it "
-               "would be longer, the diagnostics (conn, btSleep, advMaxUs) are left out first, "
-               "then the loop's label, then its packet."))
+               "would be longer, the diagnostics (conn, btSleep, radioSleep, advMaxUs) are left "
+               "out first, then the loop's label, then its packet."))
     S.append(table(["Key", "When", "Meaning"], [
         [mc("ok") + ", " + mc("error"), "Always / on failure",
          "Reply to the last command (reset to ok when a phone connects)"],
@@ -2415,7 +2470,10 @@ def build_story():
         [mc("conn"), "A Bluetooth read (diagnostic)",
          "The reading phone's link: [interval in 1.25 ms units, latency, timeout in 10 ms "
          "units]. Firmware 1.5"],
-        [mc("btSleep"), "Modem sleep on (diagnostic)", mc("true") + " (5.5). Firmware 1.5"],
+        [mc("btSleep"), "Modem sleep runs (diagnostic)", mc("true") + " (5.5). Firmware 1.5"],
+        [mc("radioSleep"), "Only while RADIO SLEEP is off (diagnostic)",
+         mc("0") + " = you turned it off, " + mc("2") + " = the board did (6.9). Between a "
+         "change and its restart it can show next to btSleep. Firmware 1.5"],
         [mc("advMaxUs"), "Bench builds only", "Longest advertising restart since boot, µs "
                                               "(" + mc("MM_DEBUG_TIMING") + ")"],
     ], [0.36, 0.22, 0.42]))
@@ -2499,11 +2557,18 @@ def build_story():
          "Firmware 1.5, Heltec: " + mc("mv") + " = " + mc("0") + " (off), " + mc("3200") + ", "
          + mc("3300") + " or " + mc("3400") + "; 3000–3600 goes to the nearest level; else "
          + mc("bad mv") + ". Classic ESP32 → " + mc("unsupported")],
+        [mc("set_radio_sleep") + " (" + mc("radio_sleep") + ", " + mc("set_bt_sleep") + ")",
+         "Firmware 1.5, Heltec release images: RADIO SLEEP, " + mc('"enabled":true') + " or "
+         + mc("false") + " (6.9). The board keeps it and restarts about 1 s later when its "
+         "radio has to change. " + mc("bad enabled") + " without a true/false; " + mc("busy")
+         + " while an update is being received; " + mc("unsupported") + " on a classic ESP32 "
+         "or a build without modem sleep"],
     ], [0.42, 0.58]))
     S.append(P("Error replies: " + ", ".join(mb(e) for e in [
         "bad json", "bad hex", "packet too long", "no packet", "bad token", "unsupported",
-        "unknown action", "busy", "confirm required", "bad mv", "powering off"]) + " (busy = the "
-        "command queue of 8 is full, or power_off during an update; powering off = every "
+        "unknown action", "busy", "confirm required", "bad mv", "bad enabled", "powering off"])
+        + " (busy = the command queue of 8 is full, or power_off / set_radio_sleep during an "
+        "update; powering off = every "
         "command once a power-off has begun, and sends are ignored then). Packets are 3–29 "
         f"bytes; {mb('83 01')} is added in front when missing."))
 
@@ -2526,8 +2591,8 @@ def build_story():
                f"for the Heltec) from {mb('firmware/esp32-transmitter/')}. Top of "
                f"{mb('esp32-transmitter.ino')} unless noted. Bluetooth modem sleep also needs "
                f"the linker flag {mb('-Wl,--wrap=esp_bt_controller_init')}, which the Arduino "
-               "IDE cannot add, so an IDE build runs without it (PlatformIO: "
-               f"{mb('build_flags')} of the Heltec environment)."))
+               "IDE cannot add, so an IDE build runs without it and has no RADIO SLEEP setting "
+               f"(PlatformIO: {mb('build_flags')} of the Heltec environment)."))
     S.append(table(["Constant", "Default", "What it sets"], [
         [mc("DEFAULT_WAKE_MS"), "520 ms", "Wake ping before a band command (the app's value "
                                           "replaces it)"],
@@ -2567,7 +2632,10 @@ def build_story():
         [mc("MM_UART_RELEASE") + " (build flag)", "1", "Let go of the serial pins after start-up; "
                                                        "0 brings serial logs back"],
         [mc("MM_BT_MODEM_SLEEP") + " (build flag)", "1", "Modem sleep in builds linked with the "
-                                                         "flag above; 0 leaves it off"],
+                                                         "flag above; 0 leaves it off (and no "
+                                                         "RADIO SLEEP setting)"],
+        [mc("BTS_*") + " (btsleep_guard.h)", "3 starts; 4 links, 2 min, 30 min",
+         "When the board turns RADIO SLEEP off by itself (6.9)"],
     ], [0.4, 0.17, 0.43]))
 
     S.append(H2("11.8", "Release files"))

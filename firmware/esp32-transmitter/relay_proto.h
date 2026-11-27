@@ -808,7 +808,8 @@ static inline bool relayParseTransmitWrite(const char* s, size_t n, ChipCmd& c) 
 
 // ---- STATUS ---------------------------------------------------------------------------------
 // STATUS "radioSleep" (only while the BLE modem-sleep setting is off): 0 = the user turned it off,
-// 2 = the board did (it crashed, or links kept failing, with modem sleep on). On: no key ("btSleep").
+// 2 = the board did (with modem sleep on it crashed, links kept failing, the controller failed, or
+// no phone could link for several boots). On: no key ("btSleep").
 enum : uint8_t { RELAY_RSOFF_NONE = 0, RELAY_RSOFF_USER = 1, RELAY_RSOFF_AUTO = 2 };
 
 enum RelayProgram : uint8_t { RELAY_PROG_NONE = 0, RELAY_PROG_KEEP_AWAKE, RELAY_PROG_TX_LOOP, RELAY_PROG_WAND_LOOP };
