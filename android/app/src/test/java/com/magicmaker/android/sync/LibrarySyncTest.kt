@@ -284,6 +284,48 @@ class LibrarySyncTest {
     }
 
     @Test
+    fun aRemoteUserThatDropsTheOnlyUserPresetRowKeepsThePacketInItsPlace() {
+        // Android has the packet only as a saved preset; the iPhone (newer, full state) keeps it as a
+        // plain library row with a name. The preset goes, and the packet must not vanish from Android
+        // while the iPhone still lists it: the record's place gets the row (spec §2.6).
+        val x = h()
+        x.rows.userPreset(E90C, "Old preset")
+        val user = DataFixtures.userBody(E90C, T0 + 5, "Parade", SyncConst.CAT_SHOW, SyncConst.PLACE_LIBRARY, kind = "e90c")
+        assertEquals(ApplyStatus.ACCEPT, x.sync.applyRemote(user, PEER, T0, live = true).status)
+        assertTrue(x.rows.presets.none { it.userRecorded })
+        val row = x.rows.rowsWith(E90C).single()
+        assertEquals("Parade", row.label)
+        assertEquals(MagicCategory.SHOW, row.category)
+        assertEquals(true, row.userEdited)
+        assertTrue(row in x.rows.learnedLibrary)
+        // The same full state edited locally on Android projects identically.
+        val y = h()
+        y.rows.userPreset(E90C, "Old preset")
+        y.sync.onDiff(listOf(LocalEditOp.User(E90C, "Parade", SyncConst.CAT_SHOW, "e90c", null, SyncConst.PLACE_LIBRARY, preset = false)))
+        assertEquals(listOf("Parade"), y.rows.rowsWith(E90C).map { it.label })
+        assertTrue(y.rows.rowsWith(E90C).single() in y.rows.learnedLibrary)
+    }
+
+    @Test
+    fun aPageCutShortIsProjectedByTheNextStoreSnapshot() {
+        // Page RECs wait for their commit to be projected. If the link drops first, a re-pull finds
+        // them DUPLICATE, so the next store write must project them: never ledger-new, rows-old on disk.
+        val x = h()
+        x.rows.learn(E90C)
+        x.sync.applyRemote(DataFixtures.userBody(E90C, T0, "Paged", SyncConst.CAT_SHOW, SyncConst.PLACE_LIBRARY), PEER, T0, live = false)
+        assertEquals(MagicClassifier.classify(E90C)!!.label, x.rows.rowsWith(E90C).single().label)
+        val snap = x.sync.snapshot()
+        assertNotNull(snap.ledger!!["0:$E90C"])
+        assertEquals("Paged", x.rows.rowsWith(E90C).single().label)
+        assertEquals(1, x.rows.revisions)
+        // The re-pull is a duplicate, and nothing is projected twice.
+        assertEquals(ApplyStatus.DUPLICATE, x.sync.applyRemote(
+            DataFixtures.userBody(E90C, T0, "Paged", SyncConst.CAT_SHOW, SyncConst.PLACE_LIBRARY), PEER, T0, live = false).status)
+        x.sync.commitPage(PEER, PeerState(Bytes.fromHex("9E859EDAA1D4E6A4"), 1, false), T0)
+        assertEquals(1, x.rows.revisions)
+    }
+
+    @Test
     fun remoteUserWithNoRowCreatesOneInPlace() {
         val x = h()
         x.sync.applyRemote(DataFixtures.userBody(E90C, T0, "Parade", SyncConst.CAT_SHOW, SyncConst.PLACE_LIBRARY, kind = "e90c"), PEER, T0, true)

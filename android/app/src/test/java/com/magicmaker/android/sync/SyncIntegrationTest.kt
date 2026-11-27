@@ -25,14 +25,24 @@ class SyncIntegrationTest {
         val identity = MemIdentity().also { it.setGroup(group) }
         private var pending = false
         lateinit var sync: LibrarySync
+
+        /** As MagicStore.saveNow: nextSyncSeq and the snapshot under the lock, then the write. */
+        private fun store() {
+            val seq = synchronized(lock) {
+                val s = sync.nextSyncSeq
+                sync.snapshot()
+                s
+            }
+            sync.onSaved(seq)
+        }
         val saves = SaveSink { urgent ->
             if (urgent) {
-                sync.onSaved(sync.nextSyncSeq)
+                store()
             } else if (!pending) {
                 pending = true
                 sched.at(sched.now() + 300) {
                     pending = false
-                    sync.onSaved(sync.nextSyncSeq)
+                    store()
                 }
             }
         }
@@ -196,5 +206,64 @@ class SyncIntegrationTest {
         val after = r.status().rows.first { it.label == "IPHONE" }
         assertTrue(after.badge, after.badge.startsWith("BEHIND"))
         assertEquals(RowTone.PROBLEM, after.tone)
+    }
+
+    @Test
+    fun aSmallMtuRouteWidensTheCoalescingWindowTo3s() {
+        // Spec §3.2: at MTU 23 (18-byte chunks) Android's event window is 3 s, not 1 s.
+        for ((mtu, wide) in listOf(23 to true, 185 to false)) {
+            val r = Rig(6)
+            r.linkUp(mtu)
+            r.run(5_000)
+            fun hear() = r.role.onSighting(
+                HeardSighting(Bytes.fromHex(DataHexes.E90C), -60, r.sched.wallMs(), r.sched.now(), null, null, null, null, false),
+            )
+            hear()
+            assertEquals("mtu $mtu", wide, r.role.isWide)
+            r.run(2_000)
+            hear()
+            // 1 s: that window is over, so a new event leaves at once. 3 s: still inside, only counted.
+            assertEquals("mtu $mtu", if (wide) 1L else 2L, r.role.events!!.seq)
+            r.run(1_500)
+            r.role.onEventsTick()
+            r.run(500)
+            assertEquals("mtu $mtu", 2L, r.role.events!!.seq)
+            assertEquals("mtu $mtu", 2, r.iRole.accepted.size)
+        }
+    }
+
+    @Test
+    fun aPageCutShortByALinkDropStillReachesTheRows() {
+        // Page RECs are projected at their page's commit. When the link drops mid-page they stay in
+        // the ledger (a re-pull finds them DUPLICATE), so the link-down save must project them.
+        val r = Rig(7)
+        val hexes = (0 until 60).map { "8301AABB%04X".format(it) }
+        for (h in hexes) {
+            r.iLib.localEdit(RecordClass.USER, DataFixtures.key(h), idI, label = "Gate ${h.takeLast(4)}", category = SyncConst.CAT_UNKNOWN,
+                kind = "raw", place = SyncConst.PLACE_RAW)
+        }
+        r.run(1_000)
+        r.linkUp(23) // small pages (limit 8): plenty of time inside one
+        var cut = false
+        for (step in 0 until 20_000) {
+            r.run(5)
+            val accepted = synchronized(r.lock) { r.sync.ledger.size }
+            if (accepted > r.rows.learnedRaw.size) {
+                r.linkDown()
+                cut = true
+                break
+            }
+        }
+        assertTrue("caught a page in flight", cut)
+        r.run(1_000)
+        val accepted = synchronized(r.lock) { r.sync.ledger.entriesByKey().map { it.key.packet.hex() }.toSet() }
+        assertTrue(accepted.size in 1 until hexes.size)
+        assertEquals(accepted, r.rows.learnedRaw.map { it.hex }.toSet())
+        assertTrue(r.rows.learnedRaw.all { it.label.startsWith("Gate ") && it.userEdited == true })
+        // Back together: the rest arrives and nothing is projected twice.
+        r.linkUp(185)
+        r.run(30_000)
+        assertEquals(hexes.toSet(), r.rows.learnedRaw.map { it.hex }.toSet())
+        assertEquals(r.versionsI(), r.versionsA())
     }
 }

@@ -3,6 +3,7 @@ package com.magicmaker.android.sync
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.util.concurrent.atomic.AtomicInteger
 
 // The SYNC / DEVICES view model (docs/SYNC_P3_ANDROID_PLAN.md §5.8, spec §9.7): one row per device
 // (IPHONE, ESP32, THIS phone, plus any other device seen in a heartbeat) with battery, heartbeat
@@ -46,11 +47,46 @@ data class SyncDashboard(
 )
 
 object SyncStatus {
+    /** A VFD frame read within this long ago counts as the card being on screen. */
+    const val WATCH_MS: Long = 3000
+
     private val flow = MutableStateFlow(SyncDashboard())
     val state: StateFlow<SyncDashboard> = flow.asStateFlow()
+    private val watchers = AtomicInteger(0)
+    @Volatile private var lastReadNs: Long? = null
+
+    /** Set by the running engine: refresh soon (the card came on screen after a quiet spell). */
+    @Volatile var onWatch: (() -> Unit)? = null
 
     fun publish(d: SyncDashboard) {
         flow.value = d
+    }
+
+    /** For a drawing pass that does not collect [state] (the VFD frame): also marks the card watched. */
+    fun read(): SyncDashboard {
+        val was = watched()
+        lastReadNs = System.nanoTime()
+        if (!was) onWatch?.invoke()
+        return flow.value
+    }
+
+    /** A screen showing the card became visible ([on]) or hidden / left again (Compose card). */
+    fun watch(on: Boolean) {
+        if (on) {
+            if (watchers.incrementAndGet() == 1) onWatch?.invoke()
+        } else {
+            watchers.updateAndGet { maxOf(0, it - 1) }
+        }
+    }
+
+    /**
+     * The card is on screen now: the engine refreshes it every second (heartbeat ages). Otherwise
+     * it refreshes on every sync change and every 10 s, which is all the notification needs.
+     */
+    fun watched(): Boolean {
+        if (watchers.get() > 0) return true
+        val r = lastReadNs ?: return false
+        return System.nanoTime() - r <= WATCH_MS * 1_000_000L
     }
 }
 

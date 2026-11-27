@@ -101,6 +101,7 @@ class SyncEngine(
     private var statusTask: SyncCancel? = null
     private var lastToken = ""
     private var lastHeader = ""
+    private var lastPublishAt = Long.MIN_VALUE / 4
     @Volatile private var started = false
 
     /** Re-advertise with this tag (the group changed). Called on mm-sync. */
@@ -127,11 +128,12 @@ class SyncEngine(
 
     fun start() {
         if (started) return
-        started = true
-        current = this
         thread.start()
         handler = Handler(thread.looper)
         sched = HandlerScheduler(handler)
+        // Volatile write after the handler exists: post() from any thread checks [started] first.
+        started = true
+        current = this
         handler.post { guarded("start") { startOnThread() } }
     }
 
@@ -154,6 +156,7 @@ class SyncEngine(
                 eventsTask?.cancel()
                 statusTask?.cancel()
                 node = null
+                if (SyncStatus.onWatch === watchHook) SyncStatus.onWatch = null
                 SyncStatus.publish(SyncDashboard())
             }
             thread.quitSafely()
@@ -230,9 +233,13 @@ class SyncEngine(
             }
         }
         lastBits = stateBits()
+        SyncStatus.onWatch = watchHook
         scheduleTick()
         markDirty()
     }
+
+    /** The card came on screen: refresh it now rather than at the next 10 s idle refresh. */
+    private val watchHook: () -> Unit = { post("watch") { markDirty() } }
 
     private fun randomNonce(): Bytes {
         val a = ByteArray(8)
@@ -294,7 +301,11 @@ class SyncEngine(
             lastBits = bits
             node?.selfChanged()
         }
-        markDirty()
+        // Every sync change already marks the status dirty. The clock only matters for ages and
+        // time-based badges: every second while the card is on screen, else every 10 s (the
+        // notification token), so a phone in a pocket does not rebuild the view (and take the
+        // store lock for library stats) 86,400 times a day.
+        if (SyncStatus.watched() || now - lastPublishAt >= STATUS_IDLE_MS) markDirty()
     }
 
     private fun armEvents() {
@@ -326,6 +337,7 @@ class SyncEngine(
     private fun publishStatus() {
         val n = node ?: return
         val now = sched.now()
+        lastPublishAt = now
         val adv = ServiceState.state.value.esp32Battery
         val d = SyncStatusBuilder.build(
             StatusInputs(
@@ -562,5 +574,6 @@ class SyncEngine(
         const val PREFS: String = "magicmaker"
         const val PREF_SHARE_HEARD: String = "sync_share_heard"
         private const val STATUS_MIN_MS: Long = 250
+        private const val STATUS_IDLE_MS: Long = 10_000
     }
 }

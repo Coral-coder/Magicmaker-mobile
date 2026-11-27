@@ -8,6 +8,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.PowerManager
+import com.magicmaker.android.core.CrashLog
 
 /**
  * This phone's battery for its heartbeat (spec §9.1, plan §5.6): CAPACITY %, EXTRA_VOLTAGE mV,
@@ -36,15 +37,20 @@ class BatteryInfo(
     private var registered = false
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                Intent.ACTION_BATTERY_CHANGED -> update(intent)
-                PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
-                    val ps = readPowerSave()
-                    if (ps != powerSave) {
-                        powerSave = ps
-                        onChange()
+            // Runs on the mm-sync looper: an exception here would end the process, not one sync step.
+            try {
+                when (intent?.action) {
+                    Intent.ACTION_BATTERY_CHANGED -> update(intent)
+                    PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
+                        val ps = readPowerSave()
+                        if (ps != powerSave) {
+                            powerSave = ps
+                            onChange()
+                        }
                     }
                 }
+            } catch (t: Throwable) {
+                CrashLog.record(t, "BatteryInfo ${intent?.action}")
             }
         }
     }

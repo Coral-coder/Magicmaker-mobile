@@ -103,6 +103,27 @@ class SyncIdentityTest {
     }
 
     @Test
+    fun aGroupChangeClearsTheForeignHubs() {
+        // The iPhone rekeyed while this phone was away: the user's own hub now reads FOREIGN. After
+        // "Leave sync group" (or a JOIN into the new group) it must be tried again, or nothing can
+        // ever regroup this phone through the hub.
+        val id = load()
+        val g1 = SyncIdentityFile.newGroup(Random(11))
+        val g2 = SyncIdentityFile.newGroup(Random(12))
+        id.setGroup(g1)
+        id.markForeign("AA:BB:CC:DD:EE:01")
+        id.setGroup(g1) // the same group again (a JOIN copy): the list stays
+        assertTrue(id.isForeign("AA:BB:CC:DD:EE:01"))
+        id.setGroup(null)
+        assertFalse(id.isForeign("AA:BB:CC:DD:EE:01"))
+        assertTrue(load().foreignList().isEmpty())
+        id.markForeign("AA:BB:CC:DD:EE:02")
+        id.setGroup(g2)
+        assertFalse(load().isForeign("AA:BB:CC:DD:EE:02"))
+        assertEquals(g2.groupId, load().group!!.groupId)
+    }
+
+    @Test
     fun aCorruptOrInvalidFileCountsAsMissing() {
         val first = load()
         file().writeText("{not json")

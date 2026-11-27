@@ -17,7 +17,7 @@ object VFDSyncDevices {
     private var details = false
 
     fun draw(ctx: VFDContext, fb: VFDFrameBuffer, L: VFDLayout, c: Int, y0: Int, w: Int,
-             d: SyncDashboard = SyncStatus.state.value): Int {
+             d: SyncDashboard = SyncStatus.read()): Int {
         var y: Int = VFDW.section(fb, L, c, y0, w, "SYNC / DEVICES")
         // Header: the state on the left, the group on the right.
         val headInk: Int = inkOf(d.headerTone)

@@ -68,6 +68,19 @@ class IdentityReconcileTest {
     }
 
     @Test
+    fun aMigrationOverIssuedSeqsIsARollbackEvenWhenItRenumbersPastThem() {
+        // The identity issued seqs 1..19 under its dbId; a sync-less store migrates to 42 entries.
+        // Same dbId would let a peer with wm 19 skip the new seqs 1..19 forever.
+        val o = IdentityReconcile.decide(facts(issued = 20, next = 43, migrated = true))
+        assertEquals("c", o.case)
+        assertTrue(o.newDbId)
+        assertTrue(o.resetPeers)
+        assertEquals(43L, o.issuedSeq)
+        // Nothing issued yet (first launch crashed before its first write): a plain migration.
+        assertFalse(IdentityReconcile.decide(facts(issued = 0, next = 43, migrated = true)).newDbId)
+    }
+
+    @Test
     fun caseAMissingIdentityResetsPeersAndKeepsTheLedger() {
         val o = IdentityReconcile.decide(facts(present = false, issued = 0, next = 30))
         assertEquals("a", o.case)

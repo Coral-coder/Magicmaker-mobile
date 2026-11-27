@@ -584,17 +584,30 @@ CAP = 400
 
 # A healthy example (3.87 V, 68 %) and a low one (3.36 V, 15 %: below the 3.40 V warning), with
 # the runtime an idle linked board shows for them on 400 mAh with the default cutoff.
+def hb_runtime(minutes):
+    """The runtime the battery heartbeat carries (esp32-transmitter.ino heartbeatBytes()): in
+    steps of 5 minutes under 10 h, 15 under 24 h, then 30, at most 99 h. The Android app shows
+    this one; the iPhone shows STATUS runMin, to the minute."""
+    r = min(max(minutes, 0), 99 * 60)
+    step = 5 if r < 10 * 60 else (15 if r < 24 * 60 else 30)
+    return min((r + step // 2) // step * step, 99 * 60)
+
+
 EX_MV = 3872
 EX_PCT = pct_int(EX_MV)
 EX_LEFT = int(CAP * pct_from_mv(EX_MV) / 100 + 0.5)
-EX_RUN = runtime_text(runtime_min(EX_MV, CAP, DRAW_LINKED, CUT_MV))
+EX_RUN_MIN = runtime_min(EX_MV, CAP, DRAW_LINKED, CUT_MV)
+EX_RUN = runtime_text(EX_RUN_MIN)
 EX_BAT = f"{EX_PCT}% {EX_RUN}"                            # "68% ~6H 2M"
+EX_BAT_HB = f"{EX_PCT}% {runtime_text(hb_runtime(EX_RUN_MIN))}"   # Android: "68% ~6H 0M"
 EX_RUN_500 = runtime_text(runtime_min(EX_MV, 500, DRAW_LINKED, CUT_MV))
 LOW_MV = 3360
 LOW_PCT = pct_int(LOW_MV)
 LOW_LEFT = int(CAP * pct_from_mv(LOW_MV) / 100 + 0.5)
-LOW_RUN = runtime_text(runtime_min(LOW_MV, CAP, DRAW_LINKED, CUT_MV))
+LOW_RUN_MIN = runtime_min(LOW_MV, CAP, DRAW_LINKED, CUT_MV)
+LOW_RUN = runtime_text(LOW_RUN_MIN)
 LOW_BAT = f"{LOW_PCT}% LOW {LOW_RUN}"                     # "15% LOW ~31M"
+LOW_BAT_HB = f"{LOW_PCT}% LOW {runtime_text(hb_runtime(LOW_RUN_MIN))}"  # Android: "15% LOW ~30M"
 CUT_FRAME_MV = 3280                                       # the reading as the cutoff fires
 
 
@@ -1342,7 +1355,7 @@ def build_story():
         ["Board label", f"{mc('HELTEC V3')} (DEVICE page FW line, iPhone LINK tab ESP32 row)",
          f"{mc('ESP32')} (iPhone LINK tab ESP32 row)"],
         ["Idle draw", "Roughly 30–45 mA (estimate) without Bluetooth modem sleep; with it "
-         "(1.5, images linked with it) an estimated 3–10 mA less",
+         "(1.5 release images) an estimated 3–10 mA less",
          "Uses Bluetooth modem sleep; datasheet range ~20–30 mA at 80 MHz"],
     ], [0.22, 0.39, 0.39], first_bold=True))
 
@@ -1468,9 +1481,8 @@ def build_story():
         ], TEAL, FW - 194)], 194))
     S.append(P(f"Sizes, in order: {mb('400 → 500 → 1000 → 1100 → 2000 → 3000 → 5000 → 400 mAh')}. "
                "A long press never turns the page. The CAP line stays highlighted for 1.5 s "
-               "after the last change. The saved size is used at every boot. Apart from a "
-               "firmware update, the capacity and the cutoff level (4.6) are the only things "
-               "the firmware writes to the board's flash."))
+               "after the last change. Apart from a firmware update, the capacity and the cutoff "
+               "level (4.6) are the only things the firmware writes to the board's flash."))
 
     S.append(H2("4.6", "LOW BATTERY page: the cutoff level"))
     cutoff_rows = table(["Line", "Shows"], [
@@ -1490,20 +1502,20 @@ def build_story():
                            P("The default level, 3.30 V.", "caption")],
                           [_shrink(cutoff_rows, FW - 194)], 194))
     S.append(P("Changing it works like the capacity on DEVICE: press <b>PRG</b> until <b>LOW "
-               "BATTERY</b> shows, let go, then <b>press and hold</b>. After 1 s the CUT line "
-               "jumps to the next level and turns highlighted; keep holding to step again every "
-               "second, at most one round (4 steps) per hold. Let go on the level you want and "
-               "wait 3 s before you press RST or unplug."))
-    S.append(P(f"Levels, in order: {mb('3.20V → 3.30V → 3.40V → OFF → 3.20V')}. A short press "
-               "turns the page to POWER. The board keeps the level across restarts and Bluetooth "
-               "updates; the iPhone can set it too (6.9). What each level does is in section 5.7."))
+               "BATTERY</b> shows, let go, then <b>press and hold PRG</b>. After 1 s the CUT line steps to the next level, "
+               "highlighted, and again every second while you hold (at most one round, 4 steps): "
+               f"{mb('3.20V → 3.30V → 3.40V → OFF → 3.20V')}. Let go on your level and wait 3 s "
+               "before you press RST or unplug. A short press turns the page to POWER. The board "
+               "keeps the level across restarts and Bluetooth updates; the iPhone can set it too "
+               "(6.9). What each level does: section 5.7."))
 
     S.append(H2("4.7", "Turning the board off and on"))
     power_steps = steps([
         "Press <b>PRG</b> until the <b>POWER</b> page shows (from a dark screen: one press to "
         "wake it, then four more).",
         "<b>Let go, then press and hold PRG.</b> The bar fills over <b>2 seconds</b>.",
-        f"The screen says {mb('POWERING OFF...')} and {mb('RELEASE PRG')}: <b>let go</b>.",
+        f"The screen says {mb('POWERING OFF...')} and {mb('RELEASE PRG')}: <b>let go</b> "
+        "(held on, it turns off after 10 s anyway).",
         f"It shows {mb('PRESS RST TO TURN ON')} for 1 s, disconnects the phone and turns off. "
         "The screen goes dark and the LED stops.",
     ], TEAL, FW - 194)
@@ -1511,25 +1523,22 @@ def build_story():
                            P("1.2 s into the hold.", "caption")], [power_steps], 194))
     S.append(bullets([
         "<b>Only a press that starts on the lit POWER page counts.</b> A tap (under 0.4 s) "
-        "turns the page to STATUS. Letting go before 2 s cancels: the page stays and the bar "
-        "empties.",
-        "From a dark screen a power-off takes five separate presses and a 2 s hold, so a "
-        "button pressed in a bag only lights STATUS for 10 s.",
+        "turns the page to STATUS; letting go before 2 s cancels (the bar empties). From a dark "
+        "screen it takes five separate presses and a 2 s hold, so a button pressed in a bag "
+        "only lights STATUS for 10 s.",
         f"While a Bluetooth update is being received the page shows {mb('UPDATE RUNNING')} "
         f"and {mb('POWER OFF WHEN DONE')}, and holding does nothing.",
-        "If you keep holding PRG after the board asked you to let go, it turns off anyway "
-        "after 10 s.",
-        "<b>Other ways to turn it off:</b> <b>POWER OFF</b> on the iPhone (6.9; the screen is "
-        "not lit for it) and the low-battery cutoff (5.7). Each of them stops sending at once, "
-        "disconnects the phone so it notices straight away, and saves a capacity or cutoff "
-        "level picked in the last seconds.",
+        "<b>Other ways to turn it off:</b> <b>POWER OFF</b> on the iPhone (6.9; it does not "
+        "light the screen) and the low-battery cutoff (5.7). All three stop sending at once, "
+        "disconnect the phone so it notices straight away, and save a capacity or cutoff level "
+        "picked in the last seconds.",
     ]))
     S.append(H3("Turning it on"))
     S.append(P("Press <b>RST</b>. Nothing else turns it on: not PRG, and not the app (only a "
-               "computer that opens the board's serial port can reset it, and so turn it on). "
-               "It starts like after any power-up: the screen stays dark, the LED "
-               "blinks once a second, the iPhone relinks by itself and pushes its settings. "
-               "Keep-awake and the loops are off (the board always boots idle)."))
+               "computer that opens the board's serial port can reset it). It starts like after "
+               "any power-up: screen dark, LED blinking once a second, the iPhone relinks by "
+               "itself and pushes its settings; keep-awake and the loops are off. Off still "
+               "draws a little and charges from USB; for storage, unplug the battery (5.8)."))
     S.append(P(f"If the battery is too low to start (below the cutoff + 0.10 V, so "
                f"{vt(WARN_MV)} by default) and the board is not on USB power, the screen "
                f"lights for 2 s with {mb('TOO LOW TO START')} and the board turns off again. "
@@ -1540,14 +1549,11 @@ def build_story():
         (screen_off("release"), "POWER hold done: let go of PRG."),
         (screen_off("going"), "Then, for 1 s, before it turns off."),
         (screen_off("boot_low"), "After RST with a low battery."),
-    ]))
+    ], scale=1.0))
     S.append(callout("warn", "Do not hold PRG while you press RST", [
-        "That starts the chip's flashing (download) mode, used for cable flashing (9.5). The "
-        "board then looks dead (screen dark, LED off) but keeps draining the battery. Tap RST "
-        "again without touching PRG.",
+        "That starts the chip's flashing (download) mode (9.5): the board looks dead but keeps "
+        "draining the battery. Tap RST again without touching PRG.",
     ]))
-    S.append(P("Off is not a full disconnect: it charges while off, and it still draws a little "
-               "from the battery. For storage, unplug the battery (section 5.8).", "small"))
 
     # ======================================================================================
     section("5", "Battery and runtime",
@@ -1692,16 +1698,16 @@ def build_story():
         "never prints one anyway); cable flashing is not affected.",
         "<b>Heltec, new in 1.5: Bluetooth modem sleep.</b> The Bluetooth radio switches off "
         "between its radio events instead of idling, an estimated 3–10 mA (not yet measured). "
-        "Only images linked with a special flag have it: the iPhone's LINK row (6.3) ends in "
-        f"{mb('MODEM SLEEP')} when it is on. A build from the Arduino IDE does not have it.",
+        "The release images have it (they are built with a special linker flag); a build from "
+        f"the Arduino IDE does not. The iPhone's LINK row (6.3) ends in {mb('MODEM SLEEP')} when "
+        "it is on.",
         "<b>A real off state</b> (4.7) and <b>the low-battery cutoff</b> (5.7), so a forgotten "
         "board neither drains for days nor runs the cell flat.",
     ]))
     S.append(P("What it does not do: no automatic light sleep (that needs a different build "
-               "setup), and no CPU below 80 MHz while Bluetooth runs. 1.5 keeps the connection "
-               "settings, beacon timing and transmit powers as they were. Each battery reading "
-               "pauses the board for about 8 ms, so a send that arrives in that moment goes out "
-               "up to 8 ms later.", "small"))
+               "setup) and no CPU below 80 MHz while Bluetooth runs. Connection settings, beacon "
+               "timing and transmit powers are as in 1.4. Each battery reading pauses the board "
+               "for about 8 ms (a send arriving then goes out up to 8 ms later).", "small"))
 
     warn_mah = CAP * (pct_from_mv(WARN_MV) - pct_from_mv(CUT_MV)) / 100
     warn_lo = round(warn_mah / ka_hi * 60, -1)
@@ -1746,15 +1752,18 @@ def build_story():
         f"Shows on the STATUS page as a highlighted BAT line ({mb(LOW_BAT)}), as "
         f"{mb('LOW - CHARGE SOON')} on LOW BATTERY, in amber on the iPhone's LINK tab "
         f"({mb(f'LOW · {LOW_PCT}% · {LOW_LEFT}/{CAP} MAH · {LOW_RUN} LEFT')}) and as "
-        f"{mb('ESP32:' + LOW_BAT)} in both phones' top bars.",
+        + (f"{mb('ESP32:' + LOW_BAT)} in both phones' top bars." if LOW_BAT == LOW_BAT_HB else
+           f"{mb('ESP32:' + LOW_BAT)} in the iPhone's top bar ({mb('ESP32:' + LOW_BAT_HB)} on "
+           "Android, whose runtime moves in 5-minute steps)."),
         "With the cutoff on, the board reads the battery every 15 s in the warning zone.",
     ]))
     S.append(H3("The cutoff"))
     S.append(bullets([
-        "<b>Three readings in a row</b> below the level, with the smoothed voltage below it "
-        "too: about 30–45 s after the cell gets there (10–15 s with the screen lit). A "
-        "collapsing cell is faster: two readings below 3.10 V at least 5 s apart. The count "
-        "starts over once a reading is 50 mV above the level.",
+        "<b>Three readings in a row</b> below the level (15 s apart there, 5 s with the screen "
+        "lit), with the smoothed voltage below it too. The smoothing trails the cell by about 3 "
+        "minutes, only a few millivolts on a cell draining normally. A collapsing cell is "
+        "faster: two readings below 3.10 V at least 5 s apart. The count starts over once a "
+        "reading is 50 mV above the level.",
         "<b>Never</b> on USB power, while charging, on an unsteady reading (samples or readings "
         "more than 0.3 V apart), or for 10 minutes after the voltage jumps up by 50 mV or more "
         "(a charger plugged in).",
@@ -1763,14 +1772,13 @@ def build_story():
         f"turns off. The iPhone says {mb('ESP32 off: battery low — charge it, then press RST')}.",
         "<b>To start again:</b> charge it, then press RST. Below the cutoff + 0.10 V the board "
         f"refuses to start ({mb('TOO LOW TO START')}, 4.7). That check runs after RST and "
-        "power-on; it is skipped after the restart that ends a Bluetooth update, after a crash, "
-        "and with the cutoff OFF. After a brownout the board turns off again without lighting "
-        "the screen.",
+        "power-on, not after the restart that ends a Bluetooth update or a crash, and not with "
+        "the cutoff OFF.",
     ]))
     S.append(KeepTogether([screen_row([
         (screen_status(bat=LOW_BAT, low=True), "The warning on STATUS."),
         (screen_off("low", CUT_FRAME_MV), "The cutoff firing, screen lit."),
-    ], scale=1.36, bezel=6)]))
+    ], scale=1.2, bezel=6)]))
     S.append(callout("note", "Accuracy and the cell", bullets([
         "Readings differ between boards by roughly ±30–100 mV, so 3.30 V acts somewhere "
         "between about 3.25 and 3.35 V.",
@@ -1782,16 +1790,16 @@ def build_story():
 
     S.append(H2("5.8", "Off and storage"))
     S.append(bullets([
-        "<b>What off is:</b> the chip in its deepest sleep with no wake-up source; the LED and "
-        "the screen's power rail held off, the LoRa radio asleep, the other pins parked. About "
-        "15–25 µA at the battery on a V3.2 (an estimate; a V3.0/V3.1 can draw up to about 9 µA "
-        "more while the cell is above about 3.8 V), against about 35 mA running.",
+        "<b>What off is:</b> the chip in its deepest sleep with no wake-up source and every pin "
+        "parked (LED and screen rail off, LoRa radio asleep). About 15–25 µA at the battery on "
+        "a V3.2 (an estimate; a V3.0/V3.1 can draw up to about 9 µA more while the cell is "
+        "above about 3.8 V), against about 35 mA running.",
         "<b>It is not a full disconnect.</b> The V3 has no battery switch that software can "
         "work, so only unplugging the battery (or a switch in its lead) gets to zero. "
         "<b>Unplug it for storage.</b>",
         "<b>Charging still works while off:</b> the charger runs from USB, not from the chip. "
-        "The board stays off until you press RST.",
-        "A computer that opens the board's serial port can reset it, and so turn it on.",
+        "The board stays off until you press RST (or a computer opens its serial port, which "
+        "can reset it).",
         "The board's charger is set to about 500 mA, which is 1.25 C for a 400 mAh cell (board "
         "hardware, not firmware): use a cell rated for that.",
         "<b>Classic DevKit:</b> POWER OFF from the iPhone works the same way, and EN turns it "
@@ -1928,10 +1936,11 @@ def build_story():
     S.append(P("The board sends a small battery heartbeat advert while it waits for a phone "
                "and, once linked, every 1–2 s while nothing is on air. The Android app reads it "
                "without connecting and shows it in the same place in its top bar:"))
-    S.append(quote(f"MM/RF BLE:SCAN | ESP32:{EX_BAT} | RX:12 | TX-AUTO:3 | SCAN:ON"))
+    S.append(quote(f"MM/RF BLE:SCAN | ESP32:{EX_BAT_HB} | RX:12 | TX-AUTO:3 | SCAN:ON"))
     S.append(table(["Token", "Means"], [
-        [mc("ESP32:" + EX_BAT), "% and runtime left (to the cutoff)"],
-        [mc("ESP32:" + LOW_BAT), "Low battery (firmware 1.5): it turns itself off soon (5.7)"],
+        [mc("ESP32:" + EX_BAT_HB), "% and runtime left (to the cutoff; it moves in steps, "
+                                    "see below)"],
+        [mc("ESP32:" + LOW_BAT_HB), "Low battery (firmware 1.5): it turns itself off soon (5.7)"],
         [mc("ESP32:100%"), "% only: on USB power (no runtime then)"],
         [mc("ESP32:CHG"), "Charging"],
         ["(nothing)", "No heartbeat heard for 2 minutes, no battery reading, or a classic "
@@ -2312,8 +2321,8 @@ def build_story():
         [f"BAT line highlighted with {mc('LOW')}", "Low-battery warning: the cutoff is near",
          "Charge soon (5.7)."],
         ["PRG press does not turn the page",
-         "The first press only wakes the screen; on DEVICE the page turns when you let go",
-         "Press again; on DEVICE, release the button."],
+         "The first press only wakes the screen; on DEVICE, LOW BATTERY and POWER the page "
+         "turns when you let go", "Press again, and let go of the button."],
         ["Battery size or cutoff level went back after a restart",
          "Restarted within 3 s of picking it", "Pick it again and wait 3 s (4.5, 4.6)."],
         [f"BAT shows {mc('--')}", "No battery, or a reading outside 2.5–4.6 V",
@@ -2410,13 +2419,16 @@ def build_story():
         [mc("advMaxUs"), "Bench builds only", "Longest advertising restart since boot, µs "
                                               "(" + mc("MM_DEBUG_TIMING") + ")"],
     ], [0.36, 0.22, 0.42]))
-    S.append(P("Example (Heltec, idle, low battery):", "small"))
-    S.append(quote('{"ok":true,"running":true,"proto":3,"fw":"1.5","board":"HELTEC V3",'
-                   '"keepAwake":false,"wakeupPreambleMs":520,"commandBurstMs":4000,'
-                   '"starlightBurstMs":500,"txPowerLevel":3,"txInterleave":false,"uptimeS":8123,'
-                   f'"sent":42,"batMv":{LOW_MV},"batPct":{LOW_PCT},"batMah":{CAP},'
-                   f'"runMin":{runtime_min(LOW_MV, CAP, DRAW_LINKED, CUT_MV)},"batLow":true,'
-                   f'"cutMv":{CUT_MV},"conn":[24,2,400],"btSleep":true}}'))
+    S.append(KeepTogether([
+        P("Example (Heltec, idle, low battery):", "small"),
+        quote(f'{{"ok":true,"running":true,"proto":{RELAY_PROTO},"fw":"{FW_VERSION}",'
+              '"board":"HELTEC V3","keepAwake":false,"wakeupPreambleMs":520,'
+              '"commandBurstMs":4000,"starlightBurstMs":500,"txPowerLevel":3,'
+              '"txInterleave":false,"uptimeS":8123,'
+              f'"sent":42,"batMv":{LOW_MV},"batPct":{LOW_PCT},"batMah":{CAP},'
+              f'"runMin":{runtime_min(LOW_MV, CAP, DRAW_LINKED, CUT_MV)},"batLow":true,'
+              f'"cutMv":{CUT_MV},"conn":[24,2,400],"btSleep":true}}'),
+    ]))
 
     S.append(H2("11.2", "Bluetooth identity"))
     S.append(P(f"Name {mb('MM_ESP')} (older firmware: {mb('MagicMaker-ESP32')}). Every UUID "
@@ -2452,8 +2464,9 @@ def build_story():
         ["5", "0–100 or " + mc("FF"), "Battery %, FF = none"],
         ["6", "flags", "bit 0 charging, bit 1 USB power, bit 2 battery reading present, bit 3 "
                        "battery low (firmware 1.5; the version byte stays 1)"],
-        ["7–8", "u16 little-endian", "Runtime minutes, " + mc("FF FF") + " = unknown (always "
-                                     "while charging or on USB)"],
+        ["7–8", "u16 little-endian", "Runtime minutes in steps of 5, 15 or 30 (6.8), "
+                                     + mc("FF FF") + " = unknown (always while charging or on "
+                                     "USB)"],
     ], [0.12, 0.25, 0.63]))
     S.append(P(f"A classic ESP32 always sends {mb('FF')} for %, flags {mb('00')} and runtime "
                f"{mb('FFFF')}."))

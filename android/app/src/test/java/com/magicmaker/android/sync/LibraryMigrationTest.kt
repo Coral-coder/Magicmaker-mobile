@@ -172,6 +172,42 @@ class LibraryMigrationTest {
     }
 
     @Test
+    fun migratedPresenceIsByteIdenticalWhateverTheRowOrDevice() {
+        // D7: an auto-learned row replicates as PRESENCE (u = 1, no origin, no content), so every node
+        // that has the packet holds the same bytes. PROTOCOL §4.3's worked example is this packet.
+        val expected = Bytes.fromHex("1013008301E100E90C00010F4D575A940705488BB0" + "11080100000000000000")
+        fun presenceOf(hexInRow: String, self: Bytes): LedgerEntry {
+            val r = FakeRows()
+            val row = r.learn(E90C)
+            r.learnedLibrary = listOf(row.copy(hex = hexInRow))
+            val res = LibraryMigration.migrate(r.snapshot(), self, LedgerStore())
+            assertEquals(1, res.entries.size)
+            return res.entries.single()
+        }
+        for (hexInRow in listOf(E90C, E90C.lowercase(), "83 01 e1 00 e9 0c 00 01 0f 4d 57 5a 94 07 05 48 8b b0")) {
+            for (self in listOf(SELF, DataFixtures.PEER)) {
+                val e = presenceOf(hexInRow, self)
+                assertEquals(RecordClass.PRESENCE, e.recordClass)
+                assertEquals(expected, e.bodyBytes)
+                assertEquals(0xCE6592D2L, e.version.crc)
+                assertNull(e.origin)
+                assertNull(e.syncFrom)
+            }
+        }
+        // The same bytes as a live learn on any node, and as stored without `b` and rebuilt at load.
+        val learned = LedgerStore().localLearn(DataFixtures.key(E90C).packet)!!
+        assertEquals(expected, learned.bodyBytes)
+        val json = LedgerEntryJson.of(learned)
+        assertNull(json.b)
+        assertEquals(expected, SyncStateCodec.entryOf("0:$E90C", json)!!.bodyBytes)
+        // A colour row (STAR5) too: key + updatedAt only.
+        val r = FakeRows()
+        r.learn(STAR5)
+        val star = LibraryMigration.migrate(r.snapshot(), SELF, LedgerStore()).entries.single()
+        assertEquals(RecordBody(RecordKey(SyncConst.NS_LIB, Bytes.fromHex(STAR5)), SyncConst.U_PRESENCE).encode(), star.bodyBytes)
+    }
+
+    @Test
     fun migratedBodiesAreValidRecords() {
         val r = FakeRows()
         r.userPreset(E90C, "  Trim me  ")

@@ -114,8 +114,25 @@ class LibrarySync(
 
     val nextSyncSeq: Long get() = synchronized(lock) { store.nextSyncSeq }
 
-    /** Deep snapshot for the store write, taken under the lock (§3.5). */
-    fun snapshot(): SyncStateJson = synchronized(lock) { SyncStateJson.from(store, peers) }
+    /**
+     * Deep snapshot for the store write, taken under the lock (§3.5). Page records still waiting
+     * for their page's commit (the link dropped mid-page) are projected first: a re-pull of that
+     * page finds them DUPLICATE, so this write is the last chance to keep rows = projection(ledger)
+     * on disk. MagicStore reads the rows after this returns, under the same lock.
+     */
+    fun snapshot(): SyncStateJson = synchronized(lock) {
+        projectPending()
+        SyncStateJson.from(store, peers)
+    }
+
+    /** Project the page records accepted since the last commit, with one revision bump. Lock held. */
+    private fun projectPending() {
+        if (pendingProjection.isEmpty()) return
+        val entries = pendingProjection.mapNotNull { store.get(it) }
+        pendingProjection.clear()
+        projectEntries(entries, remote = true)
+        rows.bumpRevision()
+    }
 
     /**
      * A store write holding every seq below [seqAtSnapshot] completed (§3.5): durableHigh, then
@@ -181,12 +198,7 @@ class LibrarySync(
 
     override fun commitPage(peerId: Bytes, state: PeerState, lastSyncMs: Long) {
         synchronized(lock) {
-            if (pendingProjection.isNotEmpty()) {
-                val entries = pendingProjection.mapNotNull { store.get(it) }
-                pendingProjection.clear()
-                projectEntries(entries, remote = true)
-                rows.bumpRevision()
-            }
+            projectPending()
             peers[peerId] = StoredPeer(PeerState(state.dbId, state.wm, state.excludeOk), lastSyncMs)
         }
         saves.requestSave(true)
@@ -474,26 +486,33 @@ class LibrarySync(
         scan(SyncConst.PLACE_COLORS, rows.learnedColors)
         scan(SyncConst.PLACE_LIBRARY, rows.learnedLibrary)
         scan(SyncConst.PLACE_RAW, rows.learnedRaw)
+        // Hexes that still have a row after the passes: a USER without PRESET removes the user
+        // preset row, and when that was the hex's only row the record's `place` gets one (spec §2.6
+        // "if no row exists, create one in place"), so the packet never vanishes from this phone
+        // while it shows on the peer.
+        val kept = HashSet<String>()
 
         if (touched[SyncConst.PLACE_PRESETS]) {
             rows.presets = rows.presets.mapNotNull { r ->
-                when (val p = projs[LibraryRows.canon(r.hex)]) {
+                val h = LibraryRows.canon(r.hex)
+                when (val p = projs[h]) {
                     null -> r
                     is Proj.Tombstone -> if (r.userRecorded) null else resetBuiltIn(r)
                     is Proj.User -> if (r.userRecorded && !p.preset) null else applyUser(r, p)
                     is Proj.Reset -> applyReset(r, p)
                     is Proj.Presence -> r
-                }
+                }?.also { if (h in projs) kept.add(h) }
             }
         }
         fun learned(list: List<MagicPacket>): List<MagicPacket> = list.mapNotNull { r ->
-            when (val p = projs[LibraryRows.canon(r.hex)]) {
+            val h = LibraryRows.canon(r.hex)
+            when (val p = projs[h]) {
                 null -> r
                 is Proj.Tombstone -> null
                 is Proj.User -> applyUser(r, p)
                 is Proj.Reset -> applyReset(r, p)
                 is Proj.Presence -> r
-            }
+            }?.also { if (h in projs) kept.add(h) }
         }
         if (touched[SyncConst.PLACE_COLORS]) rows.learnedColors = learned(rows.learnedColors)
         if (touched[SyncConst.PLACE_LIBRARY]) rows.learnedLibrary = learned(rows.learnedLibrary)
@@ -511,7 +530,7 @@ class LibrarySync(
                 is Proj.Tombstone -> Unit
                 is Proj.User -> when {
                     p.preset && p.hex !in userPreset -> rows.presets = rows.presets + newRow(p, SyncConst.PLACE_PRESETS)
-                    !p.preset && p.hex !in present -> {
+                    !p.preset && p.hex !in kept -> {
                         val place = if (p.place == SyncConst.PLACE_PRESETS) SyncConst.PLACE_LIBRARY else p.place
                         val row = newRow(p, place)
                         when (place) {

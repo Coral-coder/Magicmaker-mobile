@@ -54,8 +54,9 @@ class GattServerLinks {
     /** A CCCD write on SYNC: notifications (or indications) on -> link up; off -> link down. */
     fun onCccd(address: String, value: ByteArray?): List<ServerLinkEvent> {
         val a = norm(address)
-        val d = devs.getOrPut(a) { Dev() }
         val on = value != null && value.isNotEmpty() && (value[0].toInt() and 0x03) != 0
+        // Off for a device that is gone (a late close after its disconnect) must not re-add it.
+        val d = if (on) devs.getOrPut(a) { Dev() } else (devs[a] ?: return emptyList())
         if (on && !d.cccd) {
             d.cccd = true
             val id = "ios:$a"
@@ -92,5 +93,80 @@ class GattServerLinks {
 
     companion object {
         fun norm(a: String): String = a.trim().uppercase()
+    }
+}
+
+/**
+ * Which LE links the relay GATT server hears about are centrals of this relay (plan §5.5). Android
+ * reports every LE connection of the phone to every registered GATT server: this phone's own
+ * client links (HubClient to the ESP32, another app's smartwatch or fitness band) arrive as
+ * "connected" too. A connection alone is therefore not an iPhone: a device becomes a central once
+ * it makes its first ATT request on the relay service (a read, a write, a CCCD write). Only those
+ * stop the relay advertising, count as "iPhone linked", start the UPDATE APP clock and reach the
+ * SYNC endpoint; an MTU heard before that is held and passed on with the connect. Thread-safe
+ * (GATT binder threads); pure and tested.
+ */
+class RelayCentrals {
+    sealed class Out {
+        data class Connected(val address: String) : Out()
+        data class Mtu(val address: String, val mtu: Int) : Out()
+        data class Disconnected(val address: String) : Out()
+    }
+
+    private class Dev(var engaged: Boolean = false, var mtu: Int? = null)
+
+    private val devs = LinkedHashMap<String, Dev>()
+
+    @Synchronized
+    fun onConnected(address: String) {
+        dev(address)
+    }
+
+    @Synchronized
+    fun onMtu(address: String, mtu: Int): List<Out> {
+        val a = GattServerLinks.norm(address)
+        val d = dev(a)
+        d.mtu = mtu
+        return if (d.engaged) listOf(Out.Mtu(a, mtu)) else emptyList()
+    }
+
+    /** An ATT request on the relay service: the first one makes [address] a central. */
+    @Synchronized
+    fun onRequest(address: String): List<Out> {
+        val a = GattServerLinks.norm(address)
+        val d = dev(a)
+        if (d.engaged) return emptyList()
+        d.engaged = true
+        return listOfNotNull(Out.Connected(a), d.mtu?.let { Out.Mtu(a, it) })
+    }
+
+    @Synchronized
+    fun onDisconnected(address: String): List<Out> {
+        val a = GattServerLinks.norm(address)
+        val d = devs.remove(a) ?: return emptyList()
+        return if (d.engaged) listOf(Out.Disconnected(a)) else emptyList()
+    }
+
+    @Synchronized
+    fun engagedCount(): Int = devs.values.count { it.engaged }
+
+    @Synchronized
+    fun isEngaged(address: String): Boolean = devs[GattServerLinks.norm(address)]?.engaged == true
+
+    @Synchronized
+    fun clear() {
+        devs.clear()
+    }
+
+    private fun dev(address: String): Dev {
+        val a = GattServerLinks.norm(address)
+        devs[a]?.let { return it }
+        // Links that never report a disconnect here (filtered own links) must not pile up.
+        if (devs.size >= MAX_DEVICES) devs.entries.firstOrNull { !it.value.engaged }?.let { devs.remove(it.key) }
+        return Dev().also { devs[a] = it }
+    }
+
+    companion object {
+        const val MAX_DEVICES: Int = 32
     }
 }

@@ -94,9 +94,13 @@ class HubLinkMachineTest {
         upTo(m, 0)
         m.onAuthed()
         assertEquals(hub, id.hubAddress)
-        m.onForeign(1_000)
+        // The link stays up until the session's own disconnect, so its ERR AUTH leaves first.
+        assertEquals(emptyList<HubCmd>(), m.onForeign(1_000))
+        assertTrue(m.isUp)
         assertNull(id.hubAddress)
         assertTrue(id.isForeign(hub))
+        assertEquals(listOf(HubCmd.LinkDown(hub), HubCmd.Close("foreign")), m.onLocalClose("foreign", null, 1_050))
+        assertEquals("other group", m.info(1_050).lastError)
         assertEquals(emptyList<HubCmd>(), m.hubSeen(hub, "MM_ESP", -40, 100_000))
         // Another hub is still found.
         assertEquals(listOf<HubCmd>(HubCmd.Connect(other, false)), m.hubSeen(other, "MM_ESP", -70, 100_100))

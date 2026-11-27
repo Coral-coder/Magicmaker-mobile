@@ -73,9 +73,11 @@ jobs:
             exit 1
           fi
 
-      - name: VFD core matches the Python reference
+      # Every JVM unit test: the VFD golden replay, the sync hub (P1 codec + vectors, the P3
+      # engine's transcript replay, loopback/fuzz convergence, data layer), the ESP32 heartbeat.
+      - name: Unit tests (VFD core vs the Python reference, sync hub, heartbeat)
         working-directory: android
-        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace --tests 'com.magicmaker.android.ui.vfd.*'
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
 
       # The point of this workflow is the compile check above. The debug APK is only a
       # convenience download, and uploading it on every push/PR fills GitHub's artifact

@@ -13,6 +13,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,10 +23,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.magicmaker.android.sync.DeviceRow
 import com.magicmaker.android.sync.RowTone
 import com.magicmaker.android.sync.SyncEngine
@@ -41,6 +45,23 @@ import com.magicmaker.android.sync.SyncStatus
 @Composable
 internal fun SyncDevicesCard() {
     val d by SyncStatus.state.collectAsState()
+    // While the card is on a visible screen the engine refreshes it every second (ages); hidden or
+    // in the background it refreshes on changes only (SyncStatus.watched).
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        var on = false
+        fun set(v: Boolean) {
+            if (v == on) return
+            on = v
+            SyncStatus.watch(v)
+        }
+        val obs = LifecycleEventObserver { src, _ -> set(src.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) }
+        owner.lifecycle.addObserver(obs)
+        onDispose {
+            owner.lifecycle.removeObserver(obs)
+            set(false)
+        }
+    }
     var details by rememberSaveable { mutableStateOf(false) }
     var askLeave by remember { mutableStateOf(false) }
     val mono = techLabel().copy(fontFamily = FontFamily.Monospace)

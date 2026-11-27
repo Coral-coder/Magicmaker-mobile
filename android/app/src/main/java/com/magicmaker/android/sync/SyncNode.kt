@@ -121,6 +121,9 @@ class SyncNode(
         internal val scheduled = HashSet<Pair<SessionTimer, Long>>()
         internal var wasAuthed = false
         internal var wasSynced = false
+
+        /** Page RECs accepted since this session's last commit (a page cut short leaves them unprojected). */
+        internal var uncommittedPageAccepts = 0
     }
 
     private val sessions = LinkedHashMap<String, Session>()
@@ -228,6 +231,9 @@ class SyncNode(
         remember(s)
         sessions.remove(linkId)
         role.onLinkDown(s)
+        // Production: records of a page that never committed are in the ledger but not on the rows
+        // (projection waits for the commit, and their re-pull is DUPLICATE). A save projects them.
+        if (s.uncommittedPageAccepts > 0 && policy == NodePolicy.PRODUCTION) library.requestSave()
         changed()
     }
 
@@ -478,6 +484,7 @@ class SyncNode(
                 }
                 if (!live) {
                     pageAccepted = true
+                    s.uncommittedPageAccepts++
                     return
                 }
                 val e = r.entry ?: return
@@ -495,6 +502,7 @@ class SyncNode(
         val peer = s.peerId ?: return
         val ps = peers[peer] ?: return
         s.counters.pagesPulled++
+        s.uncommittedPageAccepts = 0
         persisted[peer] = Triple(ps.dbId, ps.wm, ps.excludeOk)
         library.commitPage(peer, ps, sched.wallMs())
     }

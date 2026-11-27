@@ -14,6 +14,7 @@ import android.os.SystemClock
 import com.magicmaker.android.sync.AdvSpec
 import com.magicmaker.android.sync.Bytes
 import com.magicmaker.android.sync.RelayAdvPolicy
+import com.magicmaker.android.sync.RelayCentrals
 import com.magicmaker.android.sync.SyncNotifier
 import com.magicmaker.android.sync.SyncServerEndpoint
 import org.json.JSONObject
@@ -26,7 +27,10 @@ import java.util.concurrent.ConcurrentHashMap
  * only copy the value and hand it to [syncEndpoint] (which posts to mm-sync); notifications go out
  * from mm-sync through [notifySync]. Advertising follows [RelayAdvPolicy]: the group tag in the
  * primary ADV, LOW_LATENCY for 60 s after a start or a disconnect, then BALANCED, off while any
- * central is connected, paused for manufacturer bursts.
+ * central of this relay is connected, paused for manufacturer bursts. A "central" is a device that
+ * made an ATT request on the relay service ([RelayCentrals]): Android reports every LE link of the
+ * phone here (its own hub link, a smartwatch another app holds), and those must neither stop the
+ * advertising nor count as an iPhone.
  */
 class RelayGattServer(
     context: Context,
@@ -56,15 +60,17 @@ class RelayGattServer(
     }
 
     private val appContext = context.applicationContext
-    private var gattServer: BluetoothGattServer? = null
+    @Volatile private var gattServer: BluetoothGattServer? = null
     private var connectableAdvertiser: BluetoothLeAdvertiser? = null
     private var connectableCallback: AdvertiseCallback? = null
     private var statusCharacteristic: BluetoothGattCharacteristic? = null
     private var catalogCharacteristic: BluetoothGattCharacteristic? = null
     @Volatile private var syncCharacteristic: BluetoothGattCharacteristic? = null
-    /** Connected centrals by address (any characteristic), and their SYNC CCCD values. */
+    /** Connected LE devices by address (notify / cancel need the object), and their SYNC CCCD values. */
     private val devices = ConcurrentHashMap<String, BluetoothDevice>()
     private val cccdValues = ConcurrentHashMap<String, ByteArray>()
+    /** Which of [devices] are centrals of this relay (they made a request on the service). */
+    private val centrals = RelayCentrals()
     private val advPolicy = RelayAdvPolicy()
     /** What is on the air now (main thread only). */
     private var advNow: AdvSpec = AdvSpec.OFF
@@ -72,7 +78,7 @@ class RelayGattServer(
     private var statusBuffer: ByteArray = ByteArray(0)
     private var catalogBuffer: ByteArray = ByteArray(0)
     private var commandResponseBuffer: ByteArray = ByteArray(0)
-    private var running = false
+    @Volatile private var running = false
 
     /** No connected central means nothing can read STATUS/CATALOG — skip rebuilding them. */
     @Volatile private var clientConnected = false
@@ -91,38 +97,32 @@ class RelayGattServer(
 
         val serverCallback = object : BluetoothGattServerCallback() {
             override fun onConnectionStateChange(device: BluetoothDevice?, status: Int, newState: Int) {
-                val address = addressOf(device)
-                if (address != null && runCatching { ownClientLink(address) }.getOrDefault(false)) return
+                val address = addressOf(device) ?: return
+                if (ownLink(address)) return
                 when (newState) {
-                    BluetoothProfile.STATE_CONNECTED -> {
-                        if (address != null && device != null) {
-                            devices[address] = device
-                            syncEndpoint?.onCentralConnected(address)
-                        }
-                        clientConnected = true
-                        refreshCatalogBuffer()
-                        refreshStatusCharacteristic()
-                        onStatus("iPhone linked via BLE GATT")
+                    // Only a link so far: it becomes an iPhone at its first request (engage).
+                    BluetoothProfile.STATE_CONNECTED -> if (running && device != null) {
+                        devices[address] = device
+                        centrals.onConnected(address)
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
-                        if (address != null) {
-                            devices.remove(address)
-                            cccdValues.remove(address)
-                            syncEndpoint?.onCentralDisconnected(address)
+                        devices.remove(address)
+                        cccdValues.remove(address)
+                        val out = centrals.onDisconnected(address)
+                        if (out.isNotEmpty()) {
+                            forward(out)
+                            clientConnected = centrals.engagedCount() > 0
+                            if (!clientConnected) onStatus("BLE GATT idle")
+                            postAdvertising()
                         }
-                        clientConnected = devices.isNotEmpty()
-                        if (!clientConnected) onStatus("BLE GATT idle")
                     }
-                }
-                mainHandler.post {
-                    advPolicy.setConnected(devices.size, SystemClock.uptimeMillis())
-                    applyAdvertisingNow()
                 }
             }
 
             override fun onMtuChanged(device: BluetoothDevice?, mtu: Int) {
                 val address = addressOf(device) ?: return
-                syncEndpoint?.onMtu(address, mtu)
+                if (ownLink(address)) return
+                forward(centrals.onMtu(address, mtu))
             }
 
             override fun onNotificationSent(device: BluetoothDevice?, status: Int) {
@@ -139,6 +139,7 @@ class RelayGattServer(
                 offset: Int,
                 value: ByteArray?,
             ) {
+                engage(device)
                 val address = addressOf(device)
                 val isSyncCccd = descriptor?.uuid == CCCD_UUID && descriptor?.characteristic?.uuid == SYNC_UUID
                 if (!isSyncCccd || preparedWrite || address == null) {
@@ -159,6 +160,7 @@ class RelayGattServer(
                 offset: Int,
                 descriptor: BluetoothGattDescriptor?,
             ) {
+                engage(device)
                 val address = addressOf(device)
                 val value = (address?.let { cccdValues[it] } ?: byteArrayOf(0, 0))
                 if (offset > value.size) {
@@ -169,6 +171,7 @@ class RelayGattServer(
             }
 
             override fun onExecuteWrite(device: BluetoothDevice?, requestId: Int, execute: Boolean) {
+                engage(device)
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
 
@@ -181,6 +184,7 @@ class RelayGattServer(
                 offset: Int,
                 value: ByteArray?,
             ) {
+                engage(device)
                 when (characteristic?.uuid) {
                     TRANSMIT_UUID -> handleTransmitWrite(device, requestId, responseNeeded, value)
                     COMMAND_UUID -> handleCommandWrite(device, requestId, responseNeeded, value)
@@ -197,6 +201,7 @@ class RelayGattServer(
                 offset: Int,
                 characteristic: BluetoothGattCharacteristic?,
             ) {
+                engage(device)
                 val full = when (characteristic?.uuid) {
                     STATUS_UUID -> commandResponseBuffer.takeIf { it.isNotEmpty() } ?: statusBuffer
                     CATALOG_UUID -> catalogBuffer
@@ -219,6 +224,8 @@ class RelayGattServer(
             onStatus("GATT server failed — grant Bluetooth permissions")
             return
         }
+        // Before addService: a central's first request may follow it at once.
+        running = true
         val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
 
         val txChar = BluetoothGattCharacteristic(
@@ -269,7 +276,6 @@ class RelayGattServer(
             return
         }
 
-        running = true
         syncEndpoint?.attach(this)
         mainHandler.post {
             advPolicy.start(SystemClock.uptimeMillis())
@@ -282,6 +288,48 @@ class RelayGattServer(
         device?.address?.uppercase()
     } catch (_: SecurityException) {
         null
+    }
+
+    /** This phone's own client link (HubClient to the ESP32): never a central of this relay. */
+    private fun ownLink(address: String): Boolean = runCatching { ownClientLink(address) }.getOrDefault(false)
+
+    /**
+     * Binder thread, before any request is handled: the first request makes [device] a central of
+     * this relay (RelayCentrals). Its STATUS / CATALOG buffers are built here, before the request
+     * is answered, as they were at connect time before.
+     */
+    private fun engage(device: BluetoothDevice?) {
+        if (!running) return
+        val address = addressOf(device) ?: return
+        if (ownLink(address)) return
+        val out = centrals.onRequest(address)
+        if (out.isEmpty()) return
+        if (device != null) devices[address] = device
+        forward(out)
+        clientConnected = true
+        refreshCatalogBuffer()
+        refreshStatusCharacteristic()
+        onStatus("iPhone linked via BLE GATT")
+        postAdvertising()
+    }
+
+    private fun forward(out: List<RelayCentrals.Out>) {
+        val ep = syncEndpoint ?: return
+        for (o in out) {
+            when (o) {
+                is RelayCentrals.Out.Connected -> ep.onCentralConnected(o.address)
+                is RelayCentrals.Out.Mtu -> ep.onMtu(o.address, o.mtu)
+                is RelayCentrals.Out.Disconnected -> ep.onCentralDisconnected(o.address)
+            }
+        }
+    }
+
+    /** The number of centrals changed: re-evaluate the advertising on the main thread. */
+    private fun postAdvertising() {
+        mainHandler.post {
+            advPolicy.setConnected(centrals.engagedCount(), SystemClock.uptimeMillis())
+            applyAdvertisingNow()
+        }
     }
 
     private fun handleSyncWrite(
@@ -564,6 +612,7 @@ class RelayGattServer(
         syncCharacteristic = null
         devices.clear()
         cccdValues.clear()
+        centrals.clear()
         clientConnected = false
     }
 }

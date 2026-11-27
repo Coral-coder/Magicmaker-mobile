@@ -24,43 +24,57 @@ internal data class IdentityJson(
  * group key, hub MAC and the foreign-hub list. Lives in `noBackupFilesDir`, so Auto Backup and
  * device transfer never move it and a restored phone gets a new identity (case (a)).
  *
- * Thread-safe: every method takes this object's monitor (a leaf lock) and every change is written
- * atomically and synchronously before it returns. [dbId] changes only during load
- * ([IdentityReconcile]), before any session exists.
+ * Thread-safe: every change takes this object's monitor (a leaf lock) and is written atomically
+ * and synchronously before it returns. Reads never take the monitor: they read one immutable
+ * snapshot ([data] is volatile), so the packet executor (the echo filter's [hubAddress] on every
+ * heard packet), the scanner (hub discovery) and GATT binder threads (own-link check) never wait
+ * behind an identity fsync. [dbId] changes only during load ([IdentityReconcile]), before any
+ * session exists.
  */
 class SyncIdentityFile private constructor(
     private val file: File,
     private val rng: Random,
-    private var data: IdentityJson,
+    data: IdentityJson,
     /** False when the file was missing or invalid at load (a fresh identity was created). */
     val wasPresent: Boolean,
     private val onError: (Throwable, String) -> Unit,
 ) : SyncIdentityPort {
+    /** The current identity; replaced (never mutated) under the monitor, read lock-free. */
+    @Volatile private var data: IdentityJson = data
 
-    override val deviceId: Bytes get() = synchronized(this) { Bytes.fromHex(data.deviceId!!) }
+    override val deviceId: Bytes get() = Bytes.fromHex(data.deviceId!!)
 
-    override val dbId: Bytes get() = synchronized(this) { Bytes.fromHex(data.dbId!!) }
+    override val dbId: Bytes get() = Bytes.fromHex(data.dbId!!)
 
     override val group: SyncGroup?
-        get() = synchronized(this) {
-            val k = data.groupKey ?: return null
-            SyncGroup(Bytes.fromHex(data.groupId!!), Bytes.fromHex(k))
+        get() {
+            val d = data
+            val k = d.groupKey ?: return null
+            return SyncGroup(Bytes.fromHex(d.groupId!!), Bytes.fromHex(k))
         }
 
-    val issuedSeq: Long get() = synchronized(this) { data.issuedSeq ?: 0 }
+    val issuedSeq: Long get() = data.issuedSeq ?: 0
 
-    val evtEpoch: Long get() = synchronized(this) { data.evtEpoch ?: 0 }
+    val evtEpoch: Long get() = data.evtEpoch ?: 0
 
-    val createdMs: Long get() = synchronized(this) { data.createdMs ?: 0 }
+    val createdMs: Long get() = data.createdMs ?: 0
 
-    override val hubAddress: String? get() = synchronized(this) { data.hubAddress }
+    override val hubAddress: String? get() = data.hubAddress
 
-    fun foreignList(): List<String> = synchronized(this) { data.foreign ?: emptyList() }
+    fun foreignList(): List<String> = data.foreign ?: emptyList()
 
+    /**
+     * A JOIN / rekey was accepted, or the user left. "Foreign" means "of another group than mine",
+     * so a new group (or none) clears the foreign-hub list: after leaving, or after a rekey this
+     * phone missed while away, the user's own hub must be tried again so its JOIN can regroup this
+     * phone (PROTOCOL §13.3, leaving a group: "the next grouped peer that links hands its key over").
+     */
     override fun setGroup(group: SyncGroup?) {
         synchronized(this) {
             if (group != null) require(group.isConsistent() && !group.groupId.isAllZero()) { "inconsistent group" }
-            update(data.copy(groupId = group?.groupId?.hex(), groupKey = group?.groupKey?.hex()))
+            val gid = group?.groupId?.hex()
+            val foreign = if (gid == data.groupId) data.foreign else null
+            update(data.copy(groupId = gid, groupKey = group?.groupKey?.hex(), foreign = foreign))
         }
     }
 
@@ -83,7 +97,7 @@ class SyncIdentityFile private constructor(
         }
     }
 
-    override fun isForeign(address: String): Boolean = synchronized(this) { normalizeMac(address) in (data.foreign ?: emptyList()) }
+    override fun isForeign(address: String): Boolean = normalizeMac(address) in (data.foreign ?: emptyList())
 
     /** Remember a hub of another group (FOREIGN); at most [FOREIGN_MAX], oldest dropped. */
     override fun markForeign(address: String) {
@@ -122,8 +136,9 @@ class SyncIdentityFile private constructor(
         if (!ok) onError(IllegalStateException("sync identity write failed: ${file.path}"), "SyncIdentity.write")
     }
 
-    override fun toString(): String = synchronized(this) {
-        "SyncIdentity(device=${data.deviceId}, db=${data.dbId}, issued=${data.issuedSeq}, epoch=${data.evtEpoch}, group=${data.groupId})"
+    override fun toString(): String {
+        val d = data
+        return "SyncIdentity(device=${d.deviceId}, db=${d.dbId}, issued=${d.issuedSeq}, epoch=${d.evtEpoch}, group=${d.groupId})"
     }
 
     companion object {
@@ -253,6 +268,10 @@ object IdentityReconcile {
         if (f.ledgerCorrupt) return Outcome(false, true, true, f.nextSyncSeq, "corrupt")
         // (c) rollback or a replaced file: seqs up to issuedSeq − 1 may have left the phone.
         if (f.nextSyncSeq < f.issuedSeq) return Outcome(false, true, true, f.nextSyncSeq, "c")
+        // (c) too: a store without a `sync` section although this identity already issued seqs (a
+        // pre-P3 file put back, or a downgrade that dropped the section). Migration renumbers from
+        // 1, so under the old dbId peers whose wm is above those seqs would skip them (PROTOCOL §15.4).
+        if (f.migrated && f.issuedSeq > 0) return Outcome(false, true, true, f.nextSyncSeq, "c")
         return Outcome(false, false, false, null, if (f.migrated) "migrate" else "normal")
     }
 

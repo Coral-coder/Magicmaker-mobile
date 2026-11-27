@@ -266,6 +266,7 @@ class MagicStore(context: Context) {
 
     private fun parseState(bytes: ByteArray?): PersistedState? =
         bytes?.let { b -> runCatching { gson.fromJson(String(b, Charsets.UTF_8), PersistedState::class.java) }.getOrNull() }
+            ?.let { runCatching { sanitizedState(it) }.getOrNull() }
 
     private fun crc32(bytes: ByteArray): Long = CRC32().also { it.update(bytes) }.value
 
@@ -288,6 +289,9 @@ class MagicStore(context: Context) {
      */
     fun load() {
         val internal = parseState(AtomicFiles.read(storeFile))
+        // A store that exists but cannot be read or parsed (a truncated pre-P3 write, a disk error,
+        // OOM on a huge file) is moved aside first: the save below must never overwrite it.
+        if (internal == null) keepUnreadableStore()
         val granted = AllFilesAccess.granted(appContext)
         if (granted) AtomicFiles.recover(externalLibraryFile)
         val extExists = runCatching { externalLibraryFile.isFile }.getOrDefault(false)
@@ -351,8 +355,16 @@ class MagicStore(context: Context) {
 
         var diffed = false
         if (IdentityReconcile.externalDiff(base, external != null, externalChanged, externalNewer)) {
-            applyExternalDiff(external!!)
-            diffed = true
+            // A diff that throws (an odd hand edit) must not crash every launch: the internal
+            // library stays as loaded, the SD-card file is kept as .rejected before a save
+            // rewrites it.
+            diffed = runCatching { applyExternalDiff(external!!) }
+                .onFailure { t ->
+                    CrashLog.record(t, "MagicStore.load external diff")
+                    runCatching {
+                        externalLibraryFile.copyTo(File(externalLibraryDir, externalLibraryFile.name + ".rejected"), overwrite = true)
+                    }
+                }.isSuccess
         }
         // When access is granted we can see the real external state, so internal and external
         // are reconciled above: it's safe to treat external as writable (and to seed it if
@@ -361,6 +373,25 @@ class MagicStore(context: Context) {
         if (granted) externalAuthoritative = true
         if (migrated || diffed || base != IdentityReconcile.Base.INTERNAL || outcome.newDbId || (granted && !extExists)) {
             save()
+        }
+    }
+
+    /**
+     * Rename an unreadable internal store to `magicmaker_store.json.corrupt-<ms>` (the newest
+     * [KEEP_CORRUPT] are kept) so a recovery from it stays possible; the library then loads from
+     * the external copy when there is one.
+     */
+    private fun keepUnreadableStore() {
+        runCatching {
+            if (!storeFile.isFile || storeFile.length() == 0L) return
+            val prefix = storeFile.name + ".corrupt-"
+            val kept = File(storeFile.parentFile, prefix + System.currentTimeMillis())
+            if (!storeFile.renameTo(kept)) return
+            CrashLog.record(IllegalStateException("library store unreadable; kept as ${kept.name}"), "MagicStore.load")
+            storeFile.parentFile?.listFiles { f -> f.name.startsWith(prefix) }
+                ?.sortedByDescending { it.name.removePrefix(prefix).toLongOrNull() ?: 0L }
+                ?.drop(KEEP_CORRUPT)
+                ?.forEach { it.delete() }
         }
     }
 
@@ -1522,10 +1553,50 @@ class MagicStore(context: Context) {
     }
 
     companion object {
+        /**
+         * Gson fills a missing or mistyped row field with null whatever the Kotlin type says (a
+         * hand-edited SD-card copy, an unknown category name). Such a row would throw in load(),
+         * inside the app's onCreate, on every launch. Rows without a hex are dropped; the other
+         * fields get their defaults. Clean files come back unchanged (same lists).
+         */
+        @Suppress("SENSELESS_COMPARISON", "USELESS_ELVIS")
+        internal fun sanitizedState(s: PersistedState): PersistedState {
+            fun clean(list: List<MagicPacket>?): List<MagicPacket> {
+                if (list == null) return emptyList()
+                var dirty = false
+                val out = ArrayList<MagicPacket>(list.size)
+                for (r in list) {
+                    if (r == null || r.hex == null || r.hex.isBlank()) {
+                        dirty = true
+                        continue
+                    }
+                    if (r.label == null || r.category == null || r.typeInfo == null || r.colors == null || r.simKey == null) {
+                        dirty = true
+                        out.add(
+                            r.copy(
+                                label = r.label ?: "", category = r.category ?: MagicCategory.UNKNOWN,
+                                typeInfo = r.typeInfo ?: "", colors = r.colors ?: "", simKey = r.simKey ?: "",
+                            ),
+                        )
+                    } else {
+                        out.add(r)
+                    }
+                }
+                return if (dirty) out else list
+            }
+            return s.copy(
+                presets = clean(s.presets), learnedColors = clean(s.learnedColors),
+                learnedLibrary = clean(s.learnedLibrary), learnedRaw = clean(s.learnedRaw),
+                autoRules = s.autoRules?.filterNotNull() ?: emptyList(),
+            )
+        }
+
         /** Safety cap on auto-learned raw packets so a relentless flood can't OOM/ANR the app. */
         private const val MAX_RAW_LIBRARY = 20000
         /** In-memory only (the CSV log is the durable record) — keeps saves bounded. */
         private const val MAX_RECORDINGS = 500
+        /** Unreadable store files kept aside at load (keepUnreadableStore). */
+        private const val KEEP_CORRUPT = 3
         private const val SESSION_HEADER =
             "timestamp_ms,hex,rssi,label,category,type_info,colors,note,source_address,is_band,lat,lng,accuracy\n"
         private const val PREFS_MAIN = "magicmaker"

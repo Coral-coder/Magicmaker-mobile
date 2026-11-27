@@ -899,8 +899,11 @@ final class AppViewModel: ObservableObject {
             out.batteryLow = status.batteryLow && !status.charging
             out.cutoffMv = status.lowCutoffMv
         }
-        out.cutoffEnabled = linked
-        guard linked else {
+        // Told to power off from here: also in the second or so the board stays linked before it
+        // disconnects (it answers every command with "powering off" by then), so no second POWER
+        // OFF and no cutoff taps.
+        out.cutoffEnabled = linked && !esp32PoweredOff
+        guard linked, !esp32PoweredOff else {
             if esp32PoweredOff {
                 out.note = Esp32PowerCopy.poweredOffNote
                 out.noteIsWarning = true
@@ -927,6 +930,11 @@ final class AppViewModel: ObservableObject {
     func setEsp32LowCutoff(_ mv: Int) {
         guard esp32Linked else {
             statusMessage = "ESP32 not linked — link it to change its cutoff"
+            return
+        }
+        // The relay link takes no commands while a firmware update runs (BOARD FIRMWARE).
+        guard !firmware.isBusy else {
+            statusMessage = "ESP32 is receiving a firmware update — change its cutoff when it is done"
             return
         }
         let body: [String: Any] = ["action": "set_low_cutoff", "mv": mv]
@@ -965,6 +973,12 @@ final class AppViewModel: ObservableObject {
     func powerOffEsp32() {
         guard esp32Linked else {
             statusMessage = "ESP32 not linked"
+            return
+        }
+        // The relay link takes no commands while a firmware update runs: the command would never
+        // be sent, and "no reply" would read as if the board might have turned off.
+        guard !firmware.isBusy else {
+            statusMessage = "ESP32 is receiving a firmware update — power it off when it is done"
             return
         }
         let body: [String: Any] = ["action": "power_off", "confirm": true]

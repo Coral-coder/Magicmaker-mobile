@@ -189,13 +189,19 @@ class HubLinkMachine(private val identity: SyncIdentityPort) {
         if (identity.hubAddress?.let { norm(it) } != a) identity.setHubAddress(a)
     }
 
-    /** NodeRequest.FOREIGN on the hub link: never auto-connect to that MAC again. */
+    /**
+     * NodeRequest.FOREIGN on the hub link: never auto-connect to that MAC again (until this
+     * phone's group changes, [SyncIdentityPort.setGroup]). The link is not closed here: FOREIGN
+     * entry queued `ERR{AUTH}` just before this request and its `disconnect foreign` action follows
+     * (PROTOCOL §14.5), so the channel flushes the ERR and then closes through [onLocalClose].
+     */
+    @Suppress("UNUSED_PARAMETER")
     fun onForeign(now: Long): List<HubCmd> {
         val a = address ?: return emptyList()
         identity.markForeign(a)
         if (identity.hubAddress?.let { norm(it) } == a) identity.setHubAddress(null)
         lastError = "other group"
-        return fail("foreign", now)
+        return emptyList()
     }
 
     // ---- helpers -------------------------------------------------------------------------------

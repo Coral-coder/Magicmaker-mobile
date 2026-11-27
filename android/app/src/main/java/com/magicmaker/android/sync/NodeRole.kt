@@ -151,6 +151,9 @@ class AndroidRole(events: EventOriginPort?) : NodeRole {
     private var wide = false
     private var quietSince = Long.MIN_VALUE
 
+    /** The event route's link has MTU < 64 (18-byte chunks): windows last 3 s (spec §3.2, §5.7). */
+    private var mtuWide = false
+
     var evtSent = 0
         private set
     var evtRingOnly = 0
@@ -172,14 +175,31 @@ class AndroidRole(events: EventOriginPort?) : NodeRole {
     fun serviceRestart(bootId: Int, events: EventOriginPort?) {
         node.bootId = bootId
         this.events = events
+        applyWide()
     }
 
     /** "Share heard packets with iPhone" switched; null stops originating. */
     fun setEvents(events: EventOriginPort?) {
         this.events = events
+        applyWide()
     }
 
-    val isWide: Boolean get() = wide
+    val isWide: Boolean get() = wide || mtuWide
+
+    private fun applyWide() {
+        events?.setWideWindow(wide || mtuWide)
+    }
+
+    /** Before a sighting opens a window: follow the current route's MTU. */
+    private fun updateMtuWide() {
+        val r = route()
+        val mtu = if (r.route == 3) null else r.target?.let { node.sessionFor(it) }?.link?.mtu()
+        val small = mtu != null && mtu < SyncConst.SMALL_MTU_BELOW
+        if (small != mtuWide) {
+            mtuWide = small
+            applyWide()
+        }
+    }
 
     /** The current route for an event (§16.3). */
     fun route(): AndroidRoute {
@@ -210,6 +230,7 @@ class AndroidRole(events: EventOriginPort?) : NodeRole {
     /** A packet that passed handleHeard's filters. */
     fun onSighting(s: HeardSighting) {
         val ev = events ?: return
+        updateMtuWide()
         sendEvents(ev.onSighting(s))
     }
 
@@ -252,10 +273,10 @@ class AndroidRole(events: EventOriginPort?) : NodeRole {
         if (n > HIGH_RATE && !wide) {
             wide = true
             quietSince = Long.MIN_VALUE
-            events?.setWideWindow(true)
+            applyWide()
         } else if (wide && quietSince != Long.MIN_VALUE && now - quietSince >= QUIET_MS) {
             wide = false
-            events?.setWideWindow(false)
+            applyWide()
         }
     }
 
@@ -271,7 +292,7 @@ class AndroidRole(events: EventOriginPort?) : NodeRole {
         }
         if (quietSince != Long.MIN_VALUE && now - quietSince >= QUIET_MS) {
             wide = false
-            events?.setWideWindow(false)
+            applyWide()
         }
     }
 

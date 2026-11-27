@@ -1,5 +1,6 @@
 package com.magicmaker.android.sync
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -10,6 +11,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import com.magicmaker.android.core.CrashLog
@@ -18,10 +20,15 @@ import java.util.UUID
 
 /**
  * Android as a BLE central to the ESP32 hub's SYNC characteristic (A7830006 on A7830001; docs/
- * SYNC_P3_ANDROID_PLAN.md §5.4). Performs the BluetoothGatt calls [HubLinkMachine] decides; all
- * callbacks arrive on the mm-sync [handler] (connectGatt's handler argument) and every GATT call is
- * made there. One outstanding operation; frame writes are write-without-response and the next one
- * waits for onCharacteristicWrite. Connection priority stays at the default (BALANCED).
+ * SYNC_P3_ANDROID_PLAN.md §5.4). Performs the BluetoothGatt calls [HubLinkMachine] decides; every
+ * GATT call is made on the mm-sync [handler]. GATT callbacks run on a binder thread (connectGatt
+ * gets no handler): each one only copies what it needs and posts it, guarded, to mm-sync. Below
+ * API 33 that copy is what keeps notifications intact: the framework stores each notification in
+ * the shared characteristic object and, with a handler, calls back later, so a burst of
+ * notifications could overwrite one another before mm-sync read them. One outstanding operation;
+ * frame writes are write-without-response and the next one waits for onCharacteristicWrite.
+ * Connection priority stays at the default (BALANCED). No connection is attempted without
+ * BLUETOOTH_CONNECT (Android 12+).
  */
 @SuppressLint("MissingPermission")
 class HubClient(
@@ -53,6 +60,7 @@ class HubClient(
     private var link: Link? = null
     private var tick: SyncCancel? = null
     private var running = false
+    private var permissionLogged = false
 
     private inner class Link(val address: String) : FrameLink {
         override val id: String = "hub:$address"
@@ -150,11 +158,26 @@ class HubClient(
                     exec(machine.onDisconnected(-3, sched.now()))
                     return
                 }
+                if (!hasConnectPermission()) {
+                    // Android 12+ without "Nearby devices": every GATT call would throw. Wait (the
+                    // machine backs off and retries) instead of a SecurityException per attempt.
+                    if (!permissionLogged) {
+                        permissionLogged = true
+                        CrashLog.record(SecurityException("BLUETOOTH_CONNECT not granted"), "HubClient connect")
+                    }
+                    exec(machine.onLocalClose("no permission", NO_PERMISSION_RETRY_MS, sched.now()))
+                    return
+                }
+                permissionLogged = false
                 closeGatt()
                 currentAddress = c.address
                 val device = adapter.getRemoteDevice(c.address)
-                gatt = device.connectGatt(ctx, c.auto, callback, BluetoothDevice.TRANSPORT_LE, BluetoothDevice.PHY_LE_1M_MASK, handler)
-                if (gatt == null) exec(machine.onDisconnected(-4, sched.now()))
+                // No handler: callbacks run on a binder thread, copy their values and post (class doc).
+                gatt = device.connectGatt(ctx, c.auto, callback, BluetoothDevice.TRANSPORT_LE, BluetoothDevice.PHY_LE_1M_MASK, null)
+                if (gatt == null) {
+                    currentAddress = null
+                    exec(machine.onDisconnected(-4, sched.now()))
+                }
             }
             HubCmd.RequestMtu -> if (gatt?.requestMtu(HubLinkMachine.REQUEST_MTU) != true) {
                 exec(machine.onMtu(SyncConst.MTU_MIN, false, sched.now()))
@@ -204,25 +227,40 @@ class HubClient(
         chr = null
         try {
             g.disconnect()
-        } catch (e: SecurityException) {
-            // permission revoked: close below still frees the client slot
+        } catch (e: RuntimeException) {
+            // permission revoked / Bluetooth going off: close below still frees the client slot
         }
         try {
             g.close()
-        } catch (e: SecurityException) {
+        } catch (e: RuntimeException) {
             // nothing more to do
         }
     }
 
+    private fun hasConnectPermission(): Boolean =
+        Build.VERSION.SDK_INT < 31 || ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+
+    /** From a binder thread: run [block] on mm-sync; a bug in the sync stack is logged, never fatal. */
+    private fun onSync(what: String, block: () -> Unit) {
+        handler.post {
+            try {
+                block()
+            } catch (t: Throwable) {
+                CrashLog.record(t, "HubClient $what")
+            }
+        }
+    }
+
+    // Binder thread: copy, then post. Every check against [gatt] / [link] happens on mm-sync.
     private val callback = object : BluetoothGattCallback() {
-        override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+        override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) = onSync("conn") {
             if (g !== gatt) {
                 try {
                     g.close()
-                } catch (e: SecurityException) {
+                } catch (e: RuntimeException) {
                     // stale client
                 }
-                return
+                return@onSync
             }
             when {
                 newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS -> exec(machine.onConnected(sched.now()))
@@ -232,8 +270,8 @@ class HubClient(
             }
         }
 
-        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-            if (g !== gatt) return
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) = onSync("mtu") {
+            if (g !== gatt) return@onSync
             if (machine.phase == HubPhase.UP) {
                 machine.onMtuLater(mtu)
                 link?.let { listener.onHubMtu(it.id, machine.mtu) }
@@ -242,39 +280,54 @@ class HubClient(
             }
         }
 
-        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-            if (g !== gatt) return
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) = onSync("services") {
+            if (g !== gatt) return@onSync
             val c = g.getService(SERVICE_UUID)?.getCharacteristic(SYNC_UUID)
             chr = c
             exec(machine.onServices(c != null, status == BluetoothGatt.GATT_SUCCESS, sched.now()))
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            if (g !== gatt || descriptor.uuid != CCCD_UUID) return
-            exec(machine.onNotifyEnabled(status == BluetoothGatt.GATT_SUCCESS, sched.now()))
+            if (descriptor.uuid != CCCD_UUID) return
+            onSync("cccd") {
+                if (g !== gatt) return@onSync
+                exec(machine.onNotifyEnabled(status == BluetoothGatt.GATT_SUCCESS, sched.now()))
+            }
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            if (g !== gatt || characteristic.uuid != SYNC_UUID) return
-            link?.let { listener.onHubFrameSent(it.id) }
+            if (characteristic.uuid != SYNC_UUID) return
+            onSync("sent") {
+                if (g !== gatt) return@onSync
+                link?.let { listener.onHubFrameSent(it.id) }
+            }
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-            if (g !== gatt || characteristic.uuid != SYNC_UUID) return
-            link?.let { listener.onHubFrame(it.id, value.copyOf()) }
+            if (characteristic.uuid != SYNC_UUID) return
+            frame(g, value.copyOf())
         }
 
         @Deprecated("API < 33")
         @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (Build.VERSION.SDK_INT >= 33) return
-            if (g !== gatt || characteristic.uuid != SYNC_UUID) return
+            if (characteristic.uuid != SYNC_UUID) return
+            // Read here, on the binder thread that just stored it, before the next notification can.
             val v = characteristic.value?.copyOf() ?: return
+            frame(g, v)
+        }
+
+        private fun frame(g: BluetoothGatt, v: ByteArray) = onSync("frame") {
+            if (g !== gatt) return@onSync
             link?.let { listener.onHubFrame(it.id, v) }
         }
     }
 
     companion object {
+        /** Without BLUETOOTH_CONNECT: check again this often (a grant needs no restart). */
+        const val NO_PERMISSION_RETRY_MS: Long = 60_000
+
         val SERVICE_UUID: UUID = UUID.fromString(RelayProtocol.SERVICE_UUID)
         val SYNC_UUID: UUID = UUID.fromString(RelayProtocol.SYNC_UUID)
         val CCCD_UUID: UUID = UUID.fromString(RelayProtocol.CCCD_UUID)
