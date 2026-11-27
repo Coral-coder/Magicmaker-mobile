@@ -28,6 +28,7 @@ on:
       - "firmware/esp32-transmitter/flash.bat"
       - "firmware/esp32-transmitter/flash.ps1"
       - "tools/firmware_manifest.py"
+      - "firmware/esp32-transmitter/test/host/**"
       - ".github/workflows/esp32-firmware.yml"
 
 permissions:
@@ -70,6 +71,10 @@ jobs:
           arduino-cli lib install "U8g2@${U8G2_VER}"
           python3 -m pip install --quiet "esptool==${ESPTOOL_VER}"
 
+      # CMD parsing (power_off, set_low_cutoff, ...) and the STATUS object, on the host (g++).
+      - name: Relay protocol host test
+        run: make -C firmware/esp32-transmitter/test/host relay
+
       - name: Compile (classic ESP32)
         run: |
           arduino-cli compile --fqbn "$FQBN_ESP32" --output-dir build-esp32 --log-level warn "$SKETCH"
@@ -78,9 +83,23 @@ jobs:
 
       - name: Compile (Heltec WiFi LoRa 32 V3)
         run: |
-          arduino-cli compile --fqbn "$FQBN_HELTEC_V3" --output-dir build-heltec-v3 --log-level warn "$SKETCH"
+          # The link wrap turns on BLE modem sleep (btsleep.h): NimBLE's controller init goes
+          # through __wrap_esp_bt_controller_init, which sets sleep mode 1 / main-crystal clock.
+          arduino-cli compile --fqbn "$FQBN_HELTEC_V3" --output-dir build-heltec-v3 --log-level warn \
+            --build-property "compiler.c.elf.extra_flags=-Wl,--wrap=esp_bt_controller_init" "$SKETCH"
           echo "--- build outputs ---"
           ls -la build-heltec-v3
+
+      # Fails the build if the wrap did not reach the link (the image would silently lose
+      # modem sleep): NimBLE must call the wrapper, and the wrapper must call the real init.
+      - name: Check the BLE modem-sleep link wrap (Heltec V3)
+        run: |
+          NM=$(find "$HOME/.arduino15/packages/esp32/tools" -name xtensa-esp32s3-elf-nm -type f | head -1)
+          ELF=$(ls build-heltec-v3/*.ino.elf | head -1)
+          echo "nm=$NM elf=$ELF"
+          "$NM" "$ELF" | grep -E "__wrap_esp_bt_controller_init|[^_]esp_bt_controller_init$"
+          "$NM" "$ELF" | grep -qE " [TtWw] __wrap_esp_bt_controller_init$"
+          "$NM" "$ELF" | grep -qE " [TtWw] esp_bt_controller_init$"
 
       - name: Merge into one flashable image per board (flash at 0x0)
         run: |
@@ -165,8 +184,6 @@ jobs:
           After flashing the board advertises as MM_ESP; pick the ESP32 transmitter backend in
           the MagicMaker app. Heltec screen: dark until you press PRG.
 
-          No Windows PC? Flash from Chrome or Edge:
-            https://coral-coder.github.io/Magicmaker-mobile/flasher/
           Firmware 1.2 and newer also update over Bluetooth from the iPhone app: press PRG
           (Heltec) or BOOT (DevKit) on the board, then start the update in the app within 2 min.
           EOF
@@ -186,7 +203,6 @@ jobs:
             - `magicmaker-esp32.bin`: classic ESP32 (DevKit / WROOM / WROVER, 4MB flash).
             - `magicmaker-heltec-v3.bin`: Heltec WiFi LoRa 32 V3 / V3.1 / V3.2 (ESP32-S3, 8MB flash). The OLED stays dark to save power; press PRG to light it.
 
-            Easiest: the web flasher, https://coral-coder.github.io/Magicmaker-mobile/flasher/ (Chrome or Edge; it picks the image for the chip it finds).
             Windows, one click: download `MagicMaker-Flasher-Windows.zip`, unzip, double-click `flash.bat`.
             Or `./flash.ps1` (Windows) / `./flash.sh` (macOS/Linux) from firmware/esp32-transmitter/.
             They detect which board is plugged in and flash the matching .bin committed next to them

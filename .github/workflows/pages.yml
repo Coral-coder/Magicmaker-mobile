@@ -8,18 +8,10 @@ name: Pages
 # GITHUB_TOKEN push starts no workflow anyway), so that case is covered by workflow_run:
 # this deploys once that workflow has finished on main.
 
+# Manual only: Pages is not enabled on this repo and the web flasher is shelved, so automatic
+# runs only failed. Enable Pages (Source: GitHub Actions), then run this by hand to publish.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "web/**"
-      - "firmware/esp32-transmitter/*.bin"
-      - ".github/workflows/pages.yml"
-  workflow_run:
-    workflows: ["ESP32 Firmware"]
-    types: [completed]
-    branches: [main]
 
 permissions:
   contents: read
